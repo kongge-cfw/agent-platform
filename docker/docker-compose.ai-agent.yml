@@ -2,66 +2,21 @@ version: '3.8'
 
 services:
   ai-agent:
-    image: nanzi-ai-agent:latest
+    image: ${NANZI_IMAGE:-nanzi-ai-agent:latest}
     container_name: nanzi-ai-agent
     ports:
       - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ${NANZI_ENV_FILE:-.env}
+    environment:
+      - APP_ENV=${APP_ENV:-prod}
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-}
     volumes:
-      # 请将下面的 /path/to/your/oracle/instantclient 替换为您宿主机上实际的 Oracle 客户端路径
-      - /app/nanzi-aiagent/lib/instantclient_19_30:/opt/oracle/instantclient
-      # 宿主机数据目录对齐挂载：支持通过 HOST_DATA_DIR 指定宿主机绝对路径，默认使用相对路径 ./data
+      # 如需 Oracle Thick 模式，取消下一行并改为宿主机 Instant Client 路径
+      # - /opt/oracle/instantclient:/opt/oracle/instantclient
       - ${HOST_DATA_DIR:-./data}:/app/data
       - ~/.agents/skills:/app/data/skills
-      # 挂载宿主机 Docker Socket，支持平台在容器化部署时通过宿主机 Docker 动态创建与管理沙箱容器 (DooD 架构)
       - /var/run/docker.sock:/var/run/docker.sock
-
-    environment:
-      # Service Config
-      - API_SERVICE_ENV=${API_SERVICE_ENV:-prod}
-      - API_SERVICE_LOG_LEVEL=${API_SERVICE_LOG_LEVEL:-INFO}
-      # 平台公网访问地址；Echo MCP 会据此生成访问地址和 Host/Origin 白名单
-      - APP_PUBLIC_URL=${APP_PUBLIC_URL:-}
-      # 宿主机数据目录真实物理路径（DooD 沙箱容器挂载对齐，留空则自动按容器工作区解析）
-      - HOST_DATA_DIR=${HOST_DATA_DIR:-}
-      # 业务默认时区（与系统配置 platform_timezone 默认值一致）
-      - TZ=${TZ:-Asia/Shanghai}
-      - PLATFORM_TIMEZONE=${PLATFORM_TIMEZONE:-Asia/Shanghai}
-
-      # Main database
-      - DATABASE_TYPE=${DATABASE_TYPE:-mysql}
-
-      # Oracle Config
-      - LD_LIBRARY_PATH=/opt/oracle/instantclient
-      - USE_ORACLE_THICK_MODE=${USE_ORACLE_THICK_MODE:-1}  
-      
-      # MySQL
-      - MYSQL_HOST=${MYSQL_HOST:-host.docker.internal}
-      - MYSQL_PORT=${MYSQL_PORT:-3306}
-      - MYSQL_DB=${MYSQL_DB:-nanzi_ai_agent_platform}
-      - MYSQL_USER=${MYSQL_USER:-root}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-root123}
-
-      # PostgreSQL (used when DATABASE_TYPE=postgresql)
-      - POSTGRES_HOST=${POSTGRES_HOST:-host.docker.internal}
-      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-      - POSTGRES_DB=${POSTGRES_DB:-nanzi_ai_agent_platform}
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-your_password}
-
-      # Redis
-      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_DB=${REDIS_DB:-0}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-root123}
-      - REDIS_ENABLE=${REDIS_ENABLE:-true}
-
-      # Security
-      - API_SERVICE_API_KEY_HASH_ALGORITHM=${API_SERVICE_API_KEY_HASH_ALGORITHM:-sha256}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-
-      # Jira Integration
-      - JIRA_URL=${JIRA_URL}
-      - JIRA_USERNAME=${JIRA_USERNAME}
-      - JIRA_PASSWORD=${JIRA_PASSWORD}
     restart: unless-stopped
-    # 移除 depends_on，由外部保证依赖服务可用

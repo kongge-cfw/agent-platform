@@ -605,7 +605,13 @@ async def test_dashscope_discovery_uses_official_catalog_endpoint(
             return None
 
         def json(self):
-            return {"output": {"models": [{"model_name": "qwen-plus"}]}}
+            return {
+                "output": {
+                    "models": [
+                        {"model": "qwen-plus", "name": "通义千问-Plus"},
+                    ]
+                }
+            }
 
     class FakeClient:
         last_url = None
@@ -637,11 +643,10 @@ async def test_dashscope_discovery_uses_official_catalog_endpoint(
     )
 
     assert response.status_code == 200
-    assert response.json() == [{"model_id": "qwen-plus", "name": "qwen-plus"}]
-    assert FakeClient.last_url == "https://dashscope.aliyuncs.com/api/v1/deployments/models"
+    assert response.json() == [{"model_id": "qwen-plus", "name": "通义千问-Plus"}]
+    assert FakeClient.last_url == "https://dashscope.aliyuncs.com/api/v1/models"
     assert FakeClient.last_params == {
         "page_no": 1,
         "page_size": 100,
-        "version": "v1.0",
-        "model_source": "base",
+        "supports": "inference",
     }

@@ -1,4 +1,5 @@
 import fnmatch
+import io
 import json
 import logging
 import os
@@ -6,9 +7,11 @@ import re
 import shutil
 import time
 import uuid
+import zipfile
 from typing import List, Optional, Dict, Any, Literal
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Depends, Query, File, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from app.schemas.response import StandardResponse
 from app.core.dependencies import require_api_key
@@ -349,6 +352,9 @@ OFFICE_PREVIEW_EXTENSIONS = {
 }
 
 MAX_WRITE_BYTES = 5 * 1024 * 1024
+MAX_PREVIEW_GLOB_MATCHES = 100
+MAX_PREVIEW_GLOB_ZIP_BYTES = 80 * 1024 * 1024
+PREVIEW_GLOB_CHARS = frozenset("*?")
 
 
 class FileWriteRequest(BaseModel):
@@ -520,43 +526,152 @@ def _resolve_fs_file_path(
     return safe_path
 
 
+def _preview_path_has_filename_glob(path: str) -> bool:
+    raw = str(path or "").replace("\\", "/").rstrip("/")
+    if not raw or _contains_parent_path_segment(raw):
+        return False
+    parts = [part for part in raw.split("/") if part]
+    if not parts:
+        return False
+    filename = parts[-1]
+    if not any(ch in filename for ch in PREVIEW_GLOB_CHARS):
+        return False
+    if any(any(ch in part for ch in PREVIEW_GLOB_CHARS) for part in parts[:-1]):
+        raise HTTPException(status_code=400, detail="仅支持在文件名中使用通配符，例如 整改通知_*.md。")
+    return True
+
+
+def _zip_name_from_glob_pattern(pattern: str) -> str:
+    stem = os.path.splitext(pattern)[0]
+    stem = re.sub(r"[*?]+", "", stem).strip("._- ")
+    return f"{stem or 'matched-files'}.zip"
+
+
+def _expand_preview_glob_files(
+    path: str,
+    conversation_id: Optional[str],
+    user_info: Dict[str, Any],
+    *,
+    workspace_root: str,
+) -> List[str]:
+    placeholder = _resolve_fs_file_path(
+        path,
+        conversation_id,
+        user_info,
+        workspace_root=workspace_root,
+        must_exist=False,
+    )
+    parent = os.path.dirname(placeholder)
+    pattern = os.path.basename(placeholder)
+    if not parent or not os.path.isdir(parent) or not is_path_allowed(parent, user_info):
+        return []
+
+    matches: List[str] = []
+    pattern_lower = pattern.lower()
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.is_file():
+                    continue
+                if not fnmatch.fnmatch(entry.name.lower(), pattern_lower):
+                    continue
+                if not is_path_allowed(entry.path, user_info):
+                    continue
+                matches.append(entry.path)
+    except OSError:
+        return []
+
+    matches.sort()
+    if len(matches) > MAX_PREVIEW_GLOB_MATCHES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"通配符匹配到 {len(matches)} 个文件，超过 {MAX_PREVIEW_GLOB_MATCHES} 个上限，请缩小范围后打开具体文件。",
+        )
+    return matches
+
+
+def _preview_file_response(safe_path: str):
+    ext = os.path.splitext(safe_path)[1].lower()
+    filename = os.path.basename(safe_path)
+    if ext in IMAGE_PREVIEW_EXTENSIONS:
+        return FileResponse(
+            safe_path,
+            media_type=IMAGE_MEDIA_TYPES.get(ext, "application/octet-stream"),
+            filename=filename,
+        )
+    if ext in TEXT_PREVIEW_EXTENSIONS:
+        return FileResponse(
+            safe_path,
+            media_type="text/plain; charset=utf-8",
+            filename=filename,
+        )
+    if ext == ".pdf":
+        return FileResponse(safe_path, media_type="application/pdf", filename=filename)
+    if ext in OFFICE_PREVIEW_EXTENSIONS:
+        return FileResponse(
+            safe_path,
+            media_type=OFFICE_PREVIEW_EXTENSIONS[ext],
+            filename=filename,
+        )
+    raise HTTPException(status_code=400, detail="不支持预览该类型的文件。")
+
+
+def _preview_glob_zip_response(matches: List[str], pattern: str) -> Response:
+    total_size = 0
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in matches:
+            try:
+                file_size = os.path.getsize(file_path)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"读取匹配文件失败: {exc}") from exc
+            total_size += file_size
+            if total_size > MAX_PREVIEW_GLOB_ZIP_BYTES:
+                raise HTTPException(status_code=400, detail="匹配文件总体积过大，请缩小通配符范围后分批打开。")
+            archive.write(file_path, arcname=os.path.basename(file_path))
+    zip_name = _zip_name_from_glob_pattern(pattern)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(zip_name)}",
+        },
+    )
+
+
 @router.get(
     "/preview",
     summary="预览服务器文件内容",
-    description="在安全根目录内读取图片或常规文本/PDF文件内容，供 EmbedChat 画布和数据渲染使用。",
+    description="在安全根目录内读取图片或常规文本/PDF文件内容，供 EmbedChat 画布和数据渲染使用。文件名含 * 或 ? 时展开匹配：单文件预览，多文件打包下载。",
 )
 async def preview_file(
-    path: str = Query(..., description="文件绝对路径，须在安全根目录内"),
+    path: str = Query(..., description="文件绝对路径，须在安全根目录内；文件名可含 * / ? 通配符"),
     conversation_id: Optional[str] = Query(None, description="所属会话 ID"),
     user_info: Dict[str, Any] = Depends(require_api_key),
 ):
     from app.services.ai.runtime.agentscope.workspace import resolve_workspace_root
 
     workspace_root = await resolve_workspace_root()
+    if _preview_path_has_filename_glob(path):
+        matches = _expand_preview_glob_files(
+            path,
+            conversation_id,
+            user_info,
+            workspace_root=workspace_root,
+        )
+        if not matches:
+            raise HTTPException(
+                status_code=404,
+                detail="通配符路径没有匹配到文件。请打开具体文件名，或确认文件已生成。",
+            )
+        if len(matches) == 1:
+            return _preview_file_response(matches[0])
+        return _preview_glob_zip_response(matches, os.path.basename(path.replace("\\", "/")))
+
     safe_path = _resolve_fs_file_path(
         path, conversation_id, user_info, workspace_root=workspace_root, must_exist=True,
     )
-
-    ext = os.path.splitext(safe_path)[1].lower()
-    if ext in IMAGE_PREVIEW_EXTENSIONS:
-        return FileResponse(
-            safe_path,
-            media_type=IMAGE_MEDIA_TYPES.get(ext, "application/octet-stream"),
-        )
-    if ext in TEXT_PREVIEW_EXTENSIONS:
-        return FileResponse(
-            safe_path,
-            media_type="text/plain; charset=utf-8",
-        )
-    if ext == ".pdf":
-        return FileResponse(safe_path, media_type="application/pdf")
-    if ext in OFFICE_PREVIEW_EXTENSIONS:
-        return FileResponse(
-            safe_path,
-            media_type=OFFICE_PREVIEW_EXTENSIONS[ext],
-            filename=os.path.basename(safe_path),
-        )
-    raise HTTPException(status_code=400, detail="不支持预览该类型的文件。")
+    return _preview_file_response(safe_path)
 
 
 @router.put(

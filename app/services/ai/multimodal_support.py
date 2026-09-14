@@ -114,6 +114,8 @@ def _extract_model_from_error(err: str) -> Optional[str]:
 
 def unwrap_exception_message(exc: Any) -> str:
     """递归解包 ExceptionGroup 或异常链，提取最底层的具体错误信息。"""
+    from app.services.ai.llm_provider_errors import extract_provider_exception_message
+
     if exc is None:
         return ""
     if isinstance(exc, str):
@@ -121,6 +123,10 @@ def unwrap_exception_message(exc: Any) -> str:
         if "One or more tool calls raised an exception" in raw:
             return "工具调用执行过程中发生异常"
         return raw
+
+    provider_message = extract_provider_exception_message(exc)
+    if provider_message:
+        return provider_message
 
     exceptions = getattr(exc, "exceptions", None)
     if exceptions and isinstance(exceptions, (list, tuple)):

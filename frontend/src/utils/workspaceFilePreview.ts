@@ -184,6 +184,49 @@ export function resolveFsPreviewUrl(path: string, conversationId?: string | null
   return `/api/v1/chat/fs/preview?path=${encodeURIComponent(path)}${convParam}`
 }
 
+export function hasWorkspaceGlobPattern(path: string): boolean {
+  const name = String(path || '').replace(/\\/g, '/').split('/').pop() || ''
+  return /[*?]/.test(name)
+}
+
+export function resolveWorkspaceDownloadFilename(
+  path: string,
+  contentDisposition?: string | null,
+): string {
+  const header = String(contentDisposition || '')
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header)
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1])
+    } catch {
+      /* ignore malformed header */
+    }
+  }
+  const quoted = /filename="([^"]+)"/i.exec(header)
+  if (quoted?.[1]) return quoted[1]
+  if (hasWorkspaceGlobPattern(path)) {
+    const name = path.replace(/\\/g, '/').split('/').pop() || 'files'
+    const stem = name.replace(/[*?]+/g, '').replace(/[_.-]+$/g, '').replace(/\.[^.]+$/, '')
+    return `${stem || 'matched-files'}.zip`
+  }
+  return path.replace(/\\/g, '/').split('/').pop() || 'download'
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(blobUrl)
+}
+
+function isZipContentType(contentType: string | undefined): boolean {
+  return String(contentType || '').toLowerCase().includes('application/zip')
+}
+
 type OpenWorkspacePreviewOptions = {
   path: string
   name: string
@@ -216,18 +259,40 @@ export async function openWorkspaceFileInCanvas(options: OpenWorkspacePreviewOpt
   }
 
   try {
-    if (OFFICE_EXTENSIONS.has(ext)) {
+    if (OFFICE_EXTENSIONS.has(ext) || hasWorkspaceGlobPattern(filePath)) {
       const response = await axios.get(resolvedUrl, { responseType: 'blob' })
-      const filename = name || 'download'
-      const blobUrl = URL.createObjectURL(response.data)
-      const link = document.createElement('a')
-      link.href = blobUrl
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(blobUrl)
-      showToast(`已开始下载 ${filename}`, 'success')
+      const contentType = String(response.headers?.['content-type'] || '')
+      if (OFFICE_EXTENSIONS.has(ext) || isZipContentType(contentType)) {
+        const filename = resolveWorkspaceDownloadFilename(
+          filePath,
+          response.headers?.['content-disposition'],
+        )
+        triggerBrowserDownload(response.data, filename)
+        showToast(`已开始下载 ${filename}`, 'success')
+        return
+      }
+      if (payload.type === 'pdf' || payload.type === 'image' || payload.type === 'csv') {
+        const blobUrl = URL.createObjectURL(response.data)
+        if (activeBlobUrlRef) activeBlobUrlRef.value = blobUrl
+        onOpen({
+          type: payload.type,
+          title: payload.title,
+          content: blobUrl,
+        })
+        return
+      }
+      const resText = typeof response.data?.text === 'function'
+        ? await response.data.text()
+        : String(response.data || '')
+      const scriptLanguage = resolveWorkspaceScriptLanguage(name)
+      onOpen({
+        type: payload.type,
+        title: payload.title,
+        content: resText,
+        sourcePath: shouldAttachWorkspaceSourcePath(path, name) ? path : undefined,
+        langName: scriptLanguage || undefined,
+        runnable: !!scriptLanguage,
+      })
       return
     }
 
@@ -282,15 +347,11 @@ export async function downloadWorkspaceFile(options: {
 
   try {
     const response = await axios.get(resolvedUrl, { responseType: 'blob' })
-    const filename = name || 'download'
-    const blobUrl = URL.createObjectURL(response.data)
-    const link = document.createElement('a')
-    link.href = blobUrl
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(blobUrl)
+    const filename = resolveWorkspaceDownloadFilename(
+      path,
+      response.headers?.['content-disposition'],
+    ) || name || 'download'
+    triggerBrowserDownload(response.data, filename)
     showToast(`已开始下载 ${filename}`, 'success')
   } catch (err: any) {
     console.error('下载工作空间文件失败:', err)

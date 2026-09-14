@@ -1,8 +1,26 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from sqlalchemy.engine.url import URL
+
+_ALLOWED_APP_ENV = frozenset({"dev", "prod"})
+
+
+def _settings_env_files() -> Tuple[str, ...]:
+    """base < profile < .env；操作系统环境变量优先级最高。"""
+    files: list[str] = []
+    base = os.path.join("config", "env", "base.env")
+    if os.path.isfile(base):
+        files.append(base)
+    profile = (os.getenv("APP_ENV") or "").strip().lower()
+    if profile in _ALLOWED_APP_ENV:
+        path = os.path.join("config", "env", f"{profile}.env")
+        if os.path.isfile(path):
+            files.append(path)
+    files.append(".env")
+    return tuple(files)
+
 
 class Settings(BaseSettings):
     API_SERVICE_ENV: str = "dev"
@@ -163,7 +181,7 @@ class Settings(BaseSettings):
         # APScheduler 等同步组件需要字符串 URL；render 时保留已编码的密码
         return self.build_mysql_url("mysql+pymysql").render_as_string(hide_password=False)
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_settings_env_files(), extra="ignore")
 
 @lru_cache()
 def get_settings():

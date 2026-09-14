@@ -112,11 +112,10 @@ async def discover_models(
     request_url = f"{base_url.rstrip('/')}/models"
     request_params = None
     if request.provider == "dashscope":
-        # DashScope's OpenAI-compatible chat endpoint does not expose the
-        # standard /v1/models route. Its official model catalog is served by
-        # the deployments API on the same regional host.
-        request_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/deployments/models"
-        request_params = {"page_no": 1, "page_size": 100, "version": "v1.0", "model_source": "base"}
+        # DashScope's OpenAI-compatible endpoint does not expose /v1/models.
+        # Use the native catalog API on the same regional host instead.
+        request_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/models"
+        request_params = {"page_no": 1, "page_size": 100, "supports": "inference"}
     try:
         async with httpx.AsyncClient(
             timeout=10.0,

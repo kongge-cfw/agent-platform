@@ -2,7 +2,9 @@ import { onUnmounted, ref, watch } from "vue";
 import axios from "@/utils/axios";
 import {
   openWorkspaceFileInCanvas,
+  hasWorkspaceGlobPattern,
   isSameWorkspacePreviewPath,
+  resolveWorkspaceDownloadFilename,
   resolveWorkspaceScriptLanguage,
   shouldAttachWorkspaceSourcePath,
 } from "@/utils/workspaceFilePreview";
@@ -134,18 +136,47 @@ export function useWorkspaceCanvas(options: UseWorkspaceCanvasOptions) {
         const resolvedUrl = options.resolveFileUrl(filePath);
         const normalizedPath = ((filePath.toLowerCase().split("?")[0] ?? "").split("#")[0] ?? "");
         const isOfficeFile = [".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".pptx", ".ppt"].some((extension) => normalizedPath.endsWith(extension));
-        if (isOfficeFile) {
+        const isGlobPath = hasWorkspaceGlobPattern(filePath);
+        if (isOfficeFile || isGlobPath) {
           const response = await axios.get(resolvedUrl, { responseType: "blob" });
-          const filename = filePath.split("/").pop() || "download";
-          const blobUrl = URL.createObjectURL(response.data);
-          const link = document.createElement("a");
-          link.href = blobUrl;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(blobUrl);
-          options.showToast(`已开始下载 ${filename}`, "success");
+          const contentType = String(response.headers?.["content-type"] || "");
+          if (isOfficeFile || contentType.toLowerCase().includes("application/zip")) {
+            const filename = resolveWorkspaceDownloadFilename(
+              filePath,
+              response.headers?.["content-disposition"],
+            );
+            const blobUrl = URL.createObjectURL(response.data);
+            const link = document.createElement("a");
+            link.href = blobUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(blobUrl);
+            options.showToast(`已开始下载 ${filename}`, "success");
+            return;
+          }
+          if (payload.type === "pdf" || payload.type === "image" || payload.type === "csv") {
+            const blobUrl = URL.createObjectURL(response.data);
+            activeBlobUrl.value = blobUrl;
+            canvasData.value = { type: payload.type, title: payload.title || filePath.split("/").pop() || "文件预览", content: blobUrl };
+            showCanvas();
+            return;
+          }
+          const content = typeof response.data?.text === "function"
+            ? await response.data.text()
+            : String(response.data || "");
+          const filename = payload.title || filePath.split("/").pop() || "文件预览";
+          const scriptLanguage = resolveWorkspaceScriptLanguage(filename);
+          canvasData.value = {
+            type: payload.type,
+            title: filename,
+            content,
+            sourcePath: shouldAttachWorkspaceSourcePath(filePath, filename) ? filePath : undefined,
+            langName: scriptLanguage || undefined,
+            runnable: !!scriptLanguage,
+          };
+          showCanvas();
           return;
         }
         if (payload.type === "pdf" || payload.type === "image" || payload.type === "csv") {

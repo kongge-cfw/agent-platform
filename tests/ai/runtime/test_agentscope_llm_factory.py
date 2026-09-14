@@ -749,6 +749,67 @@ async def test_thinking_tool_choice_fallback_disables_thinking_and_uses_auto(
 
 
 @pytest.mark.asyncio
+async def test_dashscope_thinking_tool_choice_fallback_without_registry_thinking_flag(
+    monkeypatch,
+):
+    import openai
+    from agentscope.tool import ToolChoice
+
+    from app.services.ai.runtime.agentscope.models import (
+        AgentScopeModelConfig,
+        create_openai_chat_model,
+    )
+
+    requests = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            if len(requests) == 1:
+                raise _build_bad_request_error(
+                    "The tool_choice parameter does not support being set to "
+                    "required or object in thinking mode",
+                )
+            return SimpleNamespace(choices=[], usage=None)
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai, "AsyncClient", lambda **kwargs: FakeClient())
+    model = create_openai_chat_model(
+        AgentScopeModelConfig(
+            api_key="sk-test",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="qwen3.8-max",
+            provider="dashscope",
+            streaming=False,
+            thinking_enable=False,
+            thinking_capable=False,
+        ),
+    )
+
+    await model._call_api(
+        "qwen3.8-max",
+        messages=[],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_available_agents",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ],
+        tool_choice=ToolChoice(mode="list_available_agents"),
+    )
+
+    assert len(requests) == 2
+    assert requests[1]["tool_choice"] == "auto"
+    assert requests[1]["extra_body"] == {"enable_thinking": False}
+
+
+@pytest.mark.asyncio
 async def test_non_matching_bad_request_does_not_trigger_thinking_tool_choice_fallback(
     monkeypatch,
 ):

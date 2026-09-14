@@ -20,6 +20,14 @@ _MAX_PREVIEW_ROWS = 20
 _MAX_PREVIEW_COLUMNS = 20
 _MAX_RANGE_ROWS = 200
 _MAX_RANGE_COLUMNS = 50
+_EXCEL_READ_ACTION_ALIASES = {
+    "read": "inspect",
+    "open": "inspect",
+    "load": "inspect",
+    "preview": "inspect",
+    "view": "inspect",
+    "get": "inspect",
+}
 
 
 def _context():
@@ -79,16 +87,35 @@ async def _artifact_result(output_path, *, summary: str, changes: dict[str, Any]
     }
 
 
+def _normalize_excel_read_action(
+    action: str | None,
+    sheet_name: str | None,
+    cell_range: str | None,
+) -> str:
+    normalized = str(action or "").strip().lower()
+    if normalized in {"inspect", "read_range"}:
+        return normalized
+    if sheet_name and cell_range:
+        return "read_range"
+    if not normalized or normalized in _EXCEL_READ_ACTION_ALIASES:
+        return "inspect"
+    raise DocumentPathError("excel_document_read 仅支持 inspect 或 read_range")
+
+
 @tool
 async def excel_document_read(
-    action: str,
     path: str,
+    action: str = "inspect",
     sheet_name: str | None = None,
     cell_range: str | None = None,
 ) -> dict[str, Any]:
-    """Inspect an Excel workbook or read a bounded range from an uploaded workbook."""
-    if action not in {"inspect", "read_range"}:
-        raise DocumentPathError("excel_document_read 仅支持 inspect 或 read_range")
+    """Inspect an Excel workbook or read a bounded range from an uploaded workbook.
+
+    action:
+    - inspect: list sheets and a small preview. Use this first. Do not pass action=read.
+    - read_range: requires sheet_name and cell_range such as A1:G50.
+    """
+    action = _normalize_excel_read_action(action, sheet_name, cell_range)
     input_path = await _input_path(path)
     workbook = load_workbook(input_path, read_only=True, data_only=False)
     try:

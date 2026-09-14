@@ -24,11 +24,17 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
-if ! docker images | grep -q "nanzi-ai-agent"; then
-    echo -e "${YELLOW}警告: nanzi-ai-agent 镜像不存在${NC}"
-    echo "请先构建镜像: ./build_linux_x86.sh"
+export NANZI_IMAGE="${NANZI_IMAGE:-nanzi-ai-agent:latest}"
+export APP_ENV="${APP_ENV:-prod}"
+
+if ! docker image inspect "$NANZI_IMAGE" >/dev/null 2>&1; then
+    echo -e "${YELLOW}警告: 镜像不存在: ${NANZI_IMAGE}${NC}"
+    echo "本地构建: ./build_native.sh 1.0.0 && docker tag nanzi-ai-agent:1.0.0 nanzi-ai-agent:latest"
+    echo "或: docker pull <仓库/镜像:tag> 后 NANZI_IMAGE=<完整镜像> $0"
     exit 1
 fi
+
+echo -e "${GREEN}镜像 ${NANZI_IMAGE}  APP_ENV=${APP_ENV}${NC}"
 
 if [ "$(docker ps -aq -f name=${CONTAINER_NAME})" ]; then
     echo -e "${YELLOW}停止并删除旧容器...${NC}"

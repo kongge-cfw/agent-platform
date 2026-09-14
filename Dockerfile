@@ -1,3 +1,5 @@
+# docker-ops / 通用 CI 入口：构建上下文必须是仓库根目录（`.`）。
+# 与 docker/Dockerfile 保持同一套构建步骤；本地脚本仍使用 docker/Dockerfile。
 # --- 阶段 1: 前端构建 ---
 # PREBUILD_FRONTEND=1：宿主机已执行 vite build，仅 COPY dist（Mac 跨平台打 x86 包时推荐，避免容器 OOM）
 ARG PREBUILD_FRONTEND=0

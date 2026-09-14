@@ -658,6 +658,8 @@ class AgentServicePrompts:
             table_rows.append(
                 f"| 用户要求读取、查看或解析 {office_read_label} 文件 | "
                 "必须优先调用对应的 *_read 工具获取真实内容（仅限本轮已绑定工具）；"
+                "excel_document_read 的 action 只能是 inspect 或 read_range，不要传 read；"
+                "先 inspect 再按需 read_range；"
                 "不要仅凭模型记忆或普通文字承诺已读取 |"
             )
         if office_write_tools:

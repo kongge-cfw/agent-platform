@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import asyncio
-from typing import Any, Callable, Type
+from typing import Any, Callable, Type, get_type_hints
 
 from pydantic import BaseModel, Field, create_model
 
@@ -10,11 +10,22 @@ from pydantic import BaseModel, Field, create_model
 def _schema_from_signature(func: Callable[..., Any]) -> Type[BaseModel]:
     fields: dict[str, tuple[type[Any], Any]] = {}
     signature = inspect.signature(func)
+    try:
+        type_hints = get_type_hints(func, include_extras=True)
+    except Exception:
+        type_hints = {}
     for name, param in signature.parameters.items():
-        annotation = param.annotation if param.annotation is not inspect._empty else str
+        annotation = type_hints.get(name)
+        if annotation is None:
+            annotation = param.annotation if param.annotation is not inspect._empty else str
         default = param.default if param.default is not inspect._empty else ...
         fields[name] = (annotation, Field(default=default))
-    return create_model(f"{func.__name__}Args", **fields)
+    model = create_model(f"{func.__name__}Args", **fields)
+    try:
+        model.model_rebuild(_types_namespace=getattr(func, "__globals__", None))
+    except Exception:
+        pass
+    return model
 
 
 class BaseTool:

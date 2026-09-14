@@ -17,13 +17,16 @@ def _is_forced_tool_choice(tool_choice: Any) -> bool:
 
 
 def _is_thinking_tool_choice_error(error: BaseException) -> bool:
+    from app.services.ai.llm_provider_errors import extract_provider_exception_message
+
     response = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None)
     if status_code is not None and status_code != 400:
         return False
 
+    provider_detail = extract_provider_exception_message(error) or ""
     body = getattr(error, "body", None)
-    error_text = f"{error} {body or ''}".lower()
+    error_text = f"{error} {provider_detail} {body or ''}".lower()
     return (
         "tool_choice" in error_text
         and any(
@@ -194,13 +197,21 @@ def create_openai_chat_model(config: AgentScopeModelConfig):
         async def _call_api(self, *args: Any, **kwargs: Any) -> Any:
             import openai
 
+            from app.services.ai.llm_provider_errors import extract_provider_exception_message
+
             try:
                 return await self._call_api_once(*args, **kwargs)
             except openai.BadRequestError as exc:
+                provider_detail = extract_provider_exception_message(exc)
+                if provider_detail:
+                    logger.warning(
+                        "[AgentScope] LLM BadRequest model=%s detail=%s",
+                        self.model,
+                        provider_detail,
+                    )
                 tool_choice = kwargs.get("tool_choice")
                 if not (
-                    self.parameters.thinking_enable
-                    and _is_forced_tool_choice(tool_choice)
+                    _is_forced_tool_choice(tool_choice)
                     and _is_thinking_tool_choice_error(exc)
                 ):
                     raise
@@ -208,7 +219,7 @@ def create_openai_chat_model(config: AgentScopeModelConfig):
                 logger.warning(
                     "[AgentScope] Provider rejected forced tool_choice in "
                     "thinking mode; retrying model=%s with thinking disabled "
-                    "for this request",
+                    "and tool_choice=auto for this request",
                     self.model,
                 )
                 fallback = copy.copy(self)
@@ -249,11 +260,22 @@ def create_openai_chat_model(config: AgentScopeModelConfig):
                     fallback_extra_body.update(
                         copy.deepcopy(fallback._request_extra_body),
                     )
+                if _normalized_provider(fallback) == "dashscope":
+                    fallback_extra_body["enable_thinking"] = False
                 fallback_kwargs["extra_body"] = fallback_extra_body
                 from agentscope.tool import ToolChoice
 
                 fallback_kwargs["tool_choice"] = ToolChoice(mode="auto")
                 return await fallback._call_api_once(*args, **fallback_kwargs)
+            except Exception as exc:
+                provider_detail = extract_provider_exception_message(exc)
+                if provider_detail:
+                    logger.warning(
+                        "[AgentScope] LLM API failure model=%s detail=%s",
+                        self.model,
+                        provider_detail,
+                    )
+                raise
 
     parameters = OpenAIChatModel.Parameters(
         temperature=config.temperature,
