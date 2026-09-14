@@ -79,9 +79,8 @@ RUN set -eux; \
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装 Python 依赖（使用 BuildKit 缓存挂载以加速重新构建时的依赖下载）
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
+# 安装 Python 依赖（docker-ops 使用经典 docker build，不能用 BuildKit --mount）
+RUN pip install --upgrade pip && \
     pip install -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com -r requirements.txt
 
 # 安装 Playwright 浏览器内核及系统依赖（Chromium headless，约 260 MiB）
