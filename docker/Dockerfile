@@ -19,7 +19,8 @@ RUN if [ "$PREBUILD_FRONTEND" = "1" ]; then \
     fi
 
 # --- 阶段 2: Python 环境构建 ---
-FROM python:3.11-slim
+# 钉 bookworm：python:3.11-slim 已漂到 Debian Trixie，国内拉 deb.debian.org 极慢，且与微软 Debian12 源不匹配
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
@@ -31,37 +32,49 @@ ENV TZ=Asia/Shanghai
 ENV PLATFORM_TIMEZONE=Asia/Shanghai
 
 # 系统依赖：Oracle(libaio)、SQL Server(unixODBC + msodbcsql18)、时区数据
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    gnupg \
-    nodejs \
-    npm \
-    telnet \
-    net-tools \
-    iputils-ping \
-    dnsutils \
-    procps \
-    git \
-    jq \
-    unzip \
-    tzdata \
-    netcat-openbsd \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
-    && echo $TZ > /etc/timezone \
-    && (apt-get install -y --no-install-recommends libaio1 \
-        || apt-get install -y --no-install-recommends libaio1t64) \
-    && ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1 2>/dev/null || true \
-    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
-    && echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
-        > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
-        unixodbc \
-        unixodbc-dev \
-        msodbcsql18 \
-    && rm -rf /var/lib/apt/lists/*
+# 国内 CI 访问 deb.debian.org / packages.microsoft.com 会长时间无日志假死，先切阿里云镜像并限制超时
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i \
+        -e 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' \
+        -e 's|https://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' \
+        -e 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' \
+        -e 's|https://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' \
+        -e 's|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i \
+        -e 's|deb.debian.org|mirrors.aliyun.com|g' \
+        -e 's|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list; \
+    fi; \
+    printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "30";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/80-retries; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      curl ca-certificates gnupg nodejs npm telnet net-tools iputils-ping \
+      dnsutils procps git jq unzip tzdata netcat-openbsd unixodbc unixodbc-dev; \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime; \
+    echo $TZ > /etc/timezone; \
+    (apt-get install -y --no-install-recommends libaio1 \
+      || apt-get install -y --no-install-recommends libaio1t64); \
+    ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1 2>/dev/null || true; \
+    if curl --connect-timeout 15 --max-time 60 -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+         | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; then \
+      echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/mssql-release.list; \
+      if apt-get update; then \
+        ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
+          || echo "WARN: msodbcsql18 安装失败，SQL Server 数据源将不可用"; \
+      fi; \
+    else \
+      echo "WARN: 无法下载 Microsoft APT 密钥，跳过 msodbcsql18"; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
 COPY requirements.txt .
@@ -69,7 +82,7 @@ COPY requirements.txt .
 # 安装 Python 依赖（使用 BuildKit 缓存挂载以加速重新构建时的依赖下载）
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com -r requirements.txt
 
 # 安装 Playwright 浏览器内核及系统依赖（Chromium headless，约 260 MiB）
 # 使用 --with-deps 选项，Playwright 会自动补全当前版本 Chromium 运行所需的全部底层 Linux 系统库，确保绝对完整
