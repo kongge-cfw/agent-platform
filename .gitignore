@@ -76,6 +76,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/.DS_Store
 
+# Docker 主机打包产物（docker-ops 编译段 / docker/ci）
+vendor/
+
 # Credentials (DO NOT COMMIT)
 ADMIN_CREDENTIALS.md
 

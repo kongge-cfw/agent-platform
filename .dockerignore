@@ -8,16 +8,16 @@
 .gemini
 .agent
 
-# Python
+# Python bytecode / 仓库根虚拟环境（不要用裸 venv/、*.so，会误伤 vendor/venv 里的扩展）
 __pycache__
 *.py[cod]
 *$py.class
-*.so
 .Python
-env/
-venv/
-ENV/
-.venv
+/env/
+/venv/
+/ENV/
+/.venv
+/.venv/
 
 # Testing
 .pytest_cache
@@ -30,8 +30,9 @@ htmlcov/
 .env.*
 !env.example
 
-# Frontend source (exclude node_modules; dist 需保留以便宿主机预构建后 COPY 进镜像)
+# Frontend source (exclude node_modules; dist / vendor 需保留，由主机编译后 COPY 进镜像)
 frontend/node_modules
+# vendor/ 不要忽略：compile-python.sh 的 venv / ms-playwright 必须进构建上下文
 
 # Runtime-generated and user-owned data (never send these into the Docker build context)
 data/agent_workspaces/

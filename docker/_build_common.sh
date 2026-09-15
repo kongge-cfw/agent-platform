@@ -126,26 +126,51 @@ ensure_buildx() {
   fi
 }
 
-# Mac 跨平台构建时，在宿主机（原生架构）预构建前端，避免 qemu 模拟 amd64 时 vite OOM
-build_frontend_on_host() {
-  echo "=== 宿主机预构建前端（跨平台 Docker 构建易 OOM，跳过容器内 vite build）==="
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    echo "错误: 未找到 node/npm，请先安装 Node.js 或在 Linux 本机构建"
-    exit 1
+native_linux_platform() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo linux/amd64 ;;
+    arm64|aarch64) echo linux/arm64 ;;
+    *) echo linux/amd64 ;;
+  esac
+}
+
+# 主机打包前端 + Linux 容器打包 Python/Playwright，镜像内不再 npm/pip
+prepare_build_artifacts() {
+  local compile_platform node_image python_image
+  compile_platform="${PLATFORM:-$(native_linux_platform)}"
+  node_image="${NODE_IMAGE:-docker.1ms.run/library/node:20}"
+  python_image="${PYTHON_IMAGE:-${BASE_IMAGE:-docker.1ms.run/library/python:3.11-slim-bookworm}}"
+
+  echo "=== [1/2] 打包前端 ==="
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    (
+      cd "$PROJECT_ROOT"
+      WORKSPACE="$PROJECT_ROOT" VITE_APP_VERSION="$VERSION" sh docker/ci/compile-frontend.sh
+    )
+  else
+    docker run --rm --platform "$compile_platform" \
+      -v "$PROJECT_ROOT:/workspace" -w /workspace \
+      -e WORKSPACE=/workspace \
+      -e VITE_APP_VERSION="$VERSION" \
+      "$node_image" \
+      sh docker/ci/compile-frontend.sh
   fi
-  (
-    cd "$PROJECT_ROOT/frontend"
-    npm ci || npm install
-    NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}" VITE_APP_VERSION="$VERSION" npx vite build
-  )
   test -f "$PROJECT_ROOT/frontend/dist/index.html"
-  echo "=== 前端预构建完成: frontend/dist ==="
+
+  echo "=== [2/2] 打包 Python 依赖与 Playwright（$compile_platform）==="
+  docker run --rm --platform "$compile_platform" \
+    -v "$PROJECT_ROOT:/workspace" -w /workspace \
+    -e WORKSPACE=/workspace \
+    -e PIP_CACHE_DIR=/tmp/pip-cache \
+    "$python_image" \
+    sh docker/ci/compile-python.sh
+  test -x "$PROJECT_ROOT/vendor/venv/bin/uvicorn"
 }
 
 docker_build_args() {
-  DOCKER_BUILD_ARGS=(-f "$SCRIPT_DIR/Dockerfile" -t "$IMAGE_NAME" --build-arg "APP_VERSION=$VERSION")
-  if [[ "${PREBUILD_FRONTEND:-0}" == "1" ]]; then
-    DOCKER_BUILD_ARGS+=(--build-arg "PREBUILD_FRONTEND=1")
+  DOCKER_BUILD_ARGS=(-f "$SCRIPT_DIR/Dockerfile" -t "$IMAGE_NAME")
+  if [[ -n "${BASE_IMAGE:-}" ]]; then
+    DOCKER_BUILD_ARGS+=(--build-arg "BASE_IMAGE=$BASE_IMAGE")
   fi
 }
 
@@ -199,30 +224,7 @@ fi
 mkdir -p "$RELEASE_DIR"
 cd "$PROJECT_ROOT"
 
-# 决定是否要在宿主机预构建前端
-# 条件：
-#   - 显式设置 PREBUILD_FRONTEND=1
-#   - 或者是跨平台构建 needs_cross_build (强制要求宿主机预构建)
-#   - 或者是 macOS (Darwin) 系统，且宿主机安装了 node 和 npm (自动启用以提升性能并防止 OOM)
-SHOULD_PREBUILD=0
-if [[ "${PREBUILD_FRONTEND:-}" == "1" ]]; then
-  SHOULD_PREBUILD=1
-elif needs_cross_build; then
-  SHOULD_PREBUILD=1
-elif [[ "$(uname)" == "Darwin" ]]; then
-  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    echo "检测到宿主机为 macOS 且存在 node/npm 环境，自动启用宿主机预构建前端以避免容器 OOM。"
-    SHOULD_PREBUILD=1
-  else
-    echo "提示: 宿主机为 macOS 但未检测到 node/npm 环境，将尝试在 Docker 容器内构建前端（注意：内存不足时可能会因 OOM 导致 Killed）。"
-  fi
-fi
-
-if [[ "$SHOULD_PREBUILD" == "1" ]]; then
-  build_frontend_on_host
-  PREBUILD_FRONTEND=1
-fi
-
+prepare_build_artifacts
 run_build
 
 echo "=== 镜像构建成功: $IMAGE_NAME ==="
