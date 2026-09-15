@@ -26,11 +26,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
-venv/
-.venv/
-env/
-.env/
+# Virtual Environment（只忽略仓库根目录，不要写成 env/，否则会误伤 config/env）
+/venv/
+/.venv/
+/env/
+/.env/
 
 # IDE
 .idea/
