@@ -1,8 +1,8 @@
 # MCP Echo 测试服务使用说明
 
-NanZi 内置 Echo 测试 MCP 用来验证一条真实的智能体 MCP 调用链路：智能体是否挂载成功、原有 `Authorization: Bearer` 是否发送、开启后是否发送 `X-Nanzi-User-Assertion`、业务端是否能验签并读取用户和智能体信息。
+NanZi 内置 Echo 测试 MCP 用来验证一条真实的智能体 MCP 调用链路：智能体是否挂载成功、原有 `Authorization: Bearer` 是否发送、开启后是否发送明文 `X-Nanzi-User-Context`、业务端是否能解析并读取用户和智能体信息。
 
-它不执行任何业务操作，工具只返回“已收到”和脱敏后的认证诊断。原始 Bearer Token、完整 JWS、签名私钥和 `jti` 不会返回给前端或 MCP 调用结果。
+它不执行任何业务操作，工具只返回“已收到”和脱敏后的认证诊断。原始 Bearer Token 和完整身份 JSON 不会返回给前端或 MCP 调用结果。
 
 ## 一、创建入口
 
@@ -10,7 +10,7 @@ NanZi 内置 Echo 测试 MCP 用来验证一条真实的智能体 MCP 调用链�
 
 系统会幂等创建一个平台级服务：重复点击不会轮换既有凭证，只会确保服务已启用、`echo` 工具已发布。创建成功后，Echo MCP 会出现在平台 MCP 列表中，并标记为“平台测试 MCP / 所有智能体可挂载”。
 
-Echo MCP 的固定 `Authorization: Bearer <Token>` 和 Ed25519 签名私钥均由系统自动生成并加密保存，用户不需要填写、复制或维护它们。
+Echo MCP 的固定 `Authorization: Bearer <Token>` 由系统自动生成并加密保存，用户不需要填写、复制或维护。用户身份以明文 Header 发送，不生成签名私钥。
 
 ## 部署地址与生产环境配置
 
@@ -34,7 +34,7 @@ HTTP/1.1 421 Misdirected Request
 Invalid Host header
 ```
 
-说明请求还没有进入 Echo 工具或 UserContext 验签逻辑，而是在 Host 校验阶段被拒绝。请依次检查：
+说明请求还没有进入 Echo 工具或用户身份解析逻辑，而是在 Host 校验阶段被拒绝。请依次检查：
 
 1. `docker exec nanzi-ai-agent env | grep APP_PUBLIC_URL` 是否能看到公网地址；
 2. `APP_PUBLIC_URL` 是否只包含协议、域名和可选端口，不包含 `/api` 或 `/mcp/echo/mcp` 路径；
@@ -59,14 +59,14 @@ Echo MCP 是 `scope=global` 的平台 MCP，沿用现有 MCP 工具挂载机制�
 | Header | 来源 | 用途 |
 | --- | --- | --- |
 | `Authorization: Bearer <平台生成的固定 Token>` | Echo MCP 自身配置 | 认证请求方是已登记的 MCP 客户端；Token 只在服务端保存和使用 |
-| `X-Nanzi-User-Assertion: <短期 JWS>` | 当前登录用户、当前智能体运行上下文 | 业务 MCP 验签后获取 NanZi 用户、智能体和请求信息 |
+| `X-Nanzi-User-Context: <明文 JSON>` | 当前登录用户、当前智能体运行上下文 | 业务 MCP 直接解析 JSON，用 `user_id` 关联用户 |
 | `X-Request-ID: <request id>` | 本次工具调用 | 关联平台和 MCP 两侧日志 |
 
-如果关闭用户身份传递，平台只发送已配置的原有 MCP 认证 Header，Echo 返回 `user_assertion_received=false`，用于验证“关闭开关时不透传”的兼容行为。对于普通业务 MCP，是否配置 Authorization 与是否透传用户身份也是两个独立设置；没有 Authorization 仍可以只发送用户断言。
+如果关闭用户身份传递，平台只发送已配置的原有 MCP 认证 Header，Echo 返回 `user_assertion_received=false`，用于验证“关闭开关时不透传”的兼容行为。对于普通业务 MCP，是否配置 Authorization 与是否透传用户身份也是两个独立设置；没有 Authorization 仍可以只发送用户身份 Header。
 
 ## 四、工具返回示例
 
-成功调用时返回类似下面的 JSON。示例中的用户信息是验签后的安全字段，不是原始凭证：
+成功调用时返回类似下面的 JSON。示例中的用户信息来自明文 Header 解析，不是原始凭证：
 
 ```json
 {
@@ -76,13 +76,13 @@ Echo MCP 是 `scope=global` 的平台 MCP，沿用现有 MCP 工具挂载机制�
     "authorization_masked": "Bearer echo***oken",
     "user_assertion_received": true,
     "user_assertion_valid": true,
-    "user_assertion_masked": "eyJhbG***abc123",
+    "user_assertion_masked": "{\"user***001\"}",
     "request_id_received": true,
     "processing_log": [
       "已收到 Authorization 请求头",
       "Authorization Bearer Token 校验通过",
-      "已收到 X-Nanzi-User-Assertion 请求头",
-      "UserContext 签名校验通过",
+      "已收到 X-Nanzi-User-Context 请求头",
+      "已解析明文用户身份",
       "已解析用户、扩展字段、智能体和请求信息"
     ],
     "verified_user_id": "123",
@@ -90,6 +90,7 @@ Echo MCP 是 `scope=global` 的平台 MCP，沿用现有 MCP 工具挂载机制�
       "user_id": "123",
       "user_name": "zhangsan",
       "real_name": "张三",
+      "role": "user",
       "dept_code": "D001",
       "org_path": "/集团/销售部"
     },
@@ -102,12 +103,6 @@ Echo MCP 是 `scope=global` 的平台 MCP，沿用现有 MCP 工具挂载机制�
       "agent_version_id": "version-001",
       "agent_name": "销售助手"
     },
-    "verified_claims": {
-      "issuer": "nanzi-platform",
-      "audience": "mcp:<echo-server-id>",
-      "subject": "nanzi:user:123",
-      "key_id": "echo-<key-id>"
-    },
     "request_context": {
       "request_id": "<request-id>",
       "request_id_header_received": true
@@ -117,39 +112,37 @@ Echo MCP 是 `scope=global` 的平台 MCP，沿用现有 MCP 工具挂载机制�
 ```
 
 `processing_log` 按实际处理顺序说明 Echo 做了哪些检查；`authorization_masked` 保留
-`Bearer` 认证方案并对凭证中间脱敏，`user_assertion_masked` 对 JWS 原文首尾脱敏。
-这两个字段只用于确认请求格式，永远不会返回完整凭证。用户断言缺失时，
+`Bearer` 认证方案并对凭证中间脱敏，`user_assertion_masked` 对身份 JSON 首尾脱敏。
+这两个字段只用于确认请求格式，永远不会返回完整凭证。用户身份 Header 缺失时，
 `user_assertion_masked` 为 `null`，处理日志会显示未收到对应 Header。
 
-`authorization_valid=false` 或 Bearer Token 错误时，Echo 会拒绝调用；用户断言缺失时不会伪造用户信息，而是返回 `user_assertion_received=false`；用户断言存在但签名、受众、签发方、有效期、主体或用户 ID 校验失败时，调用会被拒绝。
+`authorization_valid=false` 或 Bearer Token 错误时，Echo 会拒绝调用；用户身份缺失时不会伪造用户信息，而是返回 `user_assertion_received=false`；身份 Header 存在但不是合法 JSON 或不含 `user_id` 时，调用会被拒绝。
 
 ## 五、如何确认真的发送了用户身份
 
 不能通过浏览器 Network 面板直接看到后端到 MCP 的 Header，因为这是平台服务端发出的请求。推荐使用以下方式确认：
 
-1. 确认 Echo MCP 列表卡片显示“已启用用户身份签名”；
+1. 确认该 MCP 已打开「开启用户身份传递」；
 2. 在智能体中调用 Echo 的 `echo` 工具；
 3. 查看工具结果：`user_assertion_received` 和 `user_assertion_valid` 是否为 `true`；
 4. 同时检查 `verified_user_id`、`verified_agent_context.agent_id`、`request_context.request_id`。
 
-如果连接了自己的业务 MCP，则应在业务 MCP 的安全审计日志中记录“是否收到 Header、验签结果、user_id、agent_id、request_id”，但不要记录完整 JWS 或 Bearer Token。
+如果连接了自己的业务 MCP，则应在业务 MCP 的安全审计日志中记录“是否收到 Header、user_id、agent_id、request_id”，但不要记录完整身份 JSON 或 Bearer Token。
 
 ## 六、业务方如何复用这个验证思路
 
 Echo 只是平台内置的测试服务。业务 MCP 仍然要在自己的服务端：
 
-1. 按原有方式校验 `Authorization: Bearer`；
-2. 读取 `X-Nanzi-User-Assertion`；
-3. 根据页面提供的 JWKS 地址获取对应公钥，并按 `kid` 选择公钥；
-4. 使用 Ed25519 / `EdDSA` 验证 JWS，校验 `iss`、`aud`、`iat`、`exp`、`jti`、`sub`；
-5. 使用 `user_context.user_id` 关联业务用户，再执行业务自己的数据和操作权限判断；
-6. 使用 `jti` 做短期防重放，并用 `request_id` 关联审计日志。
+1. 按原有方式校验 `Authorization: Bearer`（如已配置）；
+2. 读取 `X-Nanzi-User-Context` 并解析 JSON；
+3. 使用 `user_id` 关联业务用户，再执行业务自己的数据和操作权限判断；
+4. 使用 `request_id` 关联审计日志。
 
-完整字段定义、Python/Java 示例和 JWKS 验签方式见：[MCP UserContext 接入指南](mcp_user_context_integration_guide.md) 和 [MCP 业务集成认证方案](../../architech/design/mcp-business-integration-authentication-design.md)。
+完整字段定义见：[MCP 用户身份接入指南](mcp_user_context_integration_guide.md)。
 
 ## 七、安全边界
 
-- Echo 的固定 Bearer Token 和签名私钥不进入 API 响应、前端页面或工具返回值。
-- 工具返回的是验签后的最小诊断信息，不返回原始 `Authorization`、完整 `X-Nanzi-User-Assertion`、私钥或 `jti`。
+- Echo 的固定 Bearer Token 不进入 API 响应、前端页面或工具返回值。
+- 工具返回的是解析后的最小诊断信息，不返回原始 `Authorization` 或完整 `X-Nanzi-User-Context`。
 - Echo 只做协议和身份透传验证，不替代业务 MCP 的用户映射、租户隔离、数据权限和操作权限。
 - 关闭某个 MCP 的用户身份传递不会影响其他 MCP；未开启的 MCP 保持原有调用方式。

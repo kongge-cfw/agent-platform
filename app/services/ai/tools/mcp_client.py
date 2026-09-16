@@ -9,7 +9,11 @@ from mcp import ClientSession, types
 from mcp.client.sse import sse_client
 from app.core.orm import AsyncSessionLocal
 from app.models.mcp import McpServer, McpToolCache
-from app.services.mcp.mcp_auth_policy import build_mcp_headers, resolve_mcp_auth_headers
+from app.services.mcp.mcp_auth_policy import (
+    build_mcp_headers,
+    encode_mcp_http_headers,
+    resolve_mcp_auth_headers,
+)
 from app.services.mcp.outbound_audit import record_outbound_audit_log
 from sqlalchemy import select, update
 
@@ -20,7 +24,7 @@ class McpSseSession:
     def __init__(self, server_id: str, sse_url: str, auth_headers: Optional[Dict] = None):
         self.server_id = server_id
         self.sse_url = sse_url
-        self.auth_headers = auth_headers or {}
+        self.auth_headers = encode_mcp_http_headers(auth_headers)
         self.session: Optional[ClientSession] = None
         self.last_used_at = time.time()
         self._lock = asyncio.Lock()
@@ -332,10 +336,7 @@ class McpClientService:
                 user_id = str((user_info or {}).get("user_id") or "").strip()
                 if not user_id:
                     raise ValueError("MCP UserContext requires an authenticated user_id")
-                # SSE transports capture their headers when connected. A signed
-                # assertion is per-call, so never reuse a session carrying an
-                # older assertion or jti (for either SSE or direct HTTP).
-                session_key = f"{server_id}:user:{user_id}:call:{uuid.uuid4().hex}"
+                session_key = f"{server_id}:user:{user_id}"
                 ephemeral_session = True
             session_kwargs = {"session_key": session_key, "auth_headers": auth_headers}
 
@@ -542,14 +543,15 @@ class McpClientService:
 
     @classmethod
     async def _direct_http_rpc(cls, session_mgr: McpSseSession, method: str, params: Optional[Dict], is_notification: bool = False, retry_count: int = 0) -> Any:
-        headers = {
+        request_headers: dict[str, Any] = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            **session_mgr.auth_headers
+            **session_mgr.auth_headers,
         }
         request_session_id = session_mgr.mcp_session_id
         if request_session_id:
-            headers["mcp-session-id"] = request_session_id
+            request_headers["mcp-session-id"] = request_session_id
+        headers = encode_mcp_http_headers(request_headers)
         
         rpc_id = session_mgr.next_rpc_id() if not is_notification else None
         payload = { "jsonrpc": "2.0", "method": method, "params": params or {} }

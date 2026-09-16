@@ -33,7 +33,7 @@ async def test_mcp_call_uses_user_scoped_session_and_signed_headers(monkeypatch)
         auth_headers='{"Authorization":"Bearer fixed-token"}',
         credential_mode="fixed_token_signed_user",
         user_assertion_enabled=True,
-        user_assertion_header="X-Nanzi-User-Assertion",
+        user_assertion_header="X-Nanzi-User-Context",
         user_assertion_audience="mcp:crm",
         user_assertion_key_id="key-1",
     )
@@ -50,7 +50,7 @@ async def test_mcp_call_uses_user_scoped_session_and_signed_headers(monkeypatch)
         "app.services.ai.tools.mcp_client.build_mcp_headers",
         lambda *args, **kwargs: {
             "Authorization": "Bearer fixed-token",
-            "X-Nanzi-User-Assertion": "signed-user",
+            "X-Nanzi-User-Context": "{\"user_id\":\"123\"}",
             "X-Request-ID": "req-1",
         },
     )
@@ -71,10 +71,10 @@ async def test_mcp_call_uses_user_scoped_session_and_signed_headers(monkeypatch)
     get_session.assert_awaited_once()
     call_args = get_session.await_args
     assert call_args.args == ("server-1",)
-    assert call_args.kwargs["session_key"].startswith("server-1:user:123:call:")
+    assert call_args.kwargs["session_key"] == "server-1:user:123"
     assert call_args.kwargs["auth_headers"] == {
         "Authorization": "Bearer fixed-token",
-        "X-Nanzi-User-Assertion": "signed-user",
+        "X-Nanzi-User-Context": "{\"user_id\":\"123\"}",
         "X-Request-ID": "req-1",
     }
     assert session_mgr.close.await_count == 1

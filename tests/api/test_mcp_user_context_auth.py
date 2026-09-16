@@ -158,6 +158,15 @@ def test_mcp_auth_update_can_disable_authorization_and_remove_dynamic_header():
     assert server.fixed_token_encrypted is None
 
 
+def test_mcp_verify_reuses_stored_credentials_when_editing_without_new_token():
+    source = Path("app/api/portal/endpoints/mcp.py").read_text(encoding="utf-8")
+    verify_source = source.split("async def verify_mcp_server", 1)[1].split("def _get_user_id", 1)[0]
+
+    assert "existing_server_id" in verify_source
+    assert "resolve_mcp_auth_headers(server)" in verify_source
+    assert "data.fixed_token" in verify_source
+
+
 def test_mcp_server_endpoints_store_auth_headers_encrypted_and_return_status_only():
     source = Path("app/api/portal/endpoints/mcp.py").read_text(encoding="utf-8")
 
@@ -196,4 +205,4 @@ def test_mcp_tool_tester_uses_current_user_and_never_returns_assertion_value():
     assert 'agent_id": "mcp-tool-tester"' in source
     assert "user_info=test_user_info" in source
     assert 'value_masked": "********"' in source
-    assert "X-Nanzi-User-Assertion" in source
+    assert "X-Nanzi-User-Context" in source

@@ -45,6 +45,10 @@ _RESERVED_KEY_NAMES = {
 }
 
 
+def _key_is_secret(key: str) -> bool:
+    return key.strip().casefold() in _SENSITIVE_KEY_NAMES
+
+
 def _key_is_blocked(key: str) -> bool:
     normalized = key.strip().casefold()
     return normalized in _SENSITIVE_KEY_NAMES or normalized in _RESERVED_KEY_NAMES
@@ -55,7 +59,7 @@ def _filter_custom_value(value: Any) -> Any:
         return {
             str(key): _filter_custom_value(item)
             for key, item in value.items()
-            if isinstance(key, str) and key.strip() and not _key_is_blocked(key)
+            if isinstance(key, str) and key.strip() and not _key_is_secret(key)
         }
     if isinstance(value, list):
         return [_filter_custom_value(item) for item in value]
@@ -102,6 +106,57 @@ def _text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def build_user_identity_payload(
+    *,
+    user_info: Mapping[str, Any],
+    agent_info: Mapping[str, Any] | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """组装发给业务 MCP 的明文用户身份，过滤密钥类字段，不加签。"""
+    user_id = _text(user_info.get("user_id") or user_info.get("id"))
+    if not user_id:
+        raise ValueError("authenticated user_id is required")
+
+    payload: dict[str, Any] = {}
+    for key, value in user_info.items():
+        if not isinstance(key, str) or not key.strip():
+            continue
+        if key in {"extra_data", "id"} or _key_is_secret(key):
+            continue
+        if value is None or value == "":
+            continue
+        if isinstance(value, Mapping):
+            filtered = _filter_custom_value(value)
+            if filtered:
+                payload[key] = filtered
+            continue
+        if isinstance(value, list):
+            payload[key] = _filter_custom_value(value)
+            continue
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            payload[key] = value
+            continue
+        text = _text(value)
+        if text is not None:
+            payload[key] = text
+    payload["user_id"] = user_id
+    payload["custom_attributes"] = _parse_extra_data(user_info.get("extra_data"))
+
+    agent = agent_info or {}
+    agent_id = _text(agent.get("agent_id") or agent.get("id"))
+    if agent_id:
+        payload["agent_id"] = agent_id
+    agent_version_id = _text(agent.get("agent_version_id") or agent.get("version_id"))
+    if agent_version_id:
+        payload["agent_version_id"] = agent_version_id
+    agent_name = _text(agent.get("agent_name") or agent.get("name"))
+    if agent_name:
+        payload["agent_name"] = agent_name
+    if request_id:
+        payload["request_id"] = str(request_id)
+    return payload
 
 
 def issue_user_assertion(

@@ -1269,86 +1269,42 @@ flowchart LR
 
 | 配置状态 | NanZi 的调用行为 |
 | --- | --- |
-| 关闭 | 沿用原有 MCP 认证 Header，不增加用户身份断言，已有 MCP 不受影响 |
-| 开启 | 在原有认证 Header 基础上，增加 `X-Nanzi-User-Assertion` 和 `X-Request-ID` |
+| 关闭 | 沿用原有 MCP 认证 Header，不增加用户身份 |
+| 开启 | 在原有认证 Header 基础上，增加明文 `X-Nanzi-User-Context` 和 `X-Request-ID` |
 
-这里有两个不同用途的认证信息：
+这里有两个不同用途的信息：
 
 | 请求信息 | 作用 | 业务 MCP 如何处理 |
 | --- | --- | --- |
-| `Authorization: Bearer <Token 值>` | 如果 MCP 配置了该 Header，则认证 MCP 接口调用方是已登记的 NanZi 客户端 | 按原有方式校验；未配置时不发送、不校验 |
-| `X-Nanzi-User-Assertion: <JWS>` | 证明本次调用对应哪个 NanZi 用户，且用户信息未被篡改 | 使用公钥验签并解析 Payload，得到 `user_context.user_id` |
-| `X-Request-ID` | 关联 NanZi 与业务 MCP 的请求日志 | 写入业务请求日志和审计记录，不用于身份认证 |
+| `Authorization: Bearer <Token 值>` | 如果 MCP 配置了该 Header，则认证调用方是已登记的 NanZi 客户端 | 按原有方式校验；未配置时不发送、不校验 |
+| `X-Nanzi-User-Context: <JSON>` | 明文携带当前登录用户身份 | 直接 `JSON.parse`，用 `user_id` 关联业务用户。不加密、不加签、不验签 |
+| `X-Request-ID` | 关联 NanZi 与业务 MCP 的请求日志 | 写入业务请求日志和审计记录 |
 
-##### 页面上需要配置什么？
+Authorization 是否配置与用户身份传递相互独立。页面不会生成 Audience、Issuer、JWKS 或私钥。
 
-页面将 MCP 自身认证拆成两部分：Authorization 使用独立开关，开启后只填写 Token 内容，系统固定补全 `Bearer` 前缀；其他 API Key 或租户信息放在「其他 Header」区域。编辑已有配置时不会回显密钥原文，只显示开关状态或 `********`，点击「编辑」后填写新值才会替换，直接保存会保留原配置。Authorization 是否配置与用户身份传递相互独立；即使不配置 Authorization，也可以开启用户身份传递。不需要用户手工生成公钥或私钥。
-
-系统会针对当前 MCP 自动生成并保存签名密钥：
-
-| 页面内容 | 业务方用途 | 是否需要用户填写 |
-| --- | --- | --- |
-| MCP Audience（系统生成） | 业务方配置 JWT 的 `aud` 校验值 | 否；只读复制 |
-| 签名 Issuer（系统固定） | 业务方配置 JWT 的 `iss` 校验值 | 否；只读复制 |
-| 公钥获取地址（JWKS） | 业务方服务自动获取验签公钥，并按 JWT 的 `kid` 选择公钥 | 否；只读复制 |
-| 签名私钥 | 仅 NanZi 后端使用，用于临时签发断言 | 不显示、不填写、不传给业务方 |
-
-业务方只需要把页面上的 Audience、Issuer 和 JWKS 地址复制到自己的 MCP 服务配置中；如果业务 MCP 配置了 Authorization Bearer Token，再把该 Token 放入业务方自己的 Secret 管理系统。详细的 Python、Java 中间件示例见：[MCP UserContext 接入指南](docs/md/mcp_user_context_integration_guide.md)。
-
-##### 业务 MCP 收到请求后怎么处理？
-
-推荐按以下顺序处理：
-
-1. 如果当前 MCP 配置了 `Authorization: Bearer`，先按原有方式校验；未配置时跳过这一步。
-2. 如果 NanZi 开启了用户身份传递，读取 `X-Nanzi-User-Assertion`，根据 JWT Header 中的 `kid` 从当前 MCP 对应的 JWKS 地址选择公钥。
-3. 使用 Ed25519 / `EdDSA` 验证签名，并校验 `iss`、`aud`、`iat`、`exp`、`jti`、`sub`。
-4. 校验 `sub` 与 `user_context.user_id` 一致，并将 `jti` 写入 Redis 等短期存储，重复使用的 `jti` 必须拒绝。
-5. 读取 `user_context.user_id`，映射为业务系统自己的用户 ID，再执行业务 MCP 的数据权限和操作权限判断。
-
-```text
-NanZi 登录用户
-    ↓ 后端签发短期签名断言
-业务 MCP 验证可选的 Authorization Bearer Token + JWS
-    ↓
-读取 user_context.user_id
-    ↓
-关联业务用户并执行业务权限判断
-```
-
-验签后的核心数据示例：
+业务 MCP 收到请求后：如已配置 Authorization 则先校验 Token；若存在 `X-Nanzi-User-Context`，解析 JSON 后读取 `user_id`。示例：
 
 ```json
 {
-  "iss": "nanzi-platform",
-  "aud": "mcp:<当前 MCP 的系统生成 ID>",
-  "sub": "nanzi:user:123",
-  "user_context": {
-    "user_id": "123",
-    "user_name": "zhangsan",
-    "real_name": "张三",
-    "dept_code": "sales",
-    "org_path": "/集团/销售部"
-  },
+  "user_id": "123",
+  "user_name": "zhangsan",
+  "real_name": "张三",
+  "role": "user",
+  "is_admin": false,
+  "dept_code": "sales",
+  "org_path": "/集团/销售部",
   "custom_attributes": {
     "employee_level": "L3",
     "region_code": "east"
   },
   "agent_id": "agent-sales-assistant",
   "agent_version_id": "agent-version-2026-01",
-  "request_id": "req-20260901-001",
-  "jti": "assertion-uuid",
-  "iat": 1788230000,
-  "exp": 1788230060
+  "agent_name": "销售助手",
+  "request_id": "req-20260901-001"
 }
 ```
 
-业务 MCP 主要使用 `user_context.user_id` 关联业务用户；`agent_id`、`agent_version_id` 和 `request_id` 用于审计追踪；`custom_attributes` 是经过平台安全过滤的可扩展 key-value。当前版本不传 `tenant_id`、`scope` 或完整权限树，最终业务权限仍由业务 MCP 自己判断。
-
-##### 第三方 MCP 不解析这个 Header 会有影响吗？
-
-没有影响。只有开启用户身份传递的 MCP 才会收到 `X-Nanzi-User-Assertion`；未开启的 MCP 完全沿用原来的调用方式。即使开启后，暂时不识别该扩展 Header 的 MCP 通常也会忽略它，但如果业务方需要按 NanZi 用户做用户映射、数据隔离或审计，就必须实现上述验签中间件。
-
-完整认证方案见：[MCP 业务集成认证方案](architech/design/mcp-business-integration-authentication-design.md)。
+password、token、api_key 等密钥类字段会被过滤。未开启该开关的 MCP 不会收到这个 Header。
 
 #### 3.4.6 如何使用 MCP Echo 测试服务验证真实调用链路
 
@@ -1367,16 +1323,16 @@ NanZi 登录用户
 | --- | --- |
 | `authorization_valid` | 平台发送的固定 Authorization Bearer Token 是否通过 Echo 校验 |
 | `authorization_masked` | 脱敏后的 Authorization Bearer Token，仅用于确认请求格式 |
-| `user_assertion_received` | 是否收到 `X-Nanzi-User-Assertion` |
-| `user_assertion_valid` | 用户身份断言是否通过 EdDSA、Issuer、Audience、有效期、主体和用户 ID 校验 |
-| `user_assertion_masked` | 脱敏后的用户身份断言，仅用于确认 JWS 格式 |
+| `user_assertion_received` | 是否收到 `X-Nanzi-User-Context` |
+| `user_assertion_valid` | 明文 JSON 是否可解析且含 `user_id` |
+| `user_assertion_masked` | 脱敏后的用户身份 Header |
 | `processing_log` | 按顺序展示读取 Header、认证校验和身份解析过程 |
-| `verified_user_context` | 验签后的标准用户信息 |
-| `custom_attributes` | 验签后的安全扩展 key-value |
+| `verified_user_context` | 解析后的标准用户信息 |
+| `custom_attributes` | 用户资料 extra_data 中的扩展字段 |
 | `verified_agent_context` | 当前智能体及版本信息 |
-| `request_context` | 签名请求 ID 与 Header 收到状态 |
+| `request_context` | 请求 ID 与 Header 收到状态 |
 
-Echo 不会返回原始 Bearer Token、完整 JWS、私钥或 `jti`，只会返回中间为 `***` 的脱敏样例和 `processing_log`。浏览器也无法直接查看后端发往 MCP 的 Header，应以 Echo 返回的 `user_assertion_received`、`user_assertion_valid`、`verified_user_id` 和 `request_context.request_id` 作为验证依据。详细步骤见：[MCP Echo 测试服务使用说明](docs/md/mcp_echo_test_server.md)。
+Echo 不会返回原始 Bearer Token 或完整身份 JSON，只会返回中间为 `***` 的脱敏样例和 `processing_log`。浏览器也无法直接查看后端发往 MCP 的 Header，应以 Echo 返回的 `user_assertion_received`、`user_assertion_valid`、`verified_user_id` 和 `request_context.request_id` 作为验证依据。详细步骤见：[MCP Echo 测试服务使用说明](docs/md/mcp_echo_test_server.md)。
 
 #### 3.4.7 NanZi 平台级 MCP 如何对外提供服务
 

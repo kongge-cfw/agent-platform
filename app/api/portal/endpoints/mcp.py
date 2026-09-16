@@ -18,7 +18,6 @@ from app.services.ai.tools.mcp_factory import McpToolFactory
 from app.services.mcp.mcp_auth_policy import (
     _parse_auth_headers,
     encrypt_mcp_auth_headers,
-    generate_mcp_private_key_pem,
     mcp_auth_headers_configured,
     mcp_auth_headers_summary,
     resolve_mcp_auth_headers,
@@ -52,7 +51,7 @@ class McpServerBase(BaseModel):
     remark: Optional[str] = Field(default=None, max_length=500)
     credential_mode: Literal["static", "fixed_token_signed_user"] = "static"
     user_assertion_enabled: bool = False
-    user_assertion_header: str = "X-Nanzi-User-Assertion"
+    user_assertion_header: str = "X-Nanzi-User-Context"
     user_assertion_audience: Optional[str] = None
     user_assertion_key_id: Optional[str] = None
     user_assertion_issuer: Optional[str] = "nanzi-platform"
@@ -65,6 +64,7 @@ class McpServerWrite(McpServerBase):
     fixed_token: Optional[str] = Field(default=None, exclude=True)
     authorization_enabled: Optional[bool] = None
     auth_headers_patch: Optional[Dict[str, Optional[str]]] = None
+    existing_server_id: Optional[str] = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_user_assertion_config(self):
@@ -293,11 +293,34 @@ def _apply_mcp_auth_update(server: McpServer, data: McpServerWrite) -> None:
 @router.post("/verify")
 async def verify_mcp_server(
     data: McpServerWrite,
+    db: AsyncSession = Depends(get_db_session),
     user: Dict = Depends(require_api_key)
 ):
-    """Test connection and return discovered tools without saving"""
+    """Test connection and return discovered tools without saving.
+
+    编辑已有 MCP 时前端不会回显 Token。未填写新 Token 时，复用该 MCP 已保存的认证头。
+    """
     temp_id = f"verify_{uuid.uuid4().hex[:8]}"
     auth_headers = _parse_auth_headers(data.auth_headers)
+    existing_server_id = str(data.existing_server_id or "").strip()
+    if existing_server_id:
+        server = (
+            await db.execute(select(McpServer).where(McpServer.id == existing_server_id))
+        ).scalar_one_or_none()
+        if server is None:
+            raise HTTPException(status_code=404, detail="Server not found")
+        _ensure_server_control_access(server, user)
+        stored_headers = resolve_mcp_auth_headers(server)
+        stored_headers.update(auth_headers)
+        auth_headers = stored_headers
+        for key, value in (data.auth_headers_patch or {}).items():
+            normalized_key = str(key).strip()
+            if not normalized_key or normalized_key.casefold() == "authorization":
+                continue
+            if value is None:
+                _remove_header_case_insensitive(auth_headers, normalized_key)
+            else:
+                _set_header_case_insensitive(auth_headers, normalized_key, str(value))
     if data.authorization_enabled is False:
         _remove_header_case_insensitive(auth_headers, "Authorization")
     if data.fixed_token:
@@ -404,13 +427,7 @@ async def create_echo_test_mcp(
             credential_mode="fixed_token_signed_user",
             fixed_token_encrypted=manager.encrypt_api_key(secrets.token_urlsafe(32)),
             user_assertion_enabled=True,
-            user_assertion_header="X-Nanzi-User-Assertion",
-            user_assertion_audience=f"mcp:{ECHO_SERVER_ID}",
-            user_assertion_key_id=f"echo-{uuid.uuid4().hex[:16]}",
-            user_assertion_issuer="nanzi-platform",
-            user_assertion_private_key_encrypted=manager.encrypt_api_key(
-                generate_mcp_private_key_pem()
-            ),
+            user_assertion_header="X-Nanzi-User-Context",
             enabled_status=1,
             scope="global",
             user_id=None,
@@ -435,19 +452,12 @@ async def create_echo_test_mcp(
         server.auth_headers = "{}"
         server.credential_mode = "fixed_token_signed_user"
         server.user_assertion_enabled = True
-        server.user_assertion_header = "X-Nanzi-User-Assertion"
-        server.user_assertion_audience = server.user_assertion_audience or f"mcp:{ECHO_SERVER_ID}"
-        server.user_assertion_key_id = server.user_assertion_key_id or f"echo-{uuid.uuid4().hex[:16]}"
-        server.user_assertion_issuer = "nanzi-platform"
+        server.user_assertion_header = "X-Nanzi-User-Context"
         server.enabled_status = 1
         server.scope = "global"
         server.user_id = None
         if not server.fixed_token_encrypted:
             server.fixed_token_encrypted = manager.encrypt_api_key(secrets.token_urlsafe(32))
-        if not server.user_assertion_private_key_encrypted:
-            server.user_assertion_private_key_encrypted = manager.encrypt_api_key(
-                generate_mcp_private_key_pem()
-            )
 
         tool = (
             await db.execute(
@@ -533,15 +543,6 @@ async def create_mcp_server(
     
     if data.fixed_token:
         server_data["fixed_token_encrypted"] = get_api_key_manager().encrypt_api_key(data.fixed_token)
-    if data.user_assertion_enabled:
-        server_data["user_assertion_audience"] = (
-            data.user_assertion_audience or _default_user_assertion_audience(server_id)
-        )
-        server_data["user_assertion_issuer"] = "nanzi-platform"
-        server_data["user_assertion_private_key_encrypted"] = get_api_key_manager().encrypt_api_key(
-            generate_mcp_private_key_pem()
-        )
-        server_data["user_assertion_key_id"] = data.user_assertion_key_id or f"mcp-{uuid.uuid4().hex[:16]}"
     new_server = McpServer(id=server_id, **server_data)
     db.add(new_server)
     try:
@@ -616,24 +617,6 @@ async def update_mcp_server(
     server.credential_mode = data.credential_mode
     server.user_assertion_enabled = data.user_assertion_enabled
     server.user_assertion_header = data.user_assertion_header
-    if data.user_assertion_enabled:
-        server.user_assertion_audience = (
-            data.user_assertion_audience
-            or server.user_assertion_audience
-            or _default_user_assertion_audience(server_id)
-        )
-        server.user_assertion_key_id = data.user_assertion_key_id or server.user_assertion_key_id
-        server.user_assertion_issuer = "nanzi-platform"
-    else:
-        server.user_assertion_audience = data.user_assertion_audience
-        server.user_assertion_key_id = data.user_assertion_key_id
-        server.user_assertion_issuer = data.user_assertion_issuer
-    if data.user_assertion_enabled and not server.user_assertion_key_id:
-        server.user_assertion_key_id = f"mcp-{uuid.uuid4().hex[:16]}"
-    if data.user_assertion_enabled and not server.user_assertion_private_key_encrypted:
-        server.user_assertion_private_key_encrypted = get_api_key_manager().encrypt_api_key(
-            generate_mcp_private_key_pem()
-        )
     server.enabled_status = data.enabled_status
     # 启用/禁用等局部更新可能不传 remark，避免误清空
     if "remark" in data.model_fields_set:
@@ -897,17 +880,23 @@ async def execute_mcp_tool(
         signed_user_mode = bool(server.user_assertion_enabled)
         if signed_user_mode:
             test_user_info = {
-                key: user.get(key)
-                for key in (
-                    "user_id",
-                    "user_name",
-                    "real_name",
-                    "dept_code",
-                    "org_path",
-                    "extra_data",
-                )
-                if user.get(key) is not None
+                key: value
+                for key, value in user.items()
+                if value is not None
+                and str(key).strip().casefold()
+                not in {
+                    "api_key",
+                    "apikey",
+                    "authorization",
+                    "cookie",
+                    "password",
+                    "private_key",
+                    "secret",
+                    "session_token",
+                    "token",
+                }
             }
+            test_user_info["is_admin"] = user.get("role") == "admin"
             result = await McpClientService.call_remote_tool(
                 server_id=tool.server_id,
                 tool_name=tool.tool_name.split(":", 1)[-1],
@@ -921,11 +910,8 @@ async def execute_mcp_tool(
             )
             mcp_auth = {
                 "user_assertion_sent": True,
-                "header": server.user_assertion_header or "X-Nanzi-User-Assertion",
+                "header": "X-Nanzi-User-Context",
                 "value_masked": "********",
-                "audience": server.user_assertion_audience,
-                "issuer": server.user_assertion_issuer or "nanzi-platform",
-                "key_id": server.user_assertion_key_id,
             }
         else:
             lc_tool = McpToolFactory.create_tool(tool)

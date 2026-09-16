@@ -17,6 +17,14 @@ def test_mcp_wizard_supports_three_steps_and_header_indicator():
     assert "CheckCircleIcon" in SOURCE
 
 
+def test_mcp_wizard_step2_save_shows_loading_and_blocks_duplicate_submit():
+    assert "const saving = ref(false)" in SOURCE
+    assert "if (saving.value) return" in SOURCE
+    assert "正在保存修改..." in SOURCE
+    assert "正在完成添加..." in SOURCE
+    assert "mr-2 h-4 w-4 animate-spin" in SOURCE
+
+
 def test_mcp_wizard_step3_provides_publish_guidance_and_actions():
     assert "新接入的 MCP 工具默认处于" in SOURCE
     assert "未发布" in SOURCE

@@ -24,5 +24,5 @@ def test_global_mcp_registry_has_one_click_echo_entry_and_selects_created_server
 def test_echo_ui_does_not_render_raw_credentials():
     source = COMPONENT.read_text(encoding="utf-8")
 
-    assert "X-Nanzi-User-Assertion" in source
+    assert "X-Nanzi-User-Context" in source
     assert "原始凭证" not in source

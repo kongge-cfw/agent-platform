@@ -346,7 +346,7 @@ const executeTool = async () => {
             运行测试后查看本次调用详情
           </div>
 
-          <!-- MCP 认证状态：只展示脱敏结果，不把可重放的 JWT 返回浏览器 -->
+          <!-- MCP 认证状态：只展示是否已发送用户身份，不回显明文内容 -->
           <div v-if="mcpAuth" class="space-y-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
           <div class="flex items-center justify-between gap-2">
             <h4 class="text-xs font-bold text-indigo-900">本次调用认证信息</h4>
@@ -357,14 +357,9 @@ const executeTool = async () => {
           </div>
           <div v-if="mcpAuth.user_assertion_sent" class="space-y-1 text-[10px] leading-relaxed text-indigo-900">
             <div class="break-all rounded border border-indigo-100 bg-white/80 px-2 py-1.5 font-mono">
-              {{ mcpAuth.header || 'X-Nanzi-User-Assertion' }}: {{ mcpAuth.value_masked || '********' }}
+              {{ mcpAuth.header || 'X-Nanzi-User-Context' }}: {{ mcpAuth.value_masked || '********' }}
             </div>
-            <div class="grid grid-cols-1 gap-1 sm:grid-cols-3">
-              <span><b>Audience：</b>{{ mcpAuth.audience || '-' }}</span>
-              <span><b>Issuer：</b>{{ mcpAuth.issuer || '-' }}</span>
-              <span><b>Key ID：</b>{{ mcpAuth.key_id || '-' }}</span>
-            </div>
-            <p class="text-indigo-700">完整签名值不会展示；业务 MCP 收到完整 Header 后自行验签。</p>
+            <p class="text-indigo-700">用户身份以明文 JSON 放在该 Header 中；此处不回显原文。</p>
           </div>
           <p v-else class="text-[10px] leading-relaxed text-gray-500">当前 MCP 未开启用户身份传递，本次测试只使用原有认证 Header。</p>
           </div>

@@ -29,7 +29,9 @@ def test_echo_creation_contract_is_global_idempotent_and_write_only():
 
     assert 'scope="global"' in source
     assert "fixed_token_encrypted" in source
-    assert "user_assertion_private_key_encrypted" in source
+    assert "user_assertion_enabled=True" in source
+    assert "X-Nanzi-User-Context" in source
+    assert "user_assertion_private_key_encrypted" not in source
     assert "ECHO_TOOL_NAME" in source
     assert "echo_tool_schema()" in source
     assert "只有系统管理员才能创建 Echo 测试 MCP" in source
@@ -82,7 +84,7 @@ async def test_echo_creation_is_admin_only_and_returns_no_credentials():
     added = [call.args[0] for call in db.add.call_args_list]
     assert any(isinstance(item, McpServer) for item in added)
     assert any(isinstance(item, McpToolCache) and item.is_published for item in added)
-    assert manager.encrypt_api_key.call_count == 2
+    assert manager.encrypt_api_key.call_count == 1
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, nextTick } from 'vue'
 import axios from '@/utils/axios'
-import { copyToClipboard } from '@/utils/clipboard'
 import { useToast } from '@/composables/useToast'
 import { useUser } from '@/composables/useUser'
 import ConfirmModal from '../../components/ConfirmModal.vue'
@@ -148,6 +147,7 @@ const wizardStep = ref<1 | 2 | 3>(1) // 1: Input & Verify, 2: Preview & Name, 3:
 const createdServer = ref<any | null>(null)
 const publishAllLoading = ref(false)
 const verifying = ref(false)
+const saving = ref(false)
 const discoveredTools = ref<any[]>([])
 const syncLoading = ref<Record<string, boolean>>({})
 const statusLoading = ref<Record<string, boolean>>({})
@@ -361,7 +361,7 @@ const newServer = ref({
   enabled_status: 1,
   credential_mode: 'static' as 'static' | 'fixed_token_signed_user',
   user_assertion_enabled: false,
-  user_assertion_header: 'X-Nanzi-User-Assertion',
+  user_assertion_header: 'X-Nanzi-User-Context',
   user_assertion_audience: '',
   user_assertion_key_id: '',
   user_assertion_issuer: 'nanzi-platform',
@@ -374,16 +374,19 @@ const buildServerPayload = (server: any) => {
     scope: props.scope,
     credential_mode: server.credential_mode || 'static',
     user_assertion_enabled: Boolean(server.user_assertion_enabled),
-    user_assertion_header: server.user_assertion_header || 'X-Nanzi-User-Assertion',
+    user_assertion_header: server.user_assertion_header || 'X-Nanzi-User-Context',
     user_assertion_audience: server.user_assertion_audience || null,
     user_assertion_key_id: server.user_assertion_key_id || null,
     user_assertion_issuer: server.user_assertion_issuer || 'nanzi-platform',
   }
 
-  if (isFormPayload) {
+    if (isFormPayload) {
     payload.authorization_enabled = authorizationEnabled.value
     if (authorizationEnabled.value && authorizationEditing.value && authorizationToken.value.trim()) {
       payload.fixed_token = authorizationToken.value.trim()
+    }
+    if (isEditing.value && editingId.value) {
+      payload.existing_server_id = editingId.value
     }
 
     if (isEditing.value) {
@@ -439,194 +442,20 @@ const closeAuthHelp = () => {
 
 const showPayloadHelp = ref(false)
 const payloadFieldRows = [
-  { location: 'HTTP Header', field: 'X-Nanzi-User-Assertion', required: '开启时必有', usage: '业务 MCP 读取完整 JWS，并交给验签中间件。' },
+  { location: 'HTTP Header', field: 'X-Nanzi-User-Context', required: '开启时必有', usage: '明文 JSON，包含当前用户身份、扩展字段和智能体信息。' },
   { location: 'HTTP Header', field: 'X-Request-ID', required: '必有', usage: '关联 NanZi 与业务 MCP 两侧日志。' },
-  { location: 'JWT Header', field: 'alg', required: '必有', usage: '签名算法，当前为 EdDSA（Ed25519）。' },
-  { location: 'JWT Header', field: 'kid', required: '必有', usage: '公钥版本编号；业务方据此从 JWKS 选择公钥。' },
-  { location: 'JWT Header', field: 'typ', required: '必有', usage: '令牌类型，当前为 JWT。' },
-  { location: 'JWT Payload', field: 'iss', required: '必有', usage: '签发方，固定为 nanzi-platform；校验 iss。' },
-  { location: 'JWT Payload', field: 'aud', required: '必有', usage: '目标 MCP，系统按 MCP ID 自动生成；校验 aud。' },
-  { location: 'JWT Payload', field: 'sub', required: '必有', usage: '稳定主体标识，格式为 nanzi:user:{user_id}。' },
-  { location: 'user_context', field: 'user_id', required: '必有', usage: 'NanZi 用户 ID；业务方用它关联业务用户。' },
-  { location: 'user_context', field: 'user_name / real_name', required: '有值时', usage: '登录名和用户姓名，按用户资料有值情况传递。' },
-  { location: 'user_context', field: 'dept_code / org_path', required: '有值时', usage: '部门编码和组织路径，按用户资料有值情况传递。' },
-  { location: 'custom_attributes', field: '安全扩展 key-value', required: '必有（可为空对象）', usage: '来自用户资料 extra_data 的安全扩展字段，平台自动过滤敏感 key。' },
-  { location: 'JWT Payload', field: 'agent_id', required: '必有', usage: '发起本次调用的智能体 ID。' },
-  { location: 'JWT Payload', field: 'agent_version_id', required: '有值时', usage: '当前智能体版本 ID。' },
-  { location: 'JWT Payload', field: 'agent_name', required: '有值时', usage: '当前智能体名称。' },
-  { location: 'JWT Payload', field: 'request_id', required: '必有', usage: '本次 NanZi 请求链路 ID。' },
-  { location: 'JWT Payload', field: 'jti', required: '必有', usage: '本次断言唯一 ID；业务方可存储它进行防重放。' },
-  { location: 'JWT Payload', field: 'iat / exp', required: '必有', usage: '签发时间和过期时间，默认有效期 60 秒。' },
+  { location: 'JSON', field: 'user_id', required: '必有', usage: 'NanZi 用户 ID；业务方用它关联业务用户。' },
+  { location: 'JSON', field: 'user_name / real_name', required: '有值时', usage: '登录名和用户姓名。' },
+  { location: 'JSON', field: 'role / is_admin / dept_code / org_path', required: '有值时', usage: '角色、管理员标记、部门和组织路径等资料字段。' },
+  { location: 'JSON', field: 'custom_attributes', required: '必有（可为空对象）', usage: '来自用户资料 extra_data 的扩展字段，自动过滤密钥类 key。' },
+  { location: 'JSON', field: 'agent_id / agent_name', required: '有值时', usage: '发起本次调用的智能体。' },
+  { location: 'JSON', field: 'request_id', required: '必有', usage: '本次 NanZi 请求链路 ID。' },
 ]
 const openPayloadHelp = () => {
   showPayloadHelp.value = true
 }
 const closePayloadHelp = () => {
   showPayloadHelp.value = false
-}
-
-const copiedMcpValue = ref('')
-const mcpAudienceValue = computed(() => {
-  const serverId = editingId.value || createdServer.value?.id
-  return newServer.value.user_assertion_audience || (
-    serverId ? `mcp:${serverId}` : '保存后由系统自动生成'
-  )
-})
-const mcpIssuerValue = computed(() => newServer.value.user_assertion_issuer || 'nanzi-platform')
-const mcpJwksUrl = computed(() => {
-  const serverId = editingId.value || createdServer.value?.id
-  if (!serverId) return ''
-  const origin = typeof window !== 'undefined' ? window.location.origin : ''
-  return `${origin}/.well-known/nanzi/mcp/${serverId}/jwks.json`
-})
-
-const copyMcpValue = async (value: string, label: string) => {
-  if (!value || value === '保存后由系统自动生成') {
-    showToast('保存 MCP 后才能复制该信息', 'warning')
-    return
-  }
-  const copied = await copyToClipboard(value)
-  if (!copied) {
-    showToast(`复制${label}失败，请手动复制`, 'error')
-    return
-  }
-  copiedMcpValue.value = label
-  showToast(`${label}已复制`, 'success')
-  window.setTimeout(() => {
-    if (copiedMcpValue.value === label) copiedMcpValue.value = ''
-  }, 1600)
-}
-
-const copyJwksUrl = () => copyMcpValue(mcpJwksUrl.value, 'JWKS 地址')
-
-const showMcpCodeModal = ref(false)
-const mcpCodeLanguage = ref<'python' | 'java'>('python')
-const generatedMcpCode = computed(() => {
-  if (mcpCodeLanguage.value === 'java') {
-    return `// 依赖：com.nimbusds:nimbus-jose-jwt
-// 下面三个值来自 NanZi MCP 管理页面的只读配置，请复制到业务 MCP 的 Secret / 配置中心。
-private static final String NANZI_MCP_AUDIENCE = "${mcpAudienceValue.value}"; // 用于校验 aud
-private static final String NANZI_MCP_ISSUER = "${mcpIssuerValue.value}"; // 用于校验 iss
-private static final String NANZI_MCP_JWKS_URL = "${mcpJwksUrl.value}"; // 用于获取公钥
-
-public Map<String, Object> verifyNanZiUser(String fixedToken, String assertion, ReplayStore replayStore)
-        throws Exception {
-    // 1. 先按业务 MCP 原有方式校验 Authorization 固定 Token。
-    if (fixedToken == null || fixedToken.isBlank()) {
-        throw new SecurityException("invalid MCP client token");
-    }
-
-    // 2. 根据 JWT Header 的 kid，从当前 MCP 的 JWKS 选择公钥并验签。
-    JWKSet jwkSet = JWKSet.load(new URL(NANZI_MCP_JWKS_URL));
-    SignedJWT jwt = SignedJWT.parse(assertion);
-    JWK jwk = jwkSet.getKeyByKeyId(jwt.getHeader().getKeyID());
-    if (!(jwk instanceof OctetKeyPair keyPair)
-            || !jwt.verify(new Ed25519Verifier(keyPair))) {
-        throw new SecurityException("invalid NanZi User Assertion");
-    }
-
-    JWTClaimsSet claims = jwt.getJWTClaimsSet();
-    if (!NANZI_MCP_ISSUER.equals(claims.getIssuer())
-            || !NANZI_MCP_AUDIENCE.equals(claims.getAudience().get(0))
-            || claims.getExpirationTime().before(new Date())) {
-        throw new SecurityException("invalid NanZi User Assertion claims");
-    }
-
-    // 3. 验签成功后，用 user_context.user_id 关联业务系统用户。
-    Map<String, Object> userContext = (Map<String, Object>) claims.getClaim("user_context");
-    if (userContext == null || userContext.get("user_id") == null) {
-        throw new SecurityException("missing user context");
-    }
-    String userId = String.valueOf(userContext.get("user_id"));
-    if (!("nanzi:user:" + userId).equals(claims.getSubject())) {
-        throw new SecurityException("user subject mismatch");
-    }
-    if (claims.getClaim("agent_id") == null || claims.getClaim("request_id") == null
-            || claims.getJWTID() == null) {
-        throw new SecurityException("missing assertion identity");
-    }
-    long ttlSeconds = Math.max(1, (claims.getExpirationTime().getTime() - System.currentTimeMillis()) / 1000);
-    if (!replayStore.claim(claims.getJWTID(), ttlSeconds)) {
-        throw new SecurityException("replayed NanZi user assertion");
-    }
-    return Map.of(
-            "user_id", userContext.get("user_id"),
-            "user_name", userContext.get("user_name"),
-            "agent_id", claims.getClaim("agent_id"),
-            "request_id", claims.getClaim("request_id"));
-}
-
-@FunctionalInterface
-interface ReplayStore {
-    // 使用 Redis SETNX + EXPIRE 等原子操作；已存在的 jti 返回 false。
-    boolean claim(String jti, long ttlSeconds);
-}
-`
-  }
-
-  return `# 依赖：PyJWT、cryptography、httpx、redis
-# 下面三个值来自 NanZi MCP 管理页面的只读配置，请复制到业务 MCP 的 Secret / 配置中心。
-NANZI_MCP_AUDIENCE = "${mcpAudienceValue.value}"  # 用于校验 aud
-NANZI_MCP_ISSUER = "${mcpIssuerValue.value}"  # 用于校验 iss
-NANZI_MCP_JWKS_URL = "${mcpJwksUrl.value}"  # 用于自动获取公钥
-
-import hmac
-import os
-import time
-import jwt
-from redis import Redis
-from jwt import PyJWKClient
-
-jwk_client = PyJWKClient(NANZI_MCP_JWKS_URL)
-redis_client = Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
-
-def verify_nanzi_user(authorization: str, assertion: str, expected_token: str) -> dict:
-    # 1. 先按业务 MCP 原有方式校验 Authorization 固定 Token。
-    expected_authorization = f"Bearer {expected_token}"
-    if not hmac.compare_digest(authorization or "", expected_authorization):
-        raise PermissionError("invalid MCP client token")
-
-    # 2. 根据 JWT Header 的 kid 获取公钥并验签，同时校验 iss、aud、exp。
-    signing_key = jwk_client.get_signing_key_from_jwt(assertion).key
-    claims = jwt.decode(
-        assertion,
-        signing_key,
-        algorithms=["EdDSA"],
-        issuer=NANZI_MCP_ISSUER,
-        audience=NANZI_MCP_AUDIENCE,
-        options={"require": ["iss", "aud", "sub", "exp", "iat", "jti", "agent_id", "request_id"]},
-    )
-
-    # 3. 验签成功后，用 user_context.user_id 关联业务系统用户。
-    user_context = claims["user_context"]
-    if not isinstance(user_context, dict) or not user_context.get("user_id"):
-        raise PermissionError("missing user context")
-    if claims.get("sub") != f"nanzi:user:{user_context['user_id']}":
-        raise PermissionError("user subject mismatch")
-    ttl = max(1, int(claims["exp"] - time.time()))
-    if not redis_client.set(f"mcp:user-assertion:{claims['jti']}", "1", nx=True, ex=ttl):
-        raise PermissionError("replayed NanZi user assertion")
-    return {
-        "user_id": user_context["user_id"],
-        "user_name": user_context.get("user_name"),
-        "agent_id": claims.get("agent_id"),
-        "request_id": claims.get("request_id"),
-    }
-`
-})
-
-const openMcpCodeModal = () => {
-  if (!mcpJwksUrl.value) {
-    showToast('保存 MCP 后才能生成调用模拟代码', 'warning')
-    return
-  }
-  showMcpCodeModal.value = true
-}
-
-const copyMcpCode = async () => {
-  const copied = await copyToClipboard(generatedMcpCode.value)
-  if (copied) showToast(`${mcpCodeLanguage.value === 'python' ? 'Python' : 'Java'} 模拟代码已复制`, 'success')
-  else showToast('复制失败，请手动复制模拟代码', 'error')
 }
 
 // Sync Header Pairs to JSON string
@@ -709,6 +538,7 @@ const resetWizard = () => {
   createdServer.value = null
   publishAllLoading.value = false
   verifying.value = false
+  saving.value = false
   discoveredTools.value = []
   newServer.value = {
     server_name: '',
@@ -718,7 +548,7 @@ const resetWizard = () => {
     enabled_status: 1,
     credential_mode: 'static',
     user_assertion_enabled: false,
-    user_assertion_header: 'X-Nanzi-User-Assertion',
+    user_assertion_header: 'X-Nanzi-User-Context',
     user_assertion_audience: '',
     user_assertion_key_id: '',
     user_assertion_issuer: 'nanzi-platform',
@@ -769,7 +599,7 @@ const openEditModal = (server: any) => {
     enabled_status: server.enabled_status,
     credential_mode: server.credential_mode || 'static',
     user_assertion_enabled: Boolean(server.user_assertion_enabled),
-    user_assertion_header: server.user_assertion_header || 'X-Nanzi-User-Assertion',
+    user_assertion_header: server.user_assertion_header || 'X-Nanzi-User-Context',
     user_assertion_audience: server.user_assertion_audience || '',
     user_assertion_key_id: server.user_assertion_key_id || '',
     user_assertion_issuer: server.user_assertion_issuer || 'nanzi-platform',
@@ -991,28 +821,31 @@ const handleVerify = async () => {
 }
 
 const addServer = async () => {
-  syncFullServerName()
-  if (!normalizeMcpServerNameSuffix(serverNameSuffix.value)) {
-    showToast('请填写服务名称后缀', 'warning')
-    return
-  }
-  if (!newServer.value.server_name || !newServer.value.sse_url) {
-    showToast('请填写完整信息', 'warning')
-    return
-  }
-  if (authorizationEnabled.value && authorizationEditing.value && !authorizationToken.value.trim()) {
-    showToast('请输入 Authorization Token', 'warning')
-    return
-  }
-  if (headerMode.value === 'advanced') {
-    try {
-      JSON.parse(newServer.value.auth_headers)
-      syncJsonToPairs()
-    }
-    catch (e) { showToast('JSON 格式错误', 'error'); return }
-  }
-
+  if (saving.value) return
+  saving.value = true
+  await nextTick()
   try {
+    syncFullServerName()
+    if (!normalizeMcpServerNameSuffix(serverNameSuffix.value)) {
+      showToast('请填写服务名称后缀', 'warning')
+      return
+    }
+    if (!newServer.value.server_name || !newServer.value.sse_url) {
+      showToast('请填写完整信息', 'warning')
+      return
+    }
+    if (authorizationEnabled.value && authorizationEditing.value && !authorizationToken.value.trim()) {
+      showToast('请输入 Authorization Token', 'warning')
+      return
+    }
+    if (headerMode.value === 'advanced') {
+      try {
+        JSON.parse(newServer.value.auth_headers)
+        syncJsonToPairs()
+      }
+      catch (e) { showToast('JSON 格式错误', 'error'); return }
+    }
+
     const payload = buildServerPayload(newServer.value)
     if (isEditing.value) {
       await axios.put(`/api/portal/mcp/servers/${editingId.value}`, payload)
@@ -1030,6 +863,8 @@ const addServer = async () => {
     }
   } catch (e: any) {
     showToast(getApiErrorMessage(e, '操作失败'), 'error')
+  } finally {
+    saving.value = false
   }
 }
 
@@ -1315,7 +1150,7 @@ onMounted(fetchServers)
                 type="button"
                 @click="showAddDropdown = false; createEchoTestMcp()"
                 class="mt-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
-                title="创建平台内置 Echo 测试 MCP；不会展示固定 Token 或用户身份签名原文"
+                title="创建平台内置 Echo 测试 MCP；不会展示固定 Token 或用户身份原文"
               >
                 <BeakerIcon class="h-4 w-4 text-indigo-600 shrink-0" />
                 <div class="min-w-0 flex-1">
@@ -1359,7 +1194,7 @@ onMounted(fetchServers)
                 <span
                   v-if="server.user_assertion_enabled"
                   class="mt-1 inline-flex rounded border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-700"
-                >已启用用户身份签名</span>
+                >已启用用户身份传递</span>
                 <span
                   v-if="server.server_name === 'NanZi Echo 测试 MCP'"
                   class="mt-1 ml-1 inline-flex rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700"
@@ -1679,11 +1514,11 @@ onMounted(fetchServers)
                       type="button"
                       class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 text-[10px] font-bold text-indigo-600"
                       title="用户身份传递说明"
-                      @click="openAuthHelp('开启用户身份传递', '开启后，系统会把当前登录用户和当前智能体生成短期签名 UserContext，通过 X-Nanzi-User-Assertion 发送给当前 MCP。关闭时完全沿用原有身份认证方式。')"
+                      @click="openAuthHelp('开启用户身份传递', '开启后，系统会把当前登录用户的身份信息以明文 JSON 放在 HTTP Header X-Nanzi-User-Context 中发给当前 MCP，同时带上 X-Request-ID。不加密、不加签。关闭时完全沿用原有调用方式。')"
                     >?</button>
                   </div>
                   <p class="mt-1 text-[10px] leading-relaxed text-gray-500">
-                    关闭时保持原有 MCP 调用方式；开启后仅为当前 MCP 增加签名用户身份。签名私钥由系统自动生成并加密保存，业务方只使用公钥验签。
+                    关闭时保持原有 MCP 调用方式；开启后仅为本 MCP 在请求头中明文附带当前用户身份。
                   </p>
                 </div>
                 <Switch
@@ -1694,62 +1529,9 @@ onMounted(fetchServers)
               </div>
 
               <div v-if="newServer.user_assertion_enabled" class="mt-4 space-y-3 border-t border-indigo-100 pt-3">
-                <div>
-                  <div class="mb-1 flex items-center gap-1.5">
-                    <label class="text-[11px] font-semibold text-gray-700">MCP Audience（系统生成）</label>
-                    <button
-                      type="button"
-                      class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 text-[10px] font-bold text-indigo-600"
-                      title="Audience 说明"
-                      @click="openAuthHelp('MCP Audience 在哪里使用？', '系统会按当前 MCP 的 server_id 自动生成 Audience，例如 mcp:当前MCP的ID。业务方把这个只读值配置为验签时的 aud 期望值，用来防止其他 MCP 接受本 MCP 的身份断言。用户不需要填写。')"
-                    >?</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <input
-                      :value="mcpAudienceValue"
-                      readonly
-                      aria-label="当前 MCP Audience"
-                      class="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-mono text-gray-600 outline-none"
-                    />
-                    <button
-                      v-if="mcpAudienceValue !== '保存后由系统自动生成'"
-                      type="button"
-                      class="shrink-0 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
-                      aria-label="复制 Audience"
-                      @click="copyMcpValue(mcpAudienceValue, 'Audience')"
-                    >{{ copiedMcpValue === 'Audience' ? '已复制' : '复制 Audience' }}</button>
-                  </div>
-                </div>
-
-                <div>
-                  <div class="mb-1 flex items-center gap-1.5">
-                    <label class="text-[11px] font-semibold text-gray-700">签名 Issuer（系统固定）</label>
-                    <button
-                      type="button"
-                      class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 text-[10px] font-bold text-indigo-600"
-                      title="Issuer 说明"
-                      @click="openAuthHelp('签名 Issuer 在哪里使用？', 'Issuer 表示这份用户身份签名由谁签发。系统固定使用 nanzi-platform。业务方把这个只读值配置为验签时的 iss 期望值，用户不需要填写。')"
-                    >?</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <input
-                      :value="mcpIssuerValue"
-                      readonly
-                      aria-label="当前 MCP 签名 Issuer"
-                      class="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-mono text-gray-600 outline-none"
-                    />
-                    <button
-                      type="button"
-                      class="shrink-0 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
-                      aria-label="复制 Issuer"
-                      @click="copyMcpValue(mcpIssuerValue, 'Issuer')"
-                    >{{ copiedMcpValue === 'Issuer' ? '已复制' : '复制 Issuer' }}</button>
-                  </div>
-                </div>
-
                 <div class="rounded-md border border-indigo-100 bg-white/70 p-2.5 text-[10px] leading-relaxed text-gray-500">
                   <div class="flex items-center gap-1.5 font-semibold text-gray-700">
-                    <span>默认透传字段</span>
+                    <span>明文 Header</span>
                     <button
                       type="button"
                       class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 text-[10px] font-bold text-indigo-600"
@@ -1757,47 +1539,9 @@ onMounted(fetchServers)
                       @click="openPayloadHelp"
                     >?</button>
                   </div>
-                  <p class="mt-1">用户身份结构为 user_context + custom_attributes，业务 MCP 通过验签后的 user_context.user_id 关联业务用户。</p>
-                </div>
-
-                <div class="rounded-md border border-indigo-100 bg-white/70 p-2.5 text-[10px] leading-relaxed text-gray-500">
-                  <div class="flex items-center gap-1.5 font-semibold text-gray-700">
-                    <span>公钥获取地址（JWKS）</span>
-                    <button
-                      type="button"
-                      class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 text-[10px] font-bold text-indigo-600"
-                      title="业务方如何使用"
-                      @click="openAuthHelp('业务方如何使用公钥验签？', `业务 MCP 不需要获取或保存 NanZi 私钥，只需配置当前 MCP 的 JWKS 地址。示例：GET ${mcpJwksUrl || 'https://<NanZi域名>/.well-known/nanzi/mcp/<server_id>/jwks.json'}，缓存返回的公钥；收到 X-Nanzi-User-Assertion 后，根据 JWT Header 的 kid 选择公钥并验证签名，同时校验 iss、aud、exp、iat 和 jti。验签成功后，从 user_context.user_id 关联业务用户。例如：const userId = claims.user_context.user_id。关闭本开关的 MCP 不会发送这个 Header。`)"
-                    >?</button>
-                  </div>
-                  <div v-if="mcpJwksUrl" class="mt-2 flex items-center gap-2">
-                    <input
-                      :value="mcpJwksUrl"
-                      readonly
-                      aria-label="当前 MCP 公钥获取地址"
-                      class="min-w-0 flex-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5 font-mono text-[10px] text-gray-600 outline-none"
-                    />
-                    <button
-                      type="button"
-                      class="shrink-0 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 font-semibold text-indigo-700 hover:bg-indigo-100"
-                      aria-label="复制 JWKS 地址"
-                      @click="copyJwksUrl"
-                    >{{ copiedMcpValue === 'JWKS 地址' ? '已复制' : '复制 JWKS 地址' }}</button>
-                  </div>
-                  <p v-else class="mt-1">保存 MCP 后，系统会生成当前 MCP 专属地址；业务方访问该地址获取公钥。</p>
-                </div>
-
-                <div class="flex items-center justify-between gap-3 rounded-md border border-indigo-200 bg-indigo-50/70 p-2.5">
-                  <div class="min-w-0 text-[10px] leading-relaxed text-indigo-800">
-                    <div class="font-semibold">业务方接入示例</div>
-                    <p>自动带入上面的 Audience、Issuer 和 JWKS 地址，生成可复制的验签示例。</p>
-                  </div>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="!mcpJwksUrl"
-                    @click="openMcpCodeModal"
-                  >一键生成调用模拟代码</button>
+                  <p class="mt-1">
+                    业务 MCP 直接读取 <code class="rounded bg-indigo-50 px-1 font-mono">X-Nanzi-User-Context</code> 中的 JSON，用 <code class="rounded bg-indigo-50 px-1 font-mono">user_id</code> 关联业务用户。不验签、不加密。
+                  </p>
                 </div>
               </div>
             </div>
@@ -1998,8 +1742,9 @@ onMounted(fetchServers)
         <div class="flex shrink-0 flex-col-reverse gap-3 border-t border-gray-100 bg-gray-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <button 
             v-if="wizardStep !== 3"
-            @click="closeWizard" 
-            class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+            @click="closeWizard"
+            :disabled="saving"
+            class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             取消
           </button>
@@ -2012,7 +1757,7 @@ onMounted(fetchServers)
           </button>
           
           <div class="flex flex-col gap-2 sm:flex-row sm:space-x-3 sm:gap-0">
-            <button v-if="wizardStep === 2" @click="wizardStep = 1" class="px-4 py-2 text-sm font-medium text-primary hover:underline">返回修改</button>
+            <button v-if="wizardStep === 2" @click="wizardStep = 1" :disabled="saving" class="px-4 py-2 text-sm font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50">返回修改</button>
             
             <button 
               v-if="wizardStep === 1 && connectionInputTab === 'json' && !isEditing"
@@ -2036,10 +1781,13 @@ onMounted(fetchServers)
             
             <button 
               v-else-if="wizardStep === 2"
-              @click="addServer" 
-              class="rounded-lg bg-green-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-green-600/20 transition-all hover:bg-green-700 active:scale-95 sm:px-6 sm:py-2"
+              type="button"
+              @click="addServer"
+              :disabled="saving"
+              class="flex items-center justify-center rounded-lg bg-green-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-green-600/20 transition-all hover:bg-green-700 disabled:opacity-50 sm:px-6 sm:py-2"
             >
-              {{ isEditing ? '保存修改' : '确认并完成添加' }}
+              <ArrowPathIcon v-if="saving" class="mr-2 h-4 w-4 animate-spin" />
+              {{ saving ? (isEditing ? '正在保存修改...' : '正在完成添加...') : (isEditing ? '保存修改' : '确认并完成添加') }}
             </button>
 
             <template v-else-if="wizardStep === 3">
@@ -2064,51 +1812,6 @@ onMounted(fetchServers)
       </div>
     </div>
 
-    <!-- MCP 接入模拟代码 Modal -->
-    <div
-      v-if="showMcpCodeModal"
-      class="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-sm"
-      @click.self="showMcpCodeModal = false"
-    >
-      <div class="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-        <div class="flex items-start justify-between gap-3 border-b border-gray-100 p-5">
-          <div>
-            <h4 class="text-base font-bold text-gray-900">业务方 MCP 调用模拟代码</h4>
-            <p class="mt-1 text-xs leading-relaxed text-gray-500">代码已自动带入当前 MCP 的 Audience、Issuer 和 JWKS 地址。复制后放入业务 MCP 的验签中间件，并替换固定 Token 读取方式。</p>
-          </div>
-          <button type="button" class="text-xl leading-none text-gray-400 hover:text-gray-700" @click="showMcpCodeModal = false">×</button>
-        </div>
-
-        <div class="flex items-center justify-between border-b border-gray-100 px-5 py-3">
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-xs font-semibold"
-              :class="mcpCodeLanguage === 'python' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'"
-              @click="mcpCodeLanguage = 'python'"
-            >Python</button>
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-xs font-semibold"
-              :class="mcpCodeLanguage === 'java' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'"
-              @click="mcpCodeLanguage = 'java'"
-            >Java</button>
-          </div>
-          <button
-            type="button"
-            class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
-            @click="copyMcpCode"
-          >复制全部代码</button>
-        </div>
-
-        <pre class="m-0 flex-1 overflow-auto bg-gray-950 p-5 text-xs leading-6 text-gray-100"><code>{{ generatedMcpCode }}</code></pre>
-
-        <div class="border-t border-gray-100 bg-gray-50 px-5 py-3 text-[11px] leading-relaxed text-gray-600">
-          使用位置：Audience 填业务方的 <code class="rounded bg-gray-200 px-1">aud</code> 校验配置，Issuer 填 <code class="rounded bg-gray-200 px-1">iss</code> 校验配置，JWKS 地址填公钥发现配置。验签成功后从 <code class="rounded bg-gray-200 px-1">user_context.user_id</code> 关联业务用户。
-        </div>
-      </div>
-    </div>
-
     <!-- Default Payload Fields Modal -->
     <div
       v-if="showPayloadHelp"
@@ -2119,7 +1822,7 @@ onMounted(fetchServers)
         <div class="flex items-start justify-between gap-3 border-b border-gray-100 p-5">
           <div>
             <h4 class="text-base font-bold text-gray-900">默认透传字段（完整结构）</h4>
-            <p class="mt-1 text-xs leading-relaxed text-gray-500">以下信息只在开启用户身份传递后，随当前 MCP 调用发送。业务方先验签，再读取用户和智能体信息。</p>
+            <p class="mt-1 text-xs leading-relaxed text-gray-500">以下信息只在开启用户身份传递后，以明文 JSON 放在 X-Nanzi-User-Context 中发送。业务方直接读取 JSON，用 user_id 关联业务用户。</p>
           </div>
           <button type="button" class="text-xl leading-none text-gray-400 hover:text-gray-700" @click="closePayloadHelp">×</button>
         </div>
@@ -2152,8 +1855,8 @@ onMounted(fetchServers)
               <p class="mt-1">password、token、api_key、authorization、cookie、secret、private_key、session_token 等敏感字段会自动过滤。</p>
             </div>
             <div class="rounded-lg border border-blue-100 bg-blue-50/70 p-3">
-              <div class="font-semibold text-blue-900">当前版本暂不包含</div>
-              <p class="mt-1">当前第一期不传 `tenant_id`、`scope` 和完整权限树；业务权限仍由业务 MCP 自己判断。</p>
+              <div class="font-semibold text-blue-900">业务权限仍由 MCP 自己判断</div>
+              <p class="mt-1">Header 只明文携带当前登录用户资料；完整权限树不单独打包。业务 MCP 用 user_id 关联本地用户后自行鉴权。</p>
             </div>
           </div>
         </div>
