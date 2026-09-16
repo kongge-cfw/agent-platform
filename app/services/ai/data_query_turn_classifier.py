@@ -38,12 +38,10 @@ async def load_last_data_result(
     """Load the latest structured result for ChatBI's internal classifier."""
     if not user_info:
         return None
-    raw_user_id = user_info.get("user_id") or user_info.get("id")
-    if not raw_user_id:
-        return None
-    try:
-        user_id = int(raw_user_id)
-    except (TypeError, ValueError):
+    from app.services.ai.conversation_identity import try_session_user_id
+
+    user_id = try_session_user_id(user_info)
+    if not user_id:
         return None
     try:
         from app.services.ai.memory_service import memory_service

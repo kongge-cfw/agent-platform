@@ -13,9 +13,28 @@ from app.services.ai.tools.tool_compat import tool
 
 def _context_or_error():
     context = get_current_agent_context()
-    if context is None or context.user_id is None:
+    if context is None:
+        raise RuntimeError("浏览器工具需要登录用户上下文")
+    from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+
+    if try_session_user_id_from_agent_context(context) is None and context.user_id is None:
         raise RuntimeError("浏览器工具需要登录用户上下文")
     return context
+
+
+def _browser_db_user_id(context) -> int:
+    from app.services.ai.conversation_identity import session_numeric_user_id, user_info_from_agent_context
+
+    numeric = session_numeric_user_id(user_info_from_agent_context(context))
+    if numeric is None:
+        raise RuntimeError("浏览器工具需要登录用户上下文")
+    return numeric
+
+
+def _browser_workspace_user_id(context) -> str:
+    from app.services.ai.conversation_identity import session_user_id_from_agent_context
+
+    return session_user_id_from_agent_context(context)
 
 
 def _session_id(context) -> str:
@@ -31,7 +50,7 @@ async def _owned_session(context):
     session_id = _session_id(context)
     async with AsyncSessionLocal() as db:
         return await BrowserSessionService(db).get_owned_session(
-            user_id=int(context.user_id), session_id=session_id
+            user_id=_browser_db_user_id(context), session_id=session_id
         )
 
 
@@ -45,7 +64,7 @@ async def _persist_browser_result(context: Any, result: Any) -> None:
 
         service = BrowserSessionService(db)
         await service.update_state(
-            user_id=int(context.user_id),
+            user_id=_browser_db_user_id(context),
             session_id=session_id,
             url=getattr(result, "url", None),
             title=getattr(result, "title", None),
@@ -64,7 +83,7 @@ async def browser_open(url: str = "https://www.baidu.com/", profile_id: Optional
     context = _context_or_error()
     try:
         session = await browser_runtime.open_for_user(
-            user_id=int(context.user_id),
+            user_id=_browser_db_user_id(context),
             conversation_id=getattr(context, "conversation_id", None),
             url=url,
             profile_id=profile_id,
@@ -314,12 +333,9 @@ async def browser_close_tab(tab_id: str) -> str:
 
 
 def _browser_user_info(context: Any) -> dict[str, Any]:
-    return {
-        "user_id": getattr(context, "user_id", None),
-        "id": getattr(context, "user_id", None),
-        "user_name": getattr(context, "user_name", None),
-        "username": getattr(context, "user_name", None),
-    }
+    from app.services.ai.conversation_identity import user_info_from_agent_context
+
+    return user_info_from_agent_context(context)
 
 
 def _safe_browser_file_path(context: Any, file_path: str) -> Path:
@@ -375,6 +391,7 @@ async def browser_download(target_ref: str, snapshot_id: str) -> str:
         download_path,
         filename,
         owner_user_id=context.user_id,
+        workspace_user_id=_browser_workspace_user_id(context),
         user_name=(context.user_dimensions or {}).get("user_name"),
         conversation_id=context.conversation_id,
         trace_id=context.trace_id,
@@ -397,7 +414,7 @@ async def browser_click(
         from app.services.ai.browser.browser_session_service import BrowserSessionService
 
         session = await BrowserSessionService(db).get_owned_session(
-            user_id=int(context.user_id), session_id=session_id
+            user_id=_browser_db_user_id(context), session_id=session_id
         )
         result = await browser_runtime.click(
             session_id,
@@ -455,6 +472,7 @@ async def browser_export_pdf(
         pdf_path,
         pdf_name,
         owner_user_id=context.user_id,
+        workspace_user_id=_browser_workspace_user_id(context),
         user_name=(context.user_dimensions or {}).get("user_name"),
         conversation_id=context.conversation_id,
         trace_id=context.trace_id,

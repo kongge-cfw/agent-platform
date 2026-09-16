@@ -130,12 +130,18 @@ def _context_user_name(context) -> str | None:
     return name or None
 
 
+def _workspace_user_id(context) -> str:
+    from app.services.ai.conversation_identity import session_user_id_from_agent_context
+
+    return session_user_id_from_agent_context(context)
+
+
 async def _input_path(path: str):
     context = _context()
     return await resolve_document_input_path(
         path,
         allowed_attachment_paths=context.authorized_attachment_paths,
-        user_id=context.user_id,
+        user_id=_workspace_user_id(context),
         conversation_id=context.conversation_id,
         allowed_extensions=_EXTENSIONS,
         user_name=_context_user_name(context),
@@ -146,7 +152,7 @@ async def _output_path(filename: str):
     context = _context()
     return await resolve_document_output_path(
         filename,
-        user_id=context.user_id,
+        user_id=_workspace_user_id(context),
         conversation_id=context.conversation_id,
         allowed_extensions=_EXTENSIONS,
         user_name=_context_user_name(context),

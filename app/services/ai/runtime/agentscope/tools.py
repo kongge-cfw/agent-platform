@@ -267,7 +267,12 @@ async def _browser_permission_decision(
 
     context = get_current_agent_context()
     session_id = getattr(context, "browser_session_id", None) if context else None
-    user_id = getattr(context, "user_id", None) if context else None
+    from app.services.ai.conversation_identity import (
+        session_numeric_user_id,
+        user_info_from_agent_context,
+    )
+
+    user_id = session_numeric_user_id(user_info_from_agent_context(context)) if context else None
     if not session_id or user_id is None:
         # 让通用权限层处理缺少浏览器上下文的异常调用。
         return None
@@ -357,7 +362,7 @@ async def _browser_permission_decision(
     async with AsyncSessionLocal() as db:
         try:
             session = await BrowserSessionService(db).get_owned_session(
-                user_id=int(user_id), session_id=str(session_id)
+                user_id=user_id, session_id=str(session_id)
             )
         except (BrowserAccessDenied, TypeError, ValueError):
             return PermissionDecision(
@@ -1648,6 +1653,24 @@ def _shell_deletion_permission_decision(
     return None
 
 
+def _permission_lookup_user_id(
+    explicit_user_id: int | str | None,
+    agent_ctx: Any | None,
+) -> int | None:
+    """权限表只认平台整型 user_id；会话钥匙 ``e:…`` 不能拿去 int()。"""
+    candidates = [explicit_user_id]
+    if agent_ctx is not None:
+        candidates.append(getattr(agent_ctx, "user_id", None))
+    for raw in candidates:
+        if raw in (None, ""):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 async def enforce_tool_forbidden(
     tool_name: str,
     explicit_user_id: int | str | None = None,
@@ -1658,10 +1681,9 @@ async def enforce_tool_forbidden(
     """
     from app.core.context import get_current_agent_context
     agent_ctx = get_current_agent_context()
-    user_id = explicit_user_id or (agent_ctx.user_id if agent_ctx else None)
-
-    if explicit_user_id is None and agent_ctx and agent_ctx.is_admin:
+    if agent_ctx and agent_ctx.is_admin:
         return None
+    user_id = _permission_lookup_user_id(explicit_user_id, agent_ctx)
 
     if user_id:
         try:
@@ -1672,7 +1694,7 @@ async def enforce_tool_forbidden(
 
             async with AsyncSessionLocal() as session:
                 perm_service = PermissionService(session)
-                perms = await perm_service.get_user_permissions(int(user_id))
+                perms = await perm_service.get_user_permissions(user_id)
                 if "admin" in perms.roles:
                     return None
 
@@ -1710,10 +1732,9 @@ async def _enforce_command_blacklist(tool_name: str, tool_input: dict[str, Any],
 
     from app.core.context import get_current_agent_context
     agent_ctx = get_current_agent_context()
-    user_id = explicit_user_id or (agent_ctx.user_id if agent_ctx else None)
-
-    if explicit_user_id is None and agent_ctx and agent_ctx.is_admin:
+    if agent_ctx and agent_ctx.is_admin:
         return None
+    user_id = _permission_lookup_user_id(explicit_user_id, agent_ctx)
 
     if user_id:
         try:
@@ -1723,7 +1744,7 @@ async def _enforce_command_blacklist(tool_name: str, tool_input: dict[str, Any],
 
             async with AsyncSessionLocal() as session:
                 perm_service = PermissionService(session)
-                perms = await perm_service.get_user_permissions(int(user_id))
+                perms = await perm_service.get_user_permissions(user_id)
                 if "admin" in perms.roles:
                     return None
 

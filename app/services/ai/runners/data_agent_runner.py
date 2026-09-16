@@ -331,8 +331,9 @@ class DataAgentRunner(BaseExecutor):
         return self.config.agent_name or 'DataAgent'
 
     def _runtime_user_id(self) -> str | None:
-        user_id = self._current_user_id()
-        return str(user_id) if user_id is not None else None
+        from app.services.ai.conversation_identity import try_session_user_id
+
+        return try_session_user_id(self.user_info)
 
     def _runtime_user_name(self) -> str | None:
         if not self.user_info:

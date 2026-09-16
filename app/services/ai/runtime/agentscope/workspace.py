@@ -153,10 +153,15 @@ def extract_workspace_identity(
     user_info: dict[str, Any] | None = None,
 ) -> tuple[str | int | None, str | None]:
     """Resolve workspace identity from explicit args or user_info."""
+    from app.services.ai.conversation_identity import try_session_user_id
+
     resolved_user_id = user_id
     resolved_user_name = user_name
     if user_info:
-        if resolved_user_id is None:
+        session_id = try_session_user_id(user_info)
+        if session_id:
+            resolved_user_id = session_id
+        elif resolved_user_id is None:
             resolved_user_id = user_info.get("user_id") or user_info.get("id")
         if not resolved_user_name:
             raw_name = user_info.get("user_name") or user_info.get("username")

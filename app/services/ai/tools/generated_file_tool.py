@@ -57,13 +57,16 @@ async def _resolve_source_path(path: str, context: Any) -> Path:
     raw = str(path or "").strip()
     if not raw:
         raise ValueError("发布文件时必须提供 path")
-    if getattr(context, "user_id", None) is None:
+    from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+
+    workspace_user_id = try_session_user_id_from_agent_context(context)
+    if workspace_user_id is None:
         raise ValueError("当前会话缺少用户身份，无法发布下载文件")
 
     root = Path(await resolve_workspace_root()).resolve()
     user_root_text = resolve_user_workspace_root(
         root=str(root),
-        user_id=context.user_id,
+        user_id=workspace_user_id,
         user_name=_user_name(context),
     )
     user_root = Path(user_root_text or (root / _workspace_user_key(context))).resolve()
@@ -80,7 +83,7 @@ async def _resolve_source_path(path: str, context: Any) -> Path:
         session_workdir = Path(
             resolve_session_workdir(
                 root=str(root),
-                user_id=context.user_id,
+                user_id=workspace_user_id,
                 user_name=_user_name(context),
                 conversation_id=conversation_id,
             )
@@ -100,10 +103,11 @@ async def _resolve_source_path(path: str, context: Any) -> Path:
 
 
 def _workspace_user_key(context: Any) -> str:
+    from app.services.ai.conversation_identity import session_user_id_from_agent_context
     from app.services.ai.runtime.agentscope.workspace import resolve_workspace_user_key
 
     return resolve_workspace_user_key(
-        user_id=context.user_id,
+        user_id=session_user_id_from_agent_context(context),
         user_name=_user_name(context),
     )
 

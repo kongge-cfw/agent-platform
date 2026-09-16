@@ -46,9 +46,9 @@ class ContextStep(BasePipelineStep):
         conversation_id = context.conversation_id
         raw_lane_user_id = context.lane_user_id
         if raw_lane_user_id is None:
-            raw_lane_user_id = (context.user_info or {}).get("user_id") or (
-                context.user_info or {}
-            ).get("id")
+            from app.services.ai.conversation_identity import try_session_user_id
+
+            raw_lane_user_id = try_session_user_id(context.user_info)
             context.lane_user_id = raw_lane_user_id
         lane_user_id = str(raw_lane_user_id or "")
         agent_id = context.agent_id

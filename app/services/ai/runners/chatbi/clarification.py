@@ -85,10 +85,10 @@ async def generate_clarification_content(
                 build_grounded_clarification_queries,
             )
 
-            runtime_user_id = runner._runtime_user_id()
+            runtime_user_id = runner._current_user_id()
             is_admin = bool((runner.user_info or {}).get("is_admin"))
             dataset_menu = await AgentConfigProvider.get_dataset_menu(
-                user_id=int(runtime_user_id) if str(runtime_user_id).isdigit() else None,
+                user_id=runtime_user_id,
                 is_admin=is_admin,
             )
             suggested_queries = build_grounded_clarification_queries(

@@ -61,13 +61,12 @@ def _browser_install_commands() -> list[list[str]]:
 
 
 def _user_id(user_info: dict[str, Any]) -> int:
-    raw_user_id = user_info.get("user_id") or user_info.get("id")
-    if raw_user_id is None:
+    from app.services.ai.conversation_identity import session_numeric_user_id
+
+    numeric = session_numeric_user_id(user_info)
+    if numeric is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少用户身份")
-    try:
-        return int(raw_user_id)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户身份无效") from exc
+    return numeric
 
 
 def _viewer_cookie_name(session_id: str) -> str:

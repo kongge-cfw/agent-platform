@@ -23,7 +23,7 @@ async def load_last_data_result(
 ) -> Optional[Dict[str, Any]]:
     if not runner.conversation_id:
         return None
-    user_id = runner._current_user_id()
+    user_id = runner._runtime_user_id()
     if not user_id:
         return None
     try:
@@ -159,7 +159,7 @@ async def save_last_data_result_for_followups(
     # 空查询结果只用于本轮说明“没有数据”，不能覆盖可复用结果；后续快捷操作应回退原查询链路。
     if not _is_non_empty_success_result(normalized):
         return
-    user_id = runner._current_user_id()
+    user_id = runner._runtime_user_id()
     if not user_id:
         return
     observed_at = datetime.now(timezone.utc).isoformat()

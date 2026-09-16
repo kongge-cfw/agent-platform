@@ -52,8 +52,10 @@ async def resolve_delegable_system_agents_for_user(
     raw_user_id = None
     is_admin = False
     if user_info:
-        raw_user_id = user_info.get("user_id") or user_info.get("id")
-        is_admin = user_info.get("role") == "admin"
+        from app.services.embed_identity import operator_is_admin, platform_acl_user_id
+
+        raw_user_id = platform_acl_user_id(user_info)
+        is_admin = operator_is_admin(user_info)
     return await resolve_runnable_delegable_system_agents(
         session,
         active_agents,

@@ -17,6 +17,12 @@ from app.services.ai.runtime.session_run_lane import (
 logger = logging.getLogger(__name__)
 
 
+def _resume_session_user_id(user_info: Optional[Dict[str, Any]]) -> str | None:
+    from app.services.ai.conversation_identity import try_session_user_id
+
+    return try_session_user_id(user_info)
+
+
 class AgentScopeResumeHandler:
     """封装 AgentScope 工具确认与外部执行挂起恢复的流式执行逻辑。"""
 
@@ -44,9 +50,7 @@ class AgentScopeResumeHandler:
             _track_process_timeline,
         )
 
-        current_user_id = None
-        if user_info:
-            current_user_id = user_info.get("user_id") or user_info.get("id")
+        current_user_id = _resume_session_user_id(user_info)
 
         pending = await pending_agentscope_confirmations.peek_async(
             permission_request_id,
@@ -216,7 +220,7 @@ class AgentScopeResumeHandler:
             "persisting": should_persist_history,
         }
         if should_persist_history:
-            u_id = user_info.get("user_id") if user_info else pending.user_id
+            u_id = current_user_id or pending.user_id
             handled_by = getattr(agent_config, "agent_name", None) if agent_config else None
             resolve_tool_run_text = getattr(runner, "resolve_tool_run_text", None)
             tool_run_text = (
@@ -284,9 +288,7 @@ class AgentScopeResumeHandler:
             _track_process_timeline,
         )
 
-        current_user_id = None
-        if user_info:
-            current_user_id = user_info.get("user_id") or user_info.get("id")
+        current_user_id = _resume_session_user_id(user_info)
 
         pending = await pending_agentscope_confirmations.peek_async(
             external_execution_request_id,
@@ -455,7 +457,7 @@ class AgentScopeResumeHandler:
             "persisting": should_persist_history,
         }
         if should_persist_history:
-            u_id = user_info.get("user_id") if user_info else pending.user_id
+            u_id = current_user_id or pending.user_id
             handled_by = getattr(agent_config, "agent_name", None) if agent_config else None
             resolve_tool_run_text = getattr(runner, "resolve_tool_run_text", None)
             tool_run_text = (

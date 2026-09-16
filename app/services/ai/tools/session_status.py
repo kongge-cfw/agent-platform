@@ -227,10 +227,13 @@ async def _last_model_call_stats(context: Any) -> dict[str, Any]:
     if context is None or not getattr(context, "conversation_id", None):
         return result
 
-    from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
+    from app.services.ai.conversation_identity import (
+        MissingUserIdentityError,
+        session_user_id_from_agent_context,
+    )
 
     try:
-        uid = require_user_id(getattr(context, "user_id", None))
+        uid = session_user_id_from_agent_context(context)
     except MissingUserIdentityError:
         return result
     key = f"{memory_service.KEY_PREFIX}:{uid}:{context.conversation_id}:{STATS_KEY_SUFFIX}"
@@ -264,10 +267,13 @@ async def _context_usage_estimate(context: Any) -> dict[str, Any]:
     """复用共享服务估算当前会话上下文，保持 session_status 原有空历史语义。"""
     if context is None:
         return await estimate_context_usage(user_id=None, conversation_id=None)
-    from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
+    from app.services.ai.conversation_identity import (
+        MissingUserIdentityError,
+        session_user_id_from_agent_context,
+    )
 
     try:
-        user_id = require_user_id(getattr(context, "user_id", None))
+        user_id = session_user_id_from_agent_context(context)
     except MissingUserIdentityError:
         return {
             "history_messages": 0,
@@ -292,7 +298,10 @@ async def _workspace_summary(context: Any) -> tuple[dict[str, Any], list[str]]:
         "sandbox_policy": None,
     }
     limitations: list[str] = []
-    if context is None or getattr(context, "user_id", None) is None:
+    from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+
+    user_id = try_session_user_id_from_agent_context(context)
+    if context is None or user_id is None:
         limitations.append("当前没有可用的认证用户，无法解析用户工作区路径")
         return empty, limitations
 
@@ -306,7 +315,6 @@ async def _workspace_summary(context: Any) -> tuple[dict[str, Any], list[str]]:
             await ConfigService.get("sandbox_policy", "local"),
         )
         root = await _maybe_await(resolve_workspace_root())
-        user_id = getattr(context, "user_id", None)
         dimensions = dict(getattr(context, "user_dimensions", {}) or {})
         user_name = dimensions.get("user_name")
         user_key = resolve_workspace_user_key(user_id=user_id, user_name=user_name)

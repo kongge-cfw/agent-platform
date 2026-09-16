@@ -58,7 +58,7 @@ from app.services.ai.turn_decision import (
 )
 from app.services.ai.intent_service import looks_like_current_model_query
 from app.services.ai.business_context import sanitize_injected_context
-from app.services.ai.conversation_identity import require_user_id
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.services.schema_chunk_format import estimate_text_tokens
 
 logger = logging.getLogger(__name__)
@@ -2037,8 +2037,9 @@ class AgentService:
             from app.services.ai.reusable_result import ReusableResultDecision
 
             return ReusableResultDecision(mode="none")
-        raw_user_id = user_info.get("user_id") or user_info.get("id")
-        if not raw_user_id:
+        try:
+            raw_user_id = require_user_id(user_info)
+        except MissingUserIdentityError:
             from app.services.ai.reusable_result import ReusableResultDecision
 
             return ReusableResultDecision(mode="none")
@@ -2046,8 +2047,8 @@ class AgentService:
             from app.services.ai.reusable_result import resolve_reusable_result
 
             current, stack = await asyncio.gather(
-                memory_service.get_reusable_result(str(raw_user_id), conversation_id),
-                memory_service.get_reusable_result_stack(str(raw_user_id), conversation_id),
+                memory_service.get_reusable_result(raw_user_id, conversation_id),
+                memory_service.get_reusable_result_stack(raw_user_id, conversation_id),
             )
             return resolve_reusable_result(
                 user_query,
@@ -2268,16 +2269,19 @@ class AgentService:
             if early_turn_kind != "data_query" and not accessible_resources and user_info:
                 try:
                     with _measure("catalog_fetch"):
-                        raw_resource_user_id = user_info.get("user_id") or user_info.get("id")
-                        resource_user_id = None
-                        if raw_resource_user_id is not None:
-                            try:
-                                resource_user_id = int(raw_resource_user_id)
-                            except (TypeError, ValueError):
-                                resource_user_id = None
+                        from app.services.embed_identity import (
+                            operator_is_admin,
+                            platform_acl_user_id,
+                            platform_acl_user_name,
+                        )
 
-                        target_user_name = user_info.get("user_name") or user_info.get("username")
-                        target_is_admin = user_info.get("role") == "admin"
+                        resource_user_id = platform_acl_user_id(user_info)
+                        target_user_name = (
+                            platform_acl_user_name(user_info)
+                            or user_info.get("user_name")
+                            or user_info.get("username")
+                        )
+                        target_is_admin = operator_is_admin(user_info)
 
                         # 优先复用本轮入口已加载的快照，避免重复查询数据库与权限表
                         snapshot = (request_observability or {}).get("resource_snapshot")

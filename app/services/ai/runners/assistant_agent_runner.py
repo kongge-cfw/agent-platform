@@ -436,9 +436,9 @@ class AssistantAgentRunner(BaseExecutor):
         self.current_user_query = current_user_query
 
     def _runtime_user_id(self) -> str | None:
-        if not self.user_info:
-            return None
-        return str(self.user_info.get("user_id") or self.user_info.get("id") or "") or None
+        from app.services.ai.conversation_identity import try_session_user_id
+
+        return try_session_user_id(self.user_info)
 
     def _runtime_user_name(self) -> str | None:
         if not self.user_info:
@@ -629,8 +629,10 @@ class AssistantAgentRunner(BaseExecutor):
             raw_user_id = None
             is_admin = False
             if self.user_info:
-                raw_user_id = self.user_info.get("user_id") or self.user_info.get("id")
-                is_admin = self.user_info.get("role") == "admin"
+                from app.services.embed_identity import operator_is_admin, platform_acl_user_id
+
+                raw_user_id = platform_acl_user_id(self.user_info)
+                is_admin = operator_is_admin(self.user_info)
             async with AsyncSessionLocal() as session:
                 agents = await AgentManagerService.list_agents(session)
                 delegable_agents = await resolve_runnable_delegable_system_agents(

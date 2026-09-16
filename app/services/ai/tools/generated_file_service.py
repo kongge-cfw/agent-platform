@@ -282,6 +282,7 @@ async def publish(
     filename: str,
     *,
     owner_user_id: int | str | None = None,
+    workspace_user_id: int | str | None = None,
     user_name: str | None = None,
     conversation_id: str | None = None,
     trace_id: str | None = None,
@@ -294,6 +295,9 @@ async def publish(
     source file is created outside ``agent_workspaces``. It intentionally shares
     the DB artifact path with ``register_artifact`` instead of creating a second
     manifest-based download protocol.
+
+    ``workspace_user_id`` 用于工作区目录钥匙（嵌入为 ``session_owner``）；
+    ``owner_user_id`` 仍是 ``ai_artifacts`` 外键，须为平台用户整型 ID。
     """
     source = Path(source_path).resolve()
     if not source.is_file():
@@ -310,7 +314,7 @@ async def publish(
     from app.services.ai.runtime.agentscope.workspace import resolve_workspace_user_key
 
     user_key = resolve_workspace_user_key(
-        user_id=owner_user_id,
+        user_id=workspace_user_id if workspace_user_id is not None else owner_user_id,
         user_name=user_name,
     )
     publish_dir = workspace_root / user_key / "generated"

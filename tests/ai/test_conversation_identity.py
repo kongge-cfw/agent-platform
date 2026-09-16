@@ -6,6 +6,9 @@ from app.services.ai.context_compaction_log_service import ContextCompactionLogS
 from app.services.ai.conversation_identity import (
     MissingUserIdentityError,
     require_user_id,
+    session_numeric_user_id,
+    session_user_id_from_agent_context,
+    try_session_user_id,
 )
 from app.services.ai.memory_service import MemoryService
 from app.services.conversation_resource_service import ConversationResourceService
@@ -20,6 +23,8 @@ pytestmark = pytest.mark.no_infrastructure
         ({"user_id": 7}, "7"),
         ({"user_id": None, "id": 8}, "8"),
         ("user-9", "user-9"),
+        ({"session_owner": "e:abc123", "user_id": 1}, "e:abc123"),
+        ({"session_owner": "  e:abc123  ", "id": 1}, "e:abc123"),
     ],
 )
 def test_require_user_id_normalizes_stable_identity(value, expected):
@@ -41,6 +46,31 @@ def test_require_user_id_normalizes_stable_identity(value, expected):
 def test_require_user_id_fails_closed_instead_of_using_anonymous(value):
     with pytest.raises(MissingUserIdentityError):
         require_user_id(value)
+
+
+def test_try_session_user_id_returns_none_when_missing():
+    assert try_session_user_id(None) is None
+    assert try_session_user_id({}) is None
+    assert try_session_user_id({"session_owner": "e:abc", "user_id": 1}) == "e:abc"
+
+
+def test_session_user_id_from_agent_context_prefers_session_owner():
+    class _Ctx:
+        user_id = 1
+        user_dimensions = {"session_owner": "e:embed-owner"}
+
+    assert session_user_id_from_agent_context(_Ctx()) == "e:embed-owner"
+
+
+def test_session_numeric_user_id_isolates_embed_owner_from_operator():
+    operator = {"user_id": 1}
+    embed = {"user_id": 1, "session_owner": "e:embed-owner"}
+    native = session_numeric_user_id(operator)
+    hashed = session_numeric_user_id(embed)
+    assert native == 1
+    assert hashed != 1
+    assert hashed == session_numeric_user_id(embed)
+    assert hashed >= 0x4000000000000000
 
 
 @pytest.mark.parametrize(
