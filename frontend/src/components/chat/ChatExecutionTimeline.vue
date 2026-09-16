@@ -771,6 +771,8 @@ function fileMetadataSummary(metadata?: FileToolMetadata): string {
   }
   if (metadata.sheet_name) parts.push(`工作表：${metadata.sheet_name}`);
   if (metadata.cell_range) parts.push(`范围：${metadata.cell_range}`);
+  if (metadata.matched_count !== undefined) parts.push(`命中 ${metadata.matched_count} 行`);
+  if (metadata.combine) parts.push(`组合：${metadata.combine}`);
   if (metadata.pattern) parts.push(`关键词：${metadata.pattern}`);
   if (metadata.glob) parts.push(`匹配：${metadata.glob}`);
   if (metadata.size_bytes !== undefined) parts.push(`${Math.round(metadata.size_bytes / 1024)}KB`);

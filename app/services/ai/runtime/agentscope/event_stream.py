@@ -684,5 +684,13 @@ async def map_standard_agentscope_event(
     if event_type == "EXCEED_MAX_ITERS":
         from app.services.ai.executors.prompts import AssistantPrompts
 
-        yield {"content": AssistantPrompts.MAX_STEPS_REACHED}
+        state["max_iters_exceeded"] = True
+        yield {
+            "type": "log",
+            "id": f"max_iters_{uuid.uuid4().hex[:8]}",
+            "title": "已达最大执行步骤",
+            "details": AssistantPrompts.MAX_STEPS_REACHED,
+            "status": "warning",
+            "category": "tool",
+        }
         return

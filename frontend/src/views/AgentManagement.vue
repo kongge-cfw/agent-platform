@@ -572,7 +572,7 @@ const availableTools = [
   },
   {
     name: "excel_document_read",
-    description: "读取 Excel 工作簿结构或指定单元格区域",
+    description: "读取 Excel 结构、列分布统计、按条件筛选行或指定单元格区域",
     isSystem: true,
   },
   {

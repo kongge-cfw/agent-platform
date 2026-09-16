@@ -438,8 +438,7 @@
                         <div class="flex-1 min-w-0 flex flex-col">
                             <span v-if="file.type === 'skill' || file.type === 'knowledge_base' || file.type === 'metadata_dataset' || file.type === 'memory'" class="text-xs font-bold text-white truncate">{{ file.filename }}</span>
                             <template v-else>
-                              <span v-if="canPreviewFile(file)" @click="handlePreviewFile(file)" class="text-xs font-bold text-white hover:underline cursor-pointer truncate">{{ file.filename }}</span>
-                              <a v-else :href="resolveFileUrl(file.url)" target="_blank" class="text-xs font-bold text-white hover:underline truncate">{{ file.filename }}</a>
+                              <span @click="handleOpenAttachedFile(file)" class="text-xs font-bold text-white hover:underline cursor-pointer truncate">{{ file.filename }}</span>
                             </template>
                             <span class="text-[9px] text-white/70 font-mono">
                                 {{
@@ -2161,7 +2160,7 @@ import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
 import SessionResourceScopeBar from "@/components/embed/SessionResourceScopeBar.vue";
 import ResourceScopeModal from "@/components/embed/ResourceScopeModal.vue";
 import { isImageAttachment } from "@/utils/attachmentImages";
-import { isDirectRenderableUrl, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
+import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
 import TraceLogViewer from "@/components/TraceLogViewer.vue";
 import ChatModelCallStatsModal from "@/components/chat/ChatModelCallStatsModal.vue";
 import DataPortalReportCreateModal from "@/components/data-portal/DataPortalReportCreateModal.vue";
@@ -5240,17 +5239,13 @@ const disableGroundingWithToast = () => {
   showToast("反幻觉校验已关闭", "info");
 };
 
-const canPreviewFile = (file: any) => {
-  const ext = (file.ext || '').toLowerCase();
-  return ext === 'pdf' || ext === 'csv' || ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'webp' || ext === 'gif';
-};
-
-const handlePreviewFile = (file: any) => {
-  const ext = (file.ext || '').toLowerCase();
-  handleOpenCanvas({
-    type: ext === 'pdf' ? 'pdf' : (ext === 'csv' ? 'csv' : 'image'),
-    title: file.filename,
-    content: file.url
+const handleOpenAttachedFile = (file: any) => {
+  void openChatAttachmentFile({
+    path: file?.url || "",
+    name: file?.filename || "download",
+    conversationId: conversationId.value,
+    showToast,
+    preview: handleWorkspaceFilePreview,
   });
 };
 

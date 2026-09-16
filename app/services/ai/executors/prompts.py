@@ -2486,8 +2486,12 @@ XML 示例：
 class AssistantPrompts:
     """AssistantExecutor 使用的系统级提示词。"""
 
-    # 达到最大执行步骤的提示
+    # 达到最大执行步骤的提示（时间线日志；用户正文改走收口总结）
     MAX_STEPS_REACHED = "[系统提示] 达到最大执行步骤，停止执行。"
+    MAX_STEPS_WRAPUP_FALLBACK = (
+        "已达到本轮最大执行步骤。请查看上方工具结果中的已得信息；"
+        "若需继续，请指定工作表、缩小范围，或直接说「继续」。"
+    )
 
     @staticmethod
     def turn_decision_context(decision: Any) -> str:

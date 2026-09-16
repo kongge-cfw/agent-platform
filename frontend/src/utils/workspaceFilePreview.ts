@@ -336,6 +336,31 @@ export async function openWorkspaceFileInCanvas(options: OpenWorkspacePreviewOpt
   }
 }
 
+export async function openChatAttachmentFile(options: {
+  path: string
+  name: string
+  conversationId?: string | null
+  showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void
+  preview: (payload: { path: string; name: string }) => void | Promise<void>
+}) {
+  const path = String(options.path || '').trim()
+  const name = String(options.name || '').trim() || 'download'
+  if (!path) {
+    options.showToast('无法打开该文件：缺少路径', 'error')
+    return
+  }
+  if (canPreviewWorkspaceFile(name)) {
+    await options.preview({ path, name })
+    return
+  }
+  await downloadWorkspaceFile({
+    path,
+    name,
+    conversationId: options.conversationId,
+    showToast: options.showToast,
+  })
+}
+
 export async function downloadWorkspaceFile(options: {
   path: string
   name: string

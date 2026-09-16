@@ -547,6 +547,11 @@ async def stream_agentscope_events(
                     yield chunk
             break
 
+    if stream_state.get("max_iters_exceeded") and not str(state.full_content or "").strip():
+        from app.services.ai.executors.prompts import AssistantPrompts
+
+        yield {"content": AssistantPrompts.MAX_STEPS_WRAPUP_FALLBACK}
+
     if emit_final_guard:
         guard_emitted = False
         async for chunk in runner._emit_final_guard(state):

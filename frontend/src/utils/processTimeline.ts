@@ -16,6 +16,9 @@ export type FileToolMetadata = {
   paragraph_range?: { start?: number; limit?: number };
   sheet_name?: string;
   cell_range?: string;
+  filters?: unknown;
+  combine?: string;
+  matched_count?: number;
   pattern?: string;
   glob?: string;
   changes?: Record<string, unknown>;

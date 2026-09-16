@@ -305,6 +305,15 @@ def _build_file_tool_metadata(
                 metadata["sheet_name"] = str(tool_args["sheet_name"])
             if tool_args.get("cell_range"):
                 metadata["cell_range"] = str(tool_args["cell_range"])
+            if tool_args.get("filters"):
+                metadata["filters"] = tool_args.get("filters")
+            if tool_args.get("combine"):
+                metadata["combine"] = str(tool_args.get("combine"))
+            output = tool_output if isinstance(tool_output, dict) else {}
+            data = output.get("data") if isinstance(output.get("data"), dict) else {}
+            matched = data.get("matched_count")
+            if matched is not None:
+                metadata["matched_count"] = matched
         if changes:
             metadata["changes"] = changes
         if artifact.get("size") is not None:
@@ -2695,6 +2704,13 @@ class AssistantAgentRunner(BaseExecutor):
 
         if current_task_cancelling():
             return
+        if state.get("max_iters_exceeded"):
+            async for chunk in self._stream_max_iters_wrapup(
+                state=state,
+                native_model=native_model,
+            ):
+                yield chunk
+            return
         for chunk in process_narration_events.on_model_call_end(state):
             async for item in self._yield_process_narration_chunk(state, chunk):
                 yield item
@@ -2782,6 +2798,98 @@ class AssistantAgentRunner(BaseExecutor):
 
     def _build_synthesis_user_message(self, user_query: str, execution_review: str) -> str:
         return AssistantPrompts.synthesis_user_message(user_query, execution_review)
+
+    async def _stream_max_iters_wrapup(
+        self,
+        *,
+        state: Dict[str, Any],
+        native_model: Any,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """ReAct 步数用尽后禁止再调工具，基于已有结果强制写一版结论。"""
+        yield {
+            "type": "log",
+            "id": f"max_iters_wrapup_{uuid.uuid4().hex[:8]}",
+            "title": "步骤已满，正在汇总已有结果",
+            "details": "不再继续调用工具，改为根据已执行结果给出当前结论与未完成项。",
+            "status": "warning",
+            "category": "tool",
+        }
+        tool_names: Dict[str, str] = state.get("tool_names", {})
+        tool_outputs: Dict[str, str] = state.get("tool_outputs", {})
+        review_lines = build_tool_review_lines(
+            tool_names,
+            tool_outputs,
+            tool_result_states=state.get("tool_result_states"),
+        )
+        constraint = (
+            "【系统约束·达到最大执行步骤】禁止再调用任何工具。"
+            "请仅根据下列已有执行结果回答：已经确认的事实与数字、尚未完成的部分、"
+            "用户下一步可如何继续（例如指定工作表或缩小范围）。"
+            "不要编造未出现在执行结果中的数字或表名。"
+        )
+        if review_lines:
+            execution_review = f"{constraint}\n\n【执行过程回顾】\n" + "\n".join(review_lines)
+        else:
+            execution_review = (
+                f"{constraint}\n\n【执行过程回顾】\n"
+                "- 本轮工具结果不足；请说明已达步数上限，并请用户缩小范围后继续。"
+            )
+
+        existing = visible_user_facing_reply(state.get("full_content") or "")
+        if existing:
+            yield {"type": "answer_delta", "content": "\n\n", "phase": "synthesis"}
+            execution_review += (
+                "\n\n用户已看到部分过程文字，请补全结论，不要重复过程。"
+            )
+
+        if not state.get("synthesis_fb_log_emitted"):
+            state["synthesis_fb_log_emitted"] = True
+            yield {
+                "type": "log",
+                "id": f"synthesis_fb_{uuid.uuid4().hex[:8]}",
+                "title": "📝 汇总已有信息",
+                "details": "正在基于已有信息生成最终回答...",
+                "status": "success",
+            }
+
+        emitted_any = False
+        try:
+            llm = await AgentConfigProvider.get_synthesis_llm(streaming=True, config=self.config)
+            messages = normalize_messages_for_llm([
+                SystemMessage(content=str(state.get("system_content") or self.config.system_prompt or "")),
+                HumanMessage(
+                    content=self._build_synthesis_user_message(
+                        str(state.get("user_query") or ""),
+                        execution_review,
+                    )
+                ),
+            ])
+            async for chunk in llm.astream(messages):
+                content = sanitize_assistant_stream_text(str(getattr(chunk, "content", None) or ""))
+                if not content:
+                    continue
+                emitted_any = True
+                if not state.get("content_emitted"):
+                    state["content_emitted"] = True
+                    yield {
+                        "type": "log",
+                        "id": f"gen_start_{uuid.uuid4().hex[:8]}",
+                        "title": "✨ 开始生成回复",
+                        "status": "success",
+                    }
+                state["full_content"] = (state.get("full_content") or "") + content
+                yield {"type": "answer_delta", "content": content, "phase": "synthesis"}
+        except Exception as synthesis_err:
+            logger.error(
+                "[AssistantAgentRunner] Max-iters wrap-up failed: %s",
+                synthesis_err,
+                exc_info=True,
+            )
+
+        if not emitted_any and not existing:
+            fallback = AssistantPrompts.MAX_STEPS_WRAPUP_FALLBACK
+            state["full_content"] = (state.get("full_content") or "") + fallback
+            yield {"type": "answer_delta", "content": fallback, "phase": "synthesis"}
 
     async def _stream_tool_loop_fuse_convergence(
         self,

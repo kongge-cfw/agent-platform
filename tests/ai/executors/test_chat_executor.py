@@ -2359,7 +2359,16 @@ async def test_max_steps_limit(chat_config, mock_tool):
         async for chunk in executor.execute([{"role": "user", "content": "Loop"}]):
             events.append(chunk)
 
-    assert any(AssistantPrompts.MAX_STEPS_REACHED in event.get("content", "") for event in events)
+    assert any(
+        (
+            event.get("type") == "log"
+            and "最大执行步骤" in str(event.get("title") or event.get("details") or "")
+        )
+        or AssistantPrompts.MAX_STEPS_REACHED in str(event.get("content") or "")
+        or AssistantPrompts.MAX_STEPS_WRAPUP_FALLBACK in str(event.get("content") or "")
+        or "最大执行步骤" in str(event.get("content") or "")
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

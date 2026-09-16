@@ -106,7 +106,7 @@ import DataPortalReportCreateModal from "@/components/data-portal/DataPortalRepo
 import SavedReportRunModal from "@/components/chat/SavedReportRunModal.vue";
 import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
 import { isImageAttachment } from "@/utils/attachmentImages";
-import { isDirectRenderableUrl, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
+import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
 import { copyToClipboard } from "@/utils/clipboard";
 import {
   applyStreamErrorMessage,
@@ -2077,6 +2077,16 @@ const {
   isMobile: () => isMobile.value,
 });
 onUnmounted(() => revokeActiveBlobUrl());
+
+const handleOpenAttachedFile = (file: any) => {
+  void openChatAttachmentFile({
+    path: file?.url || "",
+    name: file?.filename || "download",
+    conversationId: conversationId.value,
+    showToast,
+    preview: handleWorkspaceFilePreview,
+  });
+};
 
 const isImageFile = isImageAttachment;
 
@@ -4592,7 +4602,7 @@ onUnmounted(() => {
                         </div>
                         <div class="flex-1 min-w-0 flex flex-col">
                             <span v-if="file.type === 'skill' || file.type === 'knowledge_base' || file.type === 'metadata_dataset' || file.type === 'memory'" class="text-xs font-bold text-white truncate">{{ file.filename }}</span>
-                            <a v-else :href="file.url" target="_blank" class="text-xs font-bold text-white hover:underline truncate">{{ file.filename }}</a>
+                            <span v-else @click="handleOpenAttachedFile(file)" class="text-xs font-bold text-white hover:underline cursor-pointer truncate">{{ file.filename }}</span>
                             <span class="text-[9px] text-white/70 font-mono">
                                 {{
                                     file.type === 'skill' ? '生态技能' :
