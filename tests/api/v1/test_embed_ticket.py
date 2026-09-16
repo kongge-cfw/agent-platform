@@ -1,8 +1,74 @@
+import json
 import uuid
 import pytest
 from httpx import AsyncClient
+from app.models.agent import AIAgent
 from app.services.auth_service import AuthService
 from app.core.redis import get_redis
+from app.services.embed_identity import (
+    build_session_owner,
+    build_shadow_extra_data,
+    is_platform_admin,
+    normalize_embed_user_info,
+    shadow_username,
+    skip_sql_row_rewrite,
+)
+from app.services.embed_app_service import apply_claim_whitelist
+from app.services.embed_api_guard import embed_path_allowed
+
+
+def test_embed_claim_whitelist_and_mcp_only_skip_sql():
+    filtered = apply_claim_whitelist(
+        {
+            "subject": "crm:zhangsan",
+            "display_name": "张三",
+            "dept_code": "SH01",
+            "org_path": "yovole",
+            "tenant_id": "t_1001",
+            "extra_data": {"data_scope": "dept", "region": "sh"},
+        },
+        ["subject", "display_name", "tenant_id", "extra_data.data_scope"],
+    )
+    assert filtered["subject"] == "crm:zhangsan"
+    assert "dept_code" not in filtered
+    assert filtered["extra_data"] == {"data_scope": "dept"}
+    assert filtered["tenant_id"] == "t_1001"
+    owner = build_session_owner(app_key="crm_portal", subject="crm:zhangsan", fallback_user_id=9)
+    assert owner.startswith("e:")
+    assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "mcp_only"}) is True
+    assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "nanzi_sql_rewrite"}) is False
+    assert embed_path_allowed("GET", "/api/portal/auth/me") is True
+    assert embed_path_allowed("GET", "/api/portal/management/users") is False
+    assert embed_path_allowed("POST", "/api/portal/mcp/servers") is False
+    assert embed_path_allowed("POST", "/api/v1/chat/completions") is True
+    assert embed_path_allowed("GET", "/api/portal/workbench/home") is True
+    assert embed_path_allowed("GET", "/api/portal/saved-reports") is True
+    assert embed_path_allowed("GET", "/api/portal/models") is True
+    assert embed_path_allowed("POST", "/api/portal/models") is False
+    assert embed_path_allowed("DELETE", "/api/portal/saved-reports/abc") is False
+
+
+def test_embed_identity_helpers_force_non_admin_and_stable_shadow_name():
+    assert shadow_username("crm:zhangsan") == "ext:crm:zhangsan"
+    payload = build_shadow_extra_data(
+        subject="crm:zhangsan",
+        tenant_id="t_1001",
+        extra_data={"region_codes": ["310000"], "role": "admin", "is_admin": True, "permissions": ["*"]},
+    )
+    assert payload["external_subject"] == "crm:zhangsan"
+    assert payload["tenant_id"] == "t_1001"
+    assert payload["region_codes"] == ["310000"]
+    assert "role" not in payload
+    assert "is_admin" not in payload
+    assert "permissions" not in payload
+
+    embed_user = normalize_embed_user_info(
+        {"session_type": "embed", "role": "admin", "is_admin": True, "user_name": "ext:crm:zhangsan"}
+    )
+    assert embed_user["role"] == "user"
+    assert embed_user["is_admin"] is False
+    assert is_platform_admin(embed_user) is False
+    assert is_platform_admin({"role": "admin"}) is True
 
 
 @pytest.mark.asyncio
@@ -188,4 +254,220 @@ async def test_embed_ticket_impersonation_permissions(client: AsyncClient, db_se
     )
     assert authorized_impersonate_resp.status_code == 200
     assert authorized_impersonate_resp.json()["data"]["target_user"]["user_name"] == user_b_name
+
+
+@pytest.mark.asyncio
+async def test_embed_ticket_identity_jit_shadow_and_lock(client: AsyncClient, db_session):
+    suffix = uuid.uuid4().hex[:8]
+    admin_name = f"ticket_id_adm_{suffix}"
+    admin_key = await AuthService.generate_api_key(
+        user_name=admin_name, role="admin", db=db_session
+    )
+    agent = AIAgent(
+        id=str(uuid.uuid4()),
+        name=f"embed-id-{suffix}",
+        display_name="业务嵌入专家",
+        description="test",
+        is_system=True,
+        is_enabled=True,
+        engine_type="LOCAL",
+        capabilities=["data_query"],
+        created_by="admin",
+    )
+    db_session.add(agent)
+    await db_session.commit()
+
+    missing_agent = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "identity": {"subject": "crm:zhangsan", "display_name": "张三"},
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert missing_agent.status_code == 400
+
+    ticket_resp = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "agent_id": agent.id,
+            "identity": {
+                "subject": f"crm:zhangsan_{suffix}",
+                "display_name": "张三",
+                "dept_code": "SH01",
+                "org_path": "yovole/sh/dc1",
+                "tenant_id": "t_1001",
+                "extra_data": {
+                    "region_codes": ["310000"],
+                    "role": "admin",
+                    "is_admin": True,
+                },
+            },
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert ticket_resp.status_code == 200
+    data = ticket_resp.json()["data"]
+    assert data["target_user"]["user_name"].startswith("ext:")
+    assert data["target_user"]["subject"] == f"crm:zhangsan_{suffix}"
+
+    exchange_resp = await client.post(
+        "/api/v1/embed/tickets/exchange",
+        json={"ticket": data["ticket"]},
+    )
+    assert exchange_resp.status_code == 200
+    session = exchange_resp.json()["data"]
+    assert session["agent_id"] == agent.id
+    assert session["user_info"]["role"] == "user"
+    assert session["user_info"]["subject"] == f"crm:zhangsan_{suffix}"
+    session_token = session["session_token"]
+
+    me_resp = await client.get(
+        "/api/portal/auth/me",
+        headers={"X-API-Key": session_token},
+    )
+    assert me_resp.status_code == 200
+    me_data = me_resp.json()["data"]
+    assert me_data["role"] == "user"
+    extra = me_data.get("extra_data") or ""
+    if isinstance(extra, str) and extra:
+        parsed = json.loads(extra)
+        assert parsed.get("external_subject") == f"crm:zhangsan_{suffix}"
+        assert parsed.get("tenant_id") == "t_1001"
+        assert parsed.get("region_codes") == ["310000"]
+        assert "role" not in parsed
+        assert parsed.get("is_admin") is not True
+
+
+@pytest.mark.asyncio
+async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncClient, db_session):
+    from app.models.embed_app import SysEmbedApp
+
+    suffix = uuid.uuid4().hex[:8]
+    admin_name = f"ticket_app_adm_{suffix}"
+    admin_key = await AuthService.generate_api_key(
+        user_name=admin_name, role="admin", db=db_session
+    )
+    agent = AIAgent(
+        id=str(uuid.uuid4()),
+        name=f"embed-app-{suffix}",
+        display_name="应用嵌入专家",
+        description="test",
+        is_system=True,
+        is_enabled=True,
+        engine_type="LOCAL",
+        capabilities=["data_query"],
+        created_by="admin",
+    )
+    db_session.add(agent)
+    app = SysEmbedApp(
+        id=str(uuid.uuid4()),
+        app_key=f"crm_{suffix}"[:32],
+        name="CRM",
+        allowed_agent_ids=json.dumps([agent.id]),
+        allowed_origins=json.dumps(["https://crm.example.com"]),
+        require_identity=True,
+        claim_keys=json.dumps(["subject", "display_name", "tenant_id", "extra_data.data_scope"]),
+        create_shadow_user=False,
+        data_permission_mode="mcp_only",
+        isolate_datasets_by_tenant=True,
+        is_active=True,
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    missing_identity = await client.post(
+        "/api/v1/embed/tickets",
+        json={"app_key": app.app_key, "agent_id": agent.id},
+        headers={"X-API-Key": admin_key},
+    )
+    assert missing_identity.status_code == 400
+
+    other_agent = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "app_key": app.app_key,
+            "agent_id": "not-allowed-agent",
+            "identity": {"subject": f"crm:u_{suffix}", "tenant_id": "t_1"},
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert other_agent.status_code == 400
+
+    ticket_resp = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "app_key": app.app_key,
+            "agent_id": agent.id,
+            "identity": {
+                "subject": f"crm:u_{suffix}",
+                "display_name": "用户",
+                "dept_code": "SHOULD_DROP",
+                "tenant_id": "t_1001",
+                "extra_data": {"data_scope": "dept", "region": "sh"},
+            },
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert ticket_resp.status_code == 200
+    data = ticket_resp.json()["data"]
+    assert data["target_user"]["user_name"].startswith("ext:")
+    assert data["target_user"].get("app_key") == app.app_key
+    assert data["target_user"].get("session_owner", "").startswith("e:")
+
+    exchange_resp = await client.post(
+        "/api/v1/embed/tickets/exchange",
+        json={"ticket": data["ticket"]},
+        headers={"Origin": "https://crm.example.com"},
+    )
+    assert exchange_resp.status_code == 200
+    session_token = exchange_resp.json()["data"]["session_token"]
+
+    blocked = await client.get(
+        "/api/portal/management/users",
+        headers={"X-API-Key": session_token},
+    )
+    assert blocked.status_code == 403
+
+    allowed_me = await client.get(
+        "/api/portal/auth/me",
+        headers={"X-API-Key": session_token},
+    )
+    assert allowed_me.status_code == 200
+    extra = allowed_me.json()["data"].get("extra_data") or ""
+    if isinstance(extra, str) and extra:
+        parsed = json.loads(extra)
+        assert parsed.get("data_scope") == "dept"
+        assert "region" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_embed_ticket_identity_requires_impersonation(client: AsyncClient, db_session):
+    suffix = uuid.uuid4().hex[:8]
+    user_key = await AuthService.generate_api_key(
+        user_name=f"ticket_id_user_{suffix}", role="user", db=db_session
+    )
+    agent = AIAgent(
+        id=str(uuid.uuid4()),
+        name=f"embed-id-deny-{suffix}",
+        display_name="受限嵌入专家",
+        description="test",
+        is_system=True,
+        is_enabled=True,
+        engine_type="LOCAL",
+        capabilities=["data_query"],
+        created_by="admin",
+    )
+    db_session.add(agent)
+    await db_session.commit()
+
+    denied = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "agent_id": agent.id,
+            "identity": {"subject": f"crm:other_{suffix}", "display_name": "李四"},
+        },
+        headers={"X-API-Key": user_key},
+    )
+    assert denied.status_code == 403
+
 

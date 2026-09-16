@@ -11,8 +11,10 @@ import {
 import { useBranding } from '@/composables/useBranding';
 import WorkbenchPersonalResources from '@/components/workbench/WorkbenchPersonalResources.vue';
 import type { WorkbenchPersonalResource } from '@/types/workbench';
+import { isEmbeddedInIframe } from '@/utils/embedHost';
 
 const { branding } = useBranding();
+const hidePersonalResources = isEmbeddedInIframe();
 
 const props = defineProps<{
   welcomeMessage: string;
@@ -121,7 +123,7 @@ const recommendedPrompts = computed(() => {
     </div>
 
     <!-- 资源条单独放宽，避免 max-w-3xl 下 5 列被挤扁 -->
-    <div v-if="personalResources?.length" class="w-full max-w-3xl mb-8 sm:mb-10">
+    <div v-if="!hidePersonalResources && personalResources?.length" class="w-full max-w-3xl mb-8 sm:mb-10">
       <div class="mb-3 flex items-center gap-1.5 px-1">
         <p class="text-[10px] font-black text-gray-300 uppercase tracking-widest">我的资源</p>
         <button

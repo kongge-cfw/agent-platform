@@ -259,24 +259,16 @@ async def list_accessible_datasets(
     user: dict = Depends(get_current_user),
 ):
     """轻量可访问数据集选项：仅当前用户有权限的启用数据集，供会话资源等场景使用。"""
-    user_id = user.get("id") or user.get("user_id")
-    try:
-        user_id_int = int(user_id) if user_id is not None else None
-    except (TypeError, ValueError):
-        user_id_int = None
-    is_admin = user.get("role") == "admin" or user.get("is_admin") is True
-    if not is_admin:
-        # 兼容 roles 列表口径
-        roles = user.get("roles") or []
-        if isinstance(roles, str):
-            roles = [roles]
-        is_admin = "admin" in {str(r).strip().lower() for r in roles}
+    from app.services.embed_identity import resolve_catalog_acl
 
+    acl = resolve_catalog_acl(user)
     datasets = await MetadataService.list_accessible_dataset_options(
         conn,
-        user_id=user_id_int,
-        is_admin=bool(is_admin),
+        user_id=acl.get("user_id"),
+        is_admin=bool(acl.get("is_admin")),
         status=1,
+        tenant_id=acl.get("tenant_id") or "",
+        isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
     )
     return datasets
 

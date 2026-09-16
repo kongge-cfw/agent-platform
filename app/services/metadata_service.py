@@ -76,9 +76,23 @@ class MetadataService:
         user_id: Optional[int] = None,
         is_admin: bool = False,
         status: int = 1,
+        tenant_id: Optional[str] = None,
+        isolate_by_tenant: bool = False,
     ) -> List[MetaDataset]:
         """轻量可访问数据集列表：仅主表字段，按用户 metadata 权限过滤，不做表/指标/关系统计。"""
         stmt = select(MetaDataset).where(MetaDataset.status == status)
+
+        if isolate_by_tenant:
+            tenant = str(tenant_id or "").strip()
+            if not tenant:
+                return []
+            stmt = stmt.where(
+                or_(
+                    MetaDataset.tenant_id.is_(None),
+                    MetaDataset.tenant_id == "",
+                    MetaDataset.tenant_id == tenant,
+                )
+            )
 
         if not is_admin:
             if user_id is None:

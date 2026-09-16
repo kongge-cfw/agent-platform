@@ -753,7 +753,8 @@ const newDataset = ref({
   data_source: '',
   enable_data_perm: false,
   row_filter_config: null as any,
-  tags: [] as string[]
+  tags: [] as string[],
+  tenant_id: ''
 })
 const tagInput = ref('')
 const rowFilterConfigStr = ref('')
@@ -843,7 +844,7 @@ const handleCreate = async () => {
     await metadataApi.createDataset(newDataset.value)
     showCreateModal.value = false
     showToast('数据集已创建，默认为禁用状态，请在列表中审核后手动启用', 'success', 5000)
-    newDataset.value = { name: '', display_name: '', description: '', data_source: '', enable_data_perm: false, row_filter_config: null, tags: [] }
+    newDataset.value = { name: '', display_name: '', description: '', data_source: '', enable_data_perm: false, row_filter_config: null, tags: [], tenant_id: '' }
     rowFilterConfigStr.value = ''
     fetchDatasets()
   } catch (e) {
@@ -2464,6 +2465,10 @@ relationships:
             <input v-model="newDataset.name" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. nanzi_resources">
           </div>
           <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">业务租户 ID（可选，嵌入会话按 claims.tenant_id 隔离）</label>
+            <input v-model="newDataset.tenant_id" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="空则所有租户可见">
+          </div>
+          <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">显示名称 (Display Name)</label>
             <input v-model="newDataset.display_name" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. 南孜资源数据集">
           </div>
@@ -2551,6 +2556,10 @@ relationships:
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">显示名称 (Display Name)</label>
             <input v-model="editingDataset.display_name" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. 南孜资源数据集">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">业务租户 ID（可选）</label>
+            <input v-model="editingDataset.tenant_id" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="空则所有租户可见">
           </div>
           <div>
             <label class="flex items-center text-sm font-medium text-gray-700 mb-1">

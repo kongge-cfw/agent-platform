@@ -135,6 +135,8 @@ async def fetch_accessible_resource_snapshot(
     user_id: Optional[int],
     user_name: Optional[str] = None,
     is_admin: bool = False,
+    tenant_id: Optional[str] = None,
+    isolate_by_tenant: bool = False,
 ) -> AccessibleResourceSnapshot:
     """同一组权限查询同时生成统计与模型目录，供当前请求复用。"""
     if user_id is None:
@@ -145,6 +147,8 @@ async def fetch_accessible_resource_snapshot(
         user_id=user_id,
         is_admin=is_admin,
         status=1,
+        tenant_id=tenant_id or "",
+        isolate_by_tenant=isolate_by_tenant,
     )
     knowledge_catalog = await fetch_authorized_knowledge_catalog(
         db,
@@ -152,6 +156,8 @@ async def fetch_accessible_resource_snapshot(
         user_name=user_name,
         is_admin=is_admin,
         permission_service=PermissionService(db),
+        tenant_id=tenant_id or "",
+        isolate_by_tenant=isolate_by_tenant,
     )
     return AccessibleResourceSnapshot(
         user_id, user_name, is_admin, knowledge_catalog.status,

@@ -1,17 +1,63 @@
 import json
 import logging
 import secrets
-from typing import Optional, Dict, Any
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any, Dict, Mapping, Optional
+from urllib.parse import urlparse
+
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.redis import get_redis
 from app.models.user import User
+from app.services.embed_app_service import dump_policy_session_fields, resolve_ticket_app_policy
+from app.services.embed_identity import (
+    EMBED_SESSION_TYPE,
+    build_session_owner,
+    build_shadow_extra_data,
+    extra_data_json,
+    is_shadow_remark,
+    shadow_remark_for_operator,
+    shadow_username,
+)
 from app.utils.encryption import get_api_key_manager
 
 logger = logging.getLogger(__name__)
 
 TICKET_TTL_SECONDS = 300  # Ticket 一次性有效时长：5 分钟
 SESSION_TOKEN_TTL_SECONDS = 86400  # Session Token 初始时长：24 小时 (滑动续期)
+
+
+def _normalize_origin(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "null":
+        return ""
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    return text.rstrip("/").lower()
+
+
+def ticket_origin_allowed(
+    origin: Optional[str],
+    allowed_origins: list[str],
+    sec_fetch_site: Optional[str] = None,
+) -> bool:
+    """兑换请求来自 iframe，Origin 是南孜站点；宿主域名白名单不能拿来卡同源换票。"""
+    cleaned = [str(item).strip() for item in (allowed_origins or []) if str(item).strip()]
+    if not cleaned or "*" in cleaned:
+        return True
+    site = str(sec_fetch_site or "").strip().lower()
+    if site in {"same-origin", "same-site"}:
+        return True
+    incoming = _normalize_origin(origin)
+    if not incoming:
+        return True
+    parsed = urlparse(str(origin or ""))
+    if parsed.path.startswith("/embed"):
+        return True
+    allowed = {_normalize_origin(item) for item in cleaned}
+    return incoming in allowed
 
 
 class EmbedService:
@@ -22,6 +68,156 @@ class EmbedService:
     """
 
     @staticmethod
+    async def _operator_can_impersonate(operator_user: Dict[str, Any], db: AsyncSession) -> bool:
+        if str(operator_user.get("role") or "").strip().lower() == "admin":
+            return True
+        from app.services.permission_service import PermissionService
+
+        perm_service = PermissionService(db)
+        op_uid = int(operator_user.get("user_id", 0))
+        return await perm_service.check_permission(
+            op_uid,
+            "api",
+            "GET:/api/v1/users/profile",
+        )
+
+    @staticmethod
+    async def _assert_operator_can_embed_agent(
+        operator_user: Dict[str, Any],
+        agent_id: str,
+        db: AsyncSession,
+    ) -> None:
+        key = str(agent_id or "").strip()
+        if not key:
+            return
+        from app.services.ai.agent_manager import AgentManagerService
+
+        try:
+            await AgentManagerService.resolve_embed_agent_access(db, key, operator_user)
+        except LookupError as exc:
+            raise ValueError("指定的智能体不存在或已禁用") from exc
+        except PermissionError as exc:
+            raise PermissionError("服务账号无权嵌入该智能体") from exc
+
+    @staticmethod
+    async def _upsert_shadow_user(
+        db: AsyncSession,
+        *,
+        identity: Mapping[str, Any],
+        operator_user_id: Any,
+    ) -> User:
+        subject = str(identity.get("subject") or "").strip()
+        if not subject:
+            raise ValueError("identity.subject 不能为空")
+
+        username = shadow_username(subject)
+        display_name = str(identity.get("display_name") or subject).strip() or subject
+        dept_code = str(identity.get("dept_code") or "").strip()
+        org_path = str(identity.get("org_path") or "").strip()
+        extra_payload = build_shadow_extra_data(
+            subject=subject,
+            tenant_id=str(identity.get("tenant_id") or ""),
+            extra_data=identity.get("extra_data"),
+        )
+        extra_json = extra_data_json(extra_payload)
+        remark = shadow_remark_for_operator(operator_user_id)
+
+        stmt = select(User).where(User.user_name == username)
+        user = (await db.execute(stmt)).scalar_one_or_none()
+        if user:
+            if not is_shadow_remark(user.remark):
+                raise ValueError("identity.subject 对应的用户名已被平台账号占用，请更换业务主体标识")
+            user.real_name = display_name[:50]
+            user.role = "user"
+            user.dept_code = dept_code[:50] if dept_code else None
+            user.org_path = org_path[:255] if org_path else None
+            user.extra_data = extra_json
+            user.remark = remark
+            user.status = 1
+            user.password_hash = None
+            user.api_key_encrypted = None
+            user.api_key_hash = None
+            await db.commit()
+            await db.refresh(user)
+            return user
+
+        user = User(
+            user_name=username,
+            real_name=display_name[:50],
+            role="user",
+            dept_code=dept_code[:50] if dept_code else None,
+            org_path=org_path[:255] if org_path else None,
+            extra_data=extra_json,
+            remark=remark,
+            status=1,
+        )
+        db.add(user)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            user = (await db.execute(stmt)).scalar_one_or_none()
+            if not user or not is_shadow_remark(user.remark):
+                raise ValueError("identity.subject 对应的用户名已被占用")
+            user.real_name = display_name[:50]
+            user.role = "user"
+            user.dept_code = dept_code[:50] if dept_code else None
+            user.org_path = org_path[:255] if org_path else None
+            user.extra_data = extra_json
+            user.remark = remark
+            user.status = 1
+            await db.commit()
+        await db.refresh(user)
+        return user
+
+    @staticmethod
+    def _ticket_payload(
+        *,
+        ticket_id: str,
+        user_id: Any,
+        user_name: str,
+        real_name: str,
+        dept_code: str,
+        org_path: str,
+        extra_data: str,
+        operator_user: Dict[str, Any],
+        agent_id: str,
+        allowed_origins: Optional[list[str]],
+        identity: Optional[Mapping[str, Any]] = None,
+        session_fields: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        subject = ""
+        if identity:
+            subject = str(identity.get("subject") or "").strip()
+        app_key = str((session_fields or {}).get("embed_app_key") or "")
+        session_owner = build_session_owner(
+            app_key=app_key,
+            subject=subject,
+            fallback_user_id=user_id,
+        )
+        payload = {
+            "ticket": ticket_id,
+            "user_id": str(user_id),
+            "user_name": user_name,
+            "real_name": real_name or user_name,
+            "role": "user",
+            "dept_code": dept_code or "",
+            "org_path": org_path or "",
+            "extra_data": extra_data or "",
+            "agent_id": agent_id or "",
+            "allowed_origins": json.dumps(allowed_origins or []),
+            "created_by_user_id": str(operator_user.get("user_id", "")),
+            "created_by_user_name": str(operator_user.get("user_name") or ""),
+            "created_by_role": str(operator_user.get("role") or "user"),
+            "external_subject": subject,
+            "identity_mode": "claims" if identity else "mapped_user",
+            "session_owner": session_owner,
+            "tenant_id": str((identity or {}).get("tenant_id") or ""),
+        }
+        payload.update(dict(session_fields or {}))
+        return payload
+
+    @staticmethod
     async def create_ticket(
         operator_user: Dict[str, Any],
         target_username: Optional[str] = None,
@@ -30,105 +226,162 @@ class EmbedService:
         allowed_origins: Optional[list[str]] = None,
         expires_in: int = TICKET_TTL_SECONDS,
         db: Optional[AsyncSession] = None,
+        identity: Optional[Mapping[str, Any]] = None,
+        app_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         为指定目标用户签发一次性短时 Ticket。
-        - 若未提供 target_username/target_user_id，默认代表当前调用者自己。
-        - 目标用户必须存在且为启用状态 (status == 1)。
+        - identity：业务方登录用户声明。不要求该用户事先存在于南孜；默认 JIT 影子账号。
+        - 若未提供 identity 且未提供 target_username/target_user_id，默认代表当前调用者自己。
+        - 无 identity 时目标用户必须存在且为启用状态 (status == 1)。
+        - app_key：绑定嵌入应用（智能体白名单、域名、claims 白名单、是否要求 identity）。
         """
+        if db is None:
+            raise RuntimeError("Database session is required")
+
         redis = await get_redis()
         if not redis:
             raise RuntimeError("Redis service unavailable")
 
-        # 1. 确定目标用户
-        target_user: Optional[User] = None
-        is_specifying_other = False
-
-        if target_user_id is not None:
-            if str(target_user_id) != str(operator_user.get("user_id")):
-                is_specifying_other = True
-            stmt = select(User).where(User.id == int(target_user_id))
-            result = await db.execute(stmt)
-            target_user = result.scalar_one_or_none()
-        elif target_username:
-            if str(target_username).strip() != str(operator_user.get("user_name")):
-                is_specifying_other = True
-            stmt = select(User).where(User.user_name == str(target_username).strip())
-            result = await db.execute(stmt)
-            target_user = result.scalar_one_or_none()
-        else:
-            # 默认使用当前操作人自身
-            op_uid = int(operator_user.get("user_id", 0))
-            stmt = select(User).where(User.id == op_uid)
-            result = await db.execute(stmt)
-            target_user = result.scalar_one_or_none()
-
-        if not target_user:
-            raise ValueError("目标用户不存在，请核对用户名或用户ID")
-
-        if target_user.status != 1:
-            raise PermissionError("目标用户账号已被禁用，无法签发嵌入凭证")
-
-        # 代客身份安全拦截：若指定他人，必须是 admin 或具备 GET:/api/v1/users/profile API 权限
-        if is_specifying_other:
-            if operator_user.get("role") != "admin":
-                from app.services.permission_service import PermissionService
-                perm_service = PermissionService(db)
-                op_uid = int(operator_user.get("user_id", 0))
-                has_perm = await perm_service.check_permission(
-                    op_uid,
-                    "api",
-                    "GET:/api/v1/users/profile",
+        policy = await resolve_ticket_app_policy(
+            db,
+            app_key=app_key,
+            identity=identity,
+            agent_id=agent_id,
+            allowed_origins=allowed_origins,
+        )
+        agent_key = str(policy.get("agent_id") or agent_id or "").strip()
+        allowed_origins = list(policy.get("allowed_origins") or allowed_origins or [])
+        identity_payload = dict(policy["identity"]) if policy.get("identity") else (
+            dict(identity) if identity else None
+        )
+        create_shadow = bool(policy.get("create_shadow_user", True))
+        session_fields = dump_policy_session_fields(policy)
+        if identity_payload is not None:
+            if not str(identity_payload.get("subject") or "").strip():
+                raise ValueError("identity.subject 不能为空")
+            if not agent_key:
+                raise ValueError("使用业务身份签发嵌入凭证时必须指定 agent_id")
+            if not await EmbedService._operator_can_impersonate(operator_user, db):
+                raise PermissionError(
+                    "无权以业务用户身份签发 Ticket：仅管理员或具备「GET:/api/v1/users/profile（获取用户画像）」权限的服务账号允许提交 identity。"
                 )
-                if not has_perm:
-                    raise PermissionError(
-                        "无权代他人签发 Ticket：仅管理员或具备「GET:/api/v1/users/profile（获取用户画像）」权限的账号允许代表其他用户签发凭证。普通用户请留空或填写自己。"
-                    )
+            await EmbedService._assert_operator_can_embed_agent(operator_user, agent_key, db)
+            extra_payload = build_shadow_extra_data(
+                subject=str(identity_payload.get("subject") or "").strip(),
+                tenant_id=str(identity_payload.get("tenant_id") or ""),
+                extra_data=identity_payload.get("extra_data"),
+            )
+            if create_shadow:
+                target_user = await EmbedService._upsert_shadow_user(
+                    db,
+                    identity=identity_payload,
+                    operator_user_id=operator_user.get("user_id"),
+                )
+                ticket_user_id = target_user.id
+                ticket_user_name = target_user.user_name
+                ticket_real_name = target_user.real_name or target_user.user_name
+                ticket_dept = target_user.dept_code or ""
+                ticket_org = target_user.org_path or ""
+                ticket_extra = target_user.extra_data or extra_data_json(extra_payload)
+            else:
+                ticket_user_id = operator_user.get("user_id")
+                ticket_user_name = shadow_username(str(identity_payload.get("subject") or ""))
+                ticket_real_name = str(identity_payload.get("display_name") or ticket_user_name)
+                ticket_dept = str(identity_payload.get("dept_code") or "")
+                ticket_org = str(identity_payload.get("org_path") or "")
+                ticket_extra = extra_data_json(extra_payload)
+        else:
+            target_user = None
+            is_specifying_other = False
 
-        # 2. 生成高熵 Ticket 字符串
+            if target_user_id is not None:
+                if str(target_user_id) != str(operator_user.get("user_id")):
+                    is_specifying_other = True
+                stmt = select(User).where(User.id == int(target_user_id))
+                result = await db.execute(stmt)
+                target_user = result.scalar_one_or_none()
+            elif target_username:
+                if str(target_username).strip() != str(operator_user.get("user_name")):
+                    is_specifying_other = True
+                stmt = select(User).where(User.user_name == str(target_username).strip())
+                result = await db.execute(stmt)
+                target_user = result.scalar_one_or_none()
+            else:
+                op_uid = int(operator_user.get("user_id", 0))
+                stmt = select(User).where(User.id == op_uid)
+                result = await db.execute(stmt)
+                target_user = result.scalar_one_or_none()
+
+            if not target_user:
+                raise ValueError("目标用户不存在，请核对用户名或用户ID")
+
+            if target_user.status != 1:
+                raise PermissionError("目标用户账号已被禁用，无法签发嵌入凭证")
+
+            if is_specifying_other and not await EmbedService._operator_can_impersonate(operator_user, db):
+                raise PermissionError(
+                    "无权代他人签发 Ticket：仅管理员或具备「GET:/api/v1/users/profile（获取用户画像）」权限的账号允许代表其他用户签发凭证。普通用户请留空或填写自己。"
+                )
+            ticket_user_id = target_user.id
+            ticket_user_name = target_user.user_name
+            ticket_real_name = target_user.real_name or target_user.user_name
+            ticket_dept = target_user.dept_code or ""
+            ticket_org = target_user.org_path or ""
+            ticket_extra = target_user.extra_data or ""
+            if agent_key:
+                await EmbedService._assert_operator_can_embed_agent(operator_user, agent_key, db)
+
         ticket_id = f"emt_{secrets.token_urlsafe(24)}"
         ticket_key = f"embed:ticket:{ticket_id}"
+        ttl = max(60, min(expires_in, 1800))
 
-        ttl = max(60, min(expires_in, 1800))  # 限制在 1 分钟 ~ 30 分钟之间，默认 300 秒
-
-        ticket_payload = {
-            "ticket": ticket_id,
-            "user_id": str(target_user.id),
-            "user_name": target_user.user_name,
-            "real_name": target_user.real_name or target_user.user_name,
-            "role": target_user.role,
-            "dept_code": target_user.dept_code or "",
-            "org_path": target_user.org_path or "",
-            "extra_data": target_user.extra_data or "",
-            "agent_id": agent_id or "",
-            "allowed_origins": json.dumps(allowed_origins or []),
-            "created_by_user_id": str(operator_user.get("user_id", "")),
-        }
-
-        # 3. 写入 Redis
-        await redis.set(ticket_key, json.dumps(ticket_payload), ex=ttl)
+        ticket_payload = EmbedService._ticket_payload(
+            ticket_id=ticket_id,
+            user_id=ticket_user_id,
+            user_name=ticket_user_name,
+            real_name=ticket_real_name,
+            dept_code=ticket_dept,
+            org_path=ticket_org,
+            extra_data=ticket_extra,
+            operator_user=operator_user,
+            agent_id=agent_key,
+            allowed_origins=allowed_origins,
+            identity=identity_payload,
+            session_fields=session_fields,
+        )
+        await redis.set(ticket_key, json.dumps(ticket_payload, ensure_ascii=False), ex=ttl)
         logger.info(
-            "Embed ticket created: ticket=%s target_user=%s operator=%s ttl=%ds",
+            "Embed ticket created: ticket=%s target_user=%s operator=%s identity=%s app=%s ttl=%ds",
             ticket_id,
-            target_user.user_name,
+            ticket_user_name,
             operator_user.get("user_name"),
+            bool(identity_payload),
+            session_fields.get("embed_app_key") or "-",
             ttl,
         )
 
+        target_summary = {
+            "user_id": ticket_user_id,
+            "user_name": ticket_user_name,
+            "real_name": ticket_real_name,
+            "session_owner": ticket_payload.get("session_owner"),
+        }
+        if identity_payload:
+            target_summary["subject"] = str(identity_payload.get("subject") or "").strip()
+        if session_fields.get("embed_app_key"):
+            target_summary["app_key"] = session_fields["embed_app_key"]
         return {
             "ticket": ticket_id,
             "expires_in": ttl,
-            "target_user": {
-                "user_id": target_user.id,
-                "user_name": target_user.user_name,
-                "real_name": target_user.real_name or target_user.user_name,
-            },
+            "target_user": target_summary,
         }
 
     @staticmethod
     async def exchange_ticket(
         ticket: str,
         origin: Optional[str] = None,
+        sec_fetch_site: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         原子核销 Ticket 并生成短期会话 Token (session_token)。
@@ -144,8 +397,6 @@ class EmbedService:
             raise RuntimeError("Redis service unavailable")
 
         ticket_key = f"embed:ticket:{ticket.strip()}"
-
-        # 1. 原子获取并删除 (GETDEL) 防止并发重放
         raw_ticket_data = await redis.getdel(ticket_key)
         if not raw_ticket_data:
             raise ValueError("Ticket not found, expired, or already used")
@@ -155,18 +406,24 @@ class EmbedService:
 
         ticket_data = json.loads(raw_ticket_data)
 
-        # 2. 检查来源 Origin (若有配置限制)
         allowed_origins_raw = ticket_data.get("allowed_origins")
+        allowed_origins: list[str] = []
         if allowed_origins_raw:
             try:
-                allowed_origins = json.loads(allowed_origins_raw)
-                if allowed_origins and origin:
-                    if origin not in allowed_origins and "*" not in allowed_origins:
-                        raise PermissionError(f"Origin '{origin}' is not allowed for this ticket")
+                parsed_origins = json.loads(allowed_origins_raw) if isinstance(allowed_origins_raw, str) else allowed_origins_raw
+                if isinstance(parsed_origins, list):
+                    allowed_origins = [str(item).strip() for item in parsed_origins if str(item).strip()]
             except json.JSONDecodeError:
-                pass
+                allowed_origins = []
+        if not ticket_origin_allowed(origin, allowed_origins, sec_fetch_site=sec_fetch_site):
+            logger.warning(
+                "Embed ticket origin rejected: origin=%s sec_fetch_site=%s allowed=%s",
+                origin,
+                sec_fetch_site,
+                allowed_origins,
+            )
+            raise PermissionError(f"Origin '{origin}' is not allowed for this ticket")
 
-        # 3. 生成短期 Session Token
         session_token = f"emb_ses_{secrets.token_urlsafe(32)}"
         manager = get_api_key_manager()
         hashed_token = manager.hash_api_key(session_token)
@@ -176,20 +433,34 @@ class EmbedService:
             "user_id": str(ticket_data["user_id"]),
             "user_name": ticket_data["user_name"],
             "real_name": ticket_data.get("real_name") or ticket_data["user_name"],
-            "role": ticket_data.get("role", "user"),
+            "role": "user",
             "dept_code": ticket_data.get("dept_code", ""),
             "org_path": ticket_data.get("org_path", ""),
             "extra_data": ticket_data.get("extra_data", ""),
-            "remark": "Embed Session",
+            "remark": ticket_data.get("remark") or "Embed Session",
             "status": "1",
-            "session_type": "embed",
+            "session_type": EMBED_SESSION_TYPE,
             "agent_id": ticket_data.get("agent_id", ""),
             "created_by_user_id": ticket_data.get("created_by_user_id", ""),
+            "created_by_user_name": ticket_data.get("created_by_user_name", ""),
+            "created_by_role": ticket_data.get("created_by_role", ""),
+            "external_subject": ticket_data.get("external_subject", ""),
+            "identity_mode": ticket_data.get("identity_mode", ""),
+            "session_owner": ticket_data.get("session_owner", ""),
+            "tenant_id": ticket_data.get("tenant_id", ""),
+            "embed_app_id": ticket_data.get("embed_app_id", ""),
+            "embed_app_key": ticket_data.get("embed_app_key", ""),
+            "create_shadow_user": ticket_data.get("create_shadow_user", "1"),
+            "data_permission_mode": ticket_data.get("data_permission_mode", "nanzi_sql_rewrite"),
+            "isolate_datasets_by_tenant": ticket_data.get("isolate_datasets_by_tenant", "0"),
         }
-
-        # 4. 写入鉴权缓存，设置 24 小时 TTL (请求时会自动滑动续期)
         await redis.hset(cache_key, mapping=user_session_data)
         await redis.expire(cache_key, SESSION_TOKEN_TTL_SECONDS)
+        session_owner = str(ticket_data.get("session_owner") or "").strip()
+        if session_owner:
+            index_key = f"embed:owner_sessions:{session_owner}"
+            await redis.sadd(index_key, hashed_token)
+            await redis.expire(index_key, SESSION_TOKEN_TTL_SECONDS)
 
         logger.info(
             "Embed ticket exchanged successfully: ticket=%s user=%s session_token_prefix=%s ttl=%ds",
@@ -199,14 +470,45 @@ class EmbedService:
             SESSION_TOKEN_TTL_SECONDS,
         )
 
+        user_info = {
+            "user_id": int(ticket_data["user_id"]),
+            "user_name": ticket_data["user_name"],
+            "real_name": ticket_data.get("real_name") or ticket_data["user_name"],
+            "role": "user",
+            "session_owner": ticket_data.get("session_owner") or None,
+            "app_key": ticket_data.get("embed_app_key") or None,
+        }
+        subject = str(ticket_data.get("external_subject") or "").strip()
+        if subject:
+            user_info["subject"] = subject
         return {
             "session_token": session_token,
             "expires_in": SESSION_TOKEN_TTL_SECONDS,
-            "user_info": {
-                "user_id": int(ticket_data["user_id"]),
-                "user_name": ticket_data["user_name"],
-                "real_name": ticket_data.get("real_name") or ticket_data["user_name"],
-                "role": ticket_data.get("role", "user"),
-            },
+            "user_info": user_info,
             "agent_id": ticket_data.get("agent_id") or None,
         }
+
+    @staticmethod
+    async def revoke_sessions_by_subject(*, app_key: str, subject: str) -> int:
+        """按嵌入应用 + 业务 subject 作废已兑换的 session。"""
+        owner = build_session_owner(app_key=app_key, subject=subject, fallback_user_id="")
+        if not owner.startswith("e:"):
+            raise ValueError("subject 不能为空")
+        redis = await get_redis()
+        if not redis:
+            raise RuntimeError("Redis service unavailable")
+        index_key = f"embed:owner_sessions:{owner}"
+        hashed_tokens = await redis.smembers(index_key)
+        revoked = 0
+        for hashed in hashed_tokens or []:
+            token_hash = hashed.decode("utf-8") if isinstance(hashed, bytes) else str(hashed)
+            deleted = await redis.delete(f"auth:api_key:{token_hash}")
+            revoked += int(deleted or 0)
+        await redis.delete(index_key)
+        logger.info(
+            "Embed sessions revoked: app=%s subject=%s count=%s",
+            app_key,
+            subject,
+            revoked,
+        )
+        return revoked

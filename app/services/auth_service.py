@@ -100,13 +100,16 @@ class AuthService:
                  if cached_user.get("status") != "1":
                      pass # Fall through to DB
                  else:
+                     from app.services.embed_identity import is_embed_session, normalize_embed_user_info
+
                      # 自动滑动续期：若是 embed session token，只要活跃调用就延长 24 小时有效时间
-                     if cached_user.get("session_type") == "embed":
+                     if is_embed_session(cached_user):
                          try:
                              from app.services.embed_service import SESSION_TOKEN_TTL_SECONDS
                              await redis.expire(cache_key, SESSION_TOKEN_TTL_SECONDS)
                          except Exception:
                              pass
+                         return normalize_embed_user_info(cached_user)
                      return cached_user
 
         # 2. DB Query
@@ -118,7 +121,8 @@ class AuthService:
             user = result.scalar_one_or_none()
             
             user_data = None
-            if user and user.status == 1:
+            from app.services.embed_identity import is_shadow_remark
+            if user and user.status == 1 and not is_shadow_remark(user.remark):
                 user_data = {
                     "user_id": str(user.id),
                     "user_name": user.user_name,
@@ -153,7 +157,8 @@ class AuthService:
             return None
         result = await db.execute(select(User).where(User.user_name == name))
         user = result.scalar_one_or_none()
-        if not user or user.status != 1:
+        from app.services.embed_identity import is_shadow_remark
+        if not user or user.status != 1 or is_shadow_remark(user.remark):
             return None
         return {
             "user_id": str(user.id),
@@ -180,6 +185,9 @@ class AuthService:
             # Fetch user first to get old hash for cache clearing
             user = await session.get(User, user_id)
             if not user:
+                return None
+            from app.services.embed_identity import is_shadow_remark
+            if is_shadow_remark(user.remark):
                 return None
             
             old_hash = user.api_key_hash
@@ -329,6 +337,10 @@ class AuthService:
             if user.status != 1:
                  return {"status": "fail", "message": "账户已被禁用"}
 
+            from app.services.embed_identity import is_shadow_remark
+            if is_shadow_remark(user.remark):
+                return {"status": "fail", "message": "嵌入执行账号不能登录管理端"}
+
             if not user.password_hash:
                 return {"status": "error_no_password", "message": "尚未设置密码，请先使用 API Key 登录并设置密码"}
             
@@ -401,14 +413,15 @@ class AuthService:
         """设置用户密码"""
         session, is_local = await AuthService._get_session(db)
         try:
+            user = await session.get(User, user_id)
+            from app.services.embed_identity import is_shadow_remark
+            if not user or is_shadow_remark(user.remark):
+                return False
             hashed = AuthService.get_password_hash(password)
-            stmt = update(User).where(User.id == user_id).values(
-                password_hash=hashed,
-                password_updated_at=datetime.now()
-            )
-            result = await session.execute(stmt)
+            user.password_hash = hashed
+            user.password_updated_at = datetime.now()
             await session.commit()
-            return result.rowcount > 0
+            return True
         except Exception:
             await session.rollback()
             raise

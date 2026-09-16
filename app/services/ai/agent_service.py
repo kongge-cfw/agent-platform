@@ -1093,6 +1093,12 @@ class AgentService:
         from app.utils.context import current_user_info
         current_user_info.set(user_info)
 
+        from app.services.embed_identity import is_embed_session, locked_agent_id
+        if is_embed_session(user_info):
+            locked = locked_agent_id(user_info)
+            if locked and not agent_id:
+                agent_id = locked
+
         # 会话运行 lane、Redis 记忆和后续审计必须绑定真实用户；不能让内部
         # 入口把缺失身份降级为 anonymous 后继续执行。
         required_user_id = require_user_id(user_info)
@@ -1789,14 +1795,38 @@ class AgentService:
             status="pending",
         )
         if user_info:
-            u_role = user_info.get("role", "")
-            u_id = user_info.get("user_id", user_info.get("id"))
-            if u_role != "admin" and u_id:
+            from app.services.embed_identity import (
+                agent_config_matches_lock,
+                is_embed_session,
+                locked_agent_id,
+                operator_is_admin,
+                platform_acl_user_id,
+            )
+
+            locked = locked_agent_id(user_info) if is_embed_session(user_info) else ""
+            if locked and not agent_config_matches_lock(
+                agent_config.agent_id, getattr(agent_config, "agent_name", None), locked
+            ):
+                err_msg = AgentServicePrompts.permission_denied(agent_config.agent_name)
+                await emit_route_stage(
+                    route_progress,
+                    "target_permission",
+                    "校验入口专家权限",
+                    status="error",
+                    details="嵌入会话已锁定智能体，不能切换入口专家",
+                    execution_time_ms=(asyncio.get_running_loop().time() - permission_started) * 1000,
+                )
+                return agent_config, route_details, route_elapsed_ms, err_msg
+
+            if not operator_is_admin(user_info):
                 from app.services.permission_service import PermissionService
                 async with AsyncSessionLocal() as session:
                     perm_service = PermissionService(session)
                     agent_id_str = str(agent_config.agent_id)
-                    has_perm = await perm_service.check_permission(int(u_id), "agent", agent_id_str)
+                    acl_uid = platform_acl_user_id(user_info)
+                    has_perm = False
+                    if acl_uid is not None:
+                        has_perm = await perm_service.check_permission(int(acl_uid), "agent", agent_id_str)
                     if not has_perm:
                         err_msg = AgentServicePrompts.permission_denied(agent_config.agent_name)
                         await emit_route_stage(

@@ -13,6 +13,7 @@ class MetaDataset(Base):
     tags = Column(JSON, comment='标签列表')
     data_source = Column(String(50), default="clickhouse", comment="数据源类型: clickhouse, mysql")
     status = Column(Integer, default=0, comment="1:启用, 0:禁用")
+    tenant_id = Column(String(64), nullable=True, comment="业务租户，空=所有租户可见")
     
     # 精细化数据权限配置
     enable_data_perm = Column(Boolean, default=False, comment='是否启用精细化数据权限校验')

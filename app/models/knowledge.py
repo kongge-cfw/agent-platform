@@ -23,6 +23,7 @@ class KnowledgeBaseMetadata(Base):
     notes = Column(Text, nullable=True, comment="平台侧备注")
     extra_config = Column(JSON, nullable=True, comment="扩展配置")
     status = Column(String(32), default="active", index=True, comment="状态: active/deleted/missing")
+    tenant_id = Column(String(64), nullable=True, comment="业务租户，空=所有租户可见")
     created_by = Column(String(64), nullable=True, comment="创建人")
     updated_by = Column(String(64), nullable=True, comment="更新人")
     created_at = Column(DateTime, default=datetime.now)

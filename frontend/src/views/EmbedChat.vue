@@ -2144,6 +2144,7 @@ import WorkspaceBrowserDrawer from "@/components/embed/WorkspaceBrowserDrawer.vu
 import MyArtifactsDrawer from "@/components/embed/MyArtifactsDrawer.vue";
 import MemoryBrowserDrawer from "@/components/embed/MemoryBrowserDrawer.vue";
 import { useWorkbenchHome } from "@/composables/useWorkbenchHome";
+import { isEmbeddedInIframe } from "@/utils/embedHost";
 import { resolveGeneratedFileHref } from "@/utils/generatedFileUrl";
 import { artifactApi } from "@/api/artifact";
 import {
@@ -6300,7 +6301,6 @@ const applyTheme = (theme: string, styleVars?: Record<string, string>) => {
 const resetSession = async (newToken?: string, ticket?: string) => {
   messages.value = [];
   config.enableGrounding = false; // 新会话恢复默认关闭
-  generateNewConversation();
   if (ticket) {
     const ticketOk = await exchangeTicketAndApply(ticket);
     if (!ticketOk) {
@@ -6314,6 +6314,7 @@ const resetSession = async (newToken?: string, ticket?: string) => {
     axios.defaults.headers.common["Authorization"] = `Bearer ${newToken}`;
     axios.defaults.headers.common["X-API-Key"] = newToken;
   }
+  generateNewConversation();
   initChat();
   // 通知门户父页去掉 URL 中的 conversation_id，避免再次 INIT 或刷新又钉回旧会话
   postMessageToHost({
@@ -6537,8 +6538,10 @@ const initChat = async (options?: { skipAuth?: boolean }) => {
       const greeting = displayName ? `您好，${displayName}！` : "您好！";
       config.welcomeMessage = `${greeting}我是你的智能体助手，很高兴为您服务。`;
     }
-    // 初始页「我的资源」统计：鉴权成功后拉取一次（失败时前端走 fallback）
-    void loadWorkbenchHome();
+    // 业务系统 iframe 嵌套时不展示「我的资源」，也无需拉取工作台统计
+    if (!isEmbeddedInIframe()) {
+      void loadWorkbenchHome();
+    }
     // 4. Background tasks (non-blocking)
     Promise.all([fetchModels(), fetchAccountInfo(), fetchSlashCommands()]).catch(err => {
       console.warn("[Init] Non-critical background loading failed:", err.message);

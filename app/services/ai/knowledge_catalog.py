@@ -218,6 +218,8 @@ async def fetch_authorized_knowledge_catalog(
     user_name: Optional[str] = None,
     is_admin: bool = False,
     permission_service: Any = None,
+    tenant_id: Optional[str] = None,
+    isolate_by_tenant: bool = False,
 ) -> AuthorizedKnowledgeCatalog:
     """在已有数据库会话中读取完整的、权限过滤后的知识库目录。"""
     if user_id is None:
@@ -246,6 +248,17 @@ async def fetch_authorized_knowledge_catalog(
             for row in rows
             if _clean(getattr(row, "ragflow_dataset_id", None)) in allowed_ids
         ]
+    if isolate_by_tenant:
+        tenant = str(tenant_id or "").strip()
+        if not tenant:
+            rows = []
+        else:
+            rows = [
+                row
+                for row in rows
+                if (not str(getattr(row, "tenant_id", "") or "").strip())
+                or str(getattr(row, "tenant_id", "") or "").strip() == tenant
+            ]
 
     items = tuple(item for row in rows if (item := _to_item(row)) is not None)
     return AuthorizedKnowledgeCatalog(

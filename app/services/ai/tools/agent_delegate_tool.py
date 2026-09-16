@@ -671,15 +671,15 @@ async def sub_agent_call(
         permitted_agents = await filter_delegable_system_agents(
             session,
             all_active_system,
-            user_id=main_ctx.user_id,
-            is_admin=main_ctx.is_admin,
+            user_id=main_ctx.user_dimensions.get("platform_user_id") or main_ctx.user_id,
+            is_admin=bool(main_ctx.is_admin),
             current_agent_id=main_ctx.agent_id,
         )
         delegable_agents = await resolve_runnable_delegable_system_agents(
             session,
             permitted_agents,
-            user_id=main_ctx.user_id,
-            is_admin=main_ctx.is_admin,
+            user_id=main_ctx.user_dimensions.get("platform_user_id") or main_ctx.user_id,
+            is_admin=bool(main_ctx.is_admin),
             current_agent_id=main_ctx.agent_id,
         )
 

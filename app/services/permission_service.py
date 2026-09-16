@@ -247,6 +247,7 @@ class PermissionService:
                     "ragflow_meta_id": rag_id,
                     "ragflow_meta_name": (m.name or "").strip(),
                     "ragflow_meta_desc": (m.display_name or "").strip(),
+                    "tenant_id": str(getattr(m, "tenant_id", "") or "").strip(),
                 }
             )
         datasets.sort(key=lambda x: x.get("ragflow_meta_id") or "")
@@ -348,6 +349,7 @@ class PermissionService:
             'skills_management': '技能工作台',
             'mcp_management': 'MCP 工具集',
             'mcp_service': 'MCP 服务台',
+            'embed_apps': '嵌入应用',
             'agent_debug': '智能体调试',
             'playground': '接口调试台',
             'chat_logs': '聊天日志',

@@ -339,6 +339,7 @@ async def list_users(
     search: Optional[str] = None,
     role: Optional[str] = None,
     status_filter: Optional[int] = Query(None, alias="status"),
+    include_shadows: bool = Query(False),
     admin: dict = Depends(require_permission("menu", "menu:system:users")),
     db: AsyncSession = Depends(get_db_session)
 ):
@@ -347,6 +348,16 @@ async def list_users(
     Admin only.
     """
     stmt = select(User).order_by(desc(User.created_at))
+    if not include_shadows:
+        from app.services.embed_identity import EMBED_SHADOW_REMARK_PREFIX
+        from sqlalchemy import or_
+
+        stmt = stmt.where(
+            or_(
+                User.remark.is_(None),
+                ~User.remark.like(f"{EMBED_SHADOW_REMARK_PREFIX}%"),
+            )
+        )
     
     if search:
         stmt = stmt.where((User.user_name.like(f"%{search}%")) | (User.real_name.like(f"%{search}%")))
@@ -708,6 +719,9 @@ async def reset_user_api_key(
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    from app.services.embed_identity import is_shadow_remark
+    if is_shadow_remark(user.remark):
+        raise HTTPException(status_code=403, detail="嵌入执行账号不能重置 API Key 或登录管理端")
         
     new_api_key = await AuthService.reset_api_key(user_id, db=db)
     
@@ -733,6 +747,9 @@ async def set_user_password(
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    from app.services.embed_identity import is_shadow_remark
+    if is_shadow_remark(user.remark):
+        raise HTTPException(status_code=403, detail="嵌入执行账号不能设置登录密码")
 
     # 校验密码复杂度（等保要求）
     valid, msg = AuthService.validate_password_complexity(request.password, username=user.user_name)

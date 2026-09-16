@@ -14,15 +14,49 @@ logger = logging.getLogger(__name__)
 
 
 def current_mcp_agent_identity() -> tuple[Dict[str, Any], Dict[str, Any]]:
-    """从当前后端 AgentContext 提取发给业务 MCP 的用户身份，绝不读取工具参数。"""
+    """发给业务 MCP 的用户身份。嵌入默认模式与站内同一套南孜运行账号，
+    只有 mcp_only 才把业务 subject 作为 MCP user_id。身份必须在会话 initialize 时带上。"""
+    from app.services.embed_identity import skip_sql_row_rewrite
+
     context = get_current_agent_context()
     if context is None:
         return {}, {}
 
     user_info = dict(context.user_dimensions or {})
-    if context.user_id is not None:
-        user_info["user_id"] = str(context.user_id)
-    user_info["is_admin"] = bool(context.is_admin)
+    platform_user_id = context.user_id
+    subject = str(user_info.get("external_subject") or "").strip()
+    embed_session = str(user_info.get("session_type") or "").strip().lower() == "embed"
+    mcp_only = skip_sql_row_rewrite(user_info)
+
+    if embed_session and mcp_only and subject:
+        payload: Dict[str, Any] = {
+            "user_id": subject,
+            "role": "user",
+            "is_admin": False,
+            "external_subject": subject,
+        }
+        if platform_user_id is not None:
+            payload["platform_user_id"] = str(platform_user_id)
+        for key in ("user_name", "real_name", "dept_code", "org_path", "extra_data", "tenant_id"):
+            if user_info.get(key) not in (None, ""):
+                payload[key] = user_info[key]
+        user_info = payload
+    elif embed_session:
+        # 默认与站内同一套：只发南孜运行账号，避免 subject/扩展字段让公共 MCP 500。
+        payload = {}
+        if platform_user_id is not None:
+            payload["user_id"] = str(platform_user_id)
+        platform_name = str(user_info.get("platform_user_name") or user_info.get("user_name") or "").strip()
+        if platform_name:
+            payload["user_name"] = platform_name
+        platform_role = str(user_info.get("platform_role") or "").strip()
+        payload["is_admin"] = platform_role.lower() == "admin"
+        payload["role"] = platform_role or "user"
+        user_info = payload
+    else:
+        if platform_user_id is not None:
+            user_info["user_id"] = str(platform_user_id)
+        user_info["is_admin"] = bool(context.is_admin)
     agent_info: Dict[str, Any] = {
         "agent_id": context.agent_id,
         "agent_name": context.agent_name,

@@ -47,8 +47,42 @@ class McpSseSession:
         self._rpc_id_counter += 1
         return self._rpc_id_counter
 
+    @staticmethod
+    def url_prefers_direct_http(sse_url: str) -> bool:
+        """MCP Streamable HTTP 约定路径是 /mcp，不是 SSE GET 长连接。"""
+        path = str(sse_url or "").split("?", 1)[0].rstrip("/").lower()
+        if path.endswith("/sse") or "/sse/" in path:
+            return False
+        return path.endswith("/mcp") or "/mcp/" in path
+
+    def _url_prefers_direct_http(self) -> bool:
+        return self.url_prefers_direct_http(self.sse_url)
+
+    async def _discard_exit_stack(self) -> None:
+        stack = self._exit_stack
+        self._exit_stack = None
+        self.session = None
+        if stack is None:
+            return
+        try:
+            await stack.aclose()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            logger.debug(
+                "[MCP] Discarded SSE transport for %s after fallback: %s",
+                self.server_id,
+                exc,
+            )
+
     async def _looks_like_sse_endpoint(self) -> bool:
         """Quick probe: skip SSE when the gateway clearly speaks JSON/HTTP."""
+        if self._url_prefers_direct_http():
+            logger.info(
+                "[MCP] Endpoint %s path looks like Streamable HTTP; skipping SSE",
+                self.server_id,
+            )
+            return False
         try:
             async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
                 response = await client.get(self.sse_url, headers=self.auth_headers)
@@ -66,11 +100,11 @@ class McpSseSession:
             return True
         except Exception as probe_err:
             logger.info(
-                "[MCP] SSE probe skipped for %s due to %s; trying SSE anyway",
+                "[MCP] SSE probe failed for %s due to %s; skipping SSE",
                 self.server_id,
                 type(probe_err).__name__,
             )
-            return True
+            return False
 
     async def connect(self):
         """Establishes connection with protocol detection"""
@@ -86,11 +120,12 @@ class McpSseSession:
                 self._exit_stack = AsyncExitStack()
 
                 try_sse = await self._looks_like_sse_endpoint()
-                
-                # 1. Try Standard SSE Connection (only when probe suggests SSE)
+
+                # 1. Try Standard SSE Connection (only when probe suggests SSE).
+                # 必须在当前 task 里 enter/aclose：wait_for 会另开 task，anyio cancel scope 会炸。
                 if try_sse:
                     try:
-                        async def _connect_sse():
+                        async with asyncio.timeout(10.0):
                             read_stream, write_stream = await self._exit_stack.enter_async_context(
                                 sse_client(url=self.sse_url, headers=self.auth_headers)
                             )
@@ -99,20 +134,17 @@ class McpSseSession:
                             )
                             await self.session.initialize()
 
-                        await asyncio.wait_for(_connect_sse(), timeout=10.0)
-                        
                         self.last_used_at = time.time()
                         self.is_direct_http = False
                         logger.info(f"[MCP] Standard SSE initialized for {self.server_id}")
                         return
                     except Exception as sse_err:
-                        # 多数网关（如 ModelScope）返回 JSON/HTTP 而非 SSE；探测失败后降级，不打堆栈。
                         logger.warning(
                             "[MCP] Standard SSE unavailable for %s (%s); falling back to Direct HTTP",
                             self.server_id,
                             type(sse_err).__name__,
                         )
-                        await self._exit_stack.aclose()
+                        await self._discard_exit_stack()
                         self._exit_stack = AsyncExitStack()
 
                 # 2. Fallback: Direct HTTP Gateway
@@ -320,25 +352,29 @@ class McpClientService:
             if getattr(server, "enabled_status", 1) != 1:
                 raise ValueError("MCP 服务已禁用，无法执行工具")
             signed_user_enabled = bool(getattr(server, "user_assertion_enabled", False))
-            if signed_user_enabled and require_user_context:
+            if signed_user_enabled:
                 user_id = str((user_info or {}).get("user_id") or "").strip()
                 if not user_id:
                     raise ValueError("MCP UserContext requires an authenticated user_id")
-            auth_headers = build_mcp_headers(
+            identity_headers = build_mcp_headers(
                 server,
                 user_info=user_info,
                 agent_info=agent_info,
                 request_id=request_id,
                 private_key=private_key,
             )
+            # 一条 MCP 会话从头到尾同一套 Header。站内能通，是因为 initialize
+            # 已带身份；嵌套若共用无身份的 list_tools 连接再叠 Header，对端会 500。
             session_key = server_id
+            prefers_direct = McpSseSession.url_prefers_direct_http(
+                getattr(server, "sse_url", "") or ""
+            )
             if signed_user_enabled:
-                user_id = str((user_info or {}).get("user_id") or "").strip()
-                if not user_id:
-                    raise ValueError("MCP UserContext requires an authenticated user_id")
-                session_key = f"{server_id}:user:{user_id}"
-                ephemeral_session = True
-            session_kwargs = {"session_key": session_key, "auth_headers": auth_headers}
+                session_key = (
+                    f"{server_id}:user:{str((user_info or {}).get('user_id') or '').strip()}"
+                )
+                ephemeral_session = not prefers_direct
+            session_kwargs = {"session_key": session_key, "auth_headers": identity_headers}
 
         session_mgr = await cls.get_session(server_id, **session_kwargs)
         start_time = time.perf_counter()
@@ -418,10 +454,14 @@ class McpClientService:
             else:
                 await cls._ensure_direct_http_initialized(session_mgr)
 
-                res = await cls._direct_http_rpc(session_mgr, "tools/call", {
-                    "name": tool_name,
-                    "arguments": arguments
-                })
+                res = await cls._direct_http_rpc(
+                    session_mgr,
+                    "tools/call",
+                    {
+                        "name": tool_name,
+                        "arguments": arguments,
+                    },
+                )
                 if isinstance(res, dict) and bool(res.get("isError") or res.get("is_error")):
                     error_text = "".join(
                         c.get("text", "")
@@ -541,68 +581,125 @@ class McpClientService:
             "invalid session",
         ))
 
+    @staticmethod
+    async def _read_direct_http_body(resp: httpx.Response) -> str:
+        """读完 Streamable HTTP 正文；对端掐断时尽量用已收到的 SSE/JSON。"""
+        chunks: list[bytes] = []
+        truncated: Optional[BaseException] = None
+        try:
+            async for chunk in resp.aiter_bytes():
+                if chunk:
+                    chunks.append(chunk)
+        except Exception as exc:
+            truncated = exc
+        raw = b"".join(chunks)
+        text = raw.decode("utf-8", errors="replace")
+        if truncated is not None and not text.strip():
+            raise Exception(
+                f"HTTP {resp.status_code}: incomplete response ({truncated})"
+            ) from truncated
+        if truncated is not None:
+            logger.warning(
+                "[MCP-Direct] Truncated HTTP %s body (%s); using %s bytes already received",
+                resp.status_code,
+                truncated,
+                len(raw),
+            )
+        return text
+
     @classmethod
-    async def _direct_http_rpc(cls, session_mgr: McpSseSession, method: str, params: Optional[Dict], is_notification: bool = False, retry_count: int = 0) -> Any:
+    async def _direct_http_rpc(
+        cls,
+        session_mgr: McpSseSession,
+        method: str,
+        params: Optional[Dict],
+        is_notification: bool = False,
+        retry_count: int = 0,
+        extra_headers: Optional[Dict[str, Any]] = None,
+    ) -> Any:
         request_headers: dict[str, Any] = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             **session_mgr.auth_headers,
         }
+        if extra_headers:
+            request_headers.update(extra_headers)
         request_session_id = session_mgr.mcp_session_id
         if request_session_id:
             request_headers["mcp-session-id"] = request_session_id
         headers = encode_mcp_http_headers(request_headers)
-        
+
         rpc_id = session_mgr.next_rpc_id() if not is_notification else None
-        payload = { "jsonrpc": "2.0", "method": method, "params": params or {} }
+        payload = {"jsonrpc": "2.0", "method": method, "params": params or {}}
         if rpc_id is not None:
             payload["id"] = rpc_id
 
-        logger.debug(f"[MCP-Direct] Request: {method} to {session_mgr.sse_url} | RPC ID: {rpc_id} | Headers keys: {list(headers.keys())}")
+        logger.info(
+            "[MCP-Direct] Request %s to %s | header_keys=%s | has_session=%s",
+            method,
+            session_mgr.sse_url,
+            list(headers.keys()),
+            bool(request_session_id),
+        )
         client = session_mgr.get_http_client()
         session_mgr._active_requests = getattr(session_mgr, "_active_requests", 0) + 1
         session_mgr._active_requests_changed.clear()
+        resp: Optional[httpx.Response] = None
+        status_code = 0
+        response_headers: dict[str, str] = {}
+        raw_text = ""
         try:
-            resp = await client.post(session_mgr.sse_url, json=payload, headers=headers)
-            logger.info(f"[MCP-Direct] Response from {method}: HTTP {resp.status_code}")
+            request = client.build_request(
+                "POST",
+                session_mgr.sse_url,
+                json=payload,
+                headers=headers,
+            )
+            resp = await client.send(request, stream=True)
+            status_code = resp.status_code
+            response_headers = {str(key): str(value) for key, value in resp.headers.items()}
+            logger.info("[MCP-Direct] Response from %s: HTTP %s", method, status_code)
+            raw_text = await cls._read_direct_http_body(resp)
         except Exception as http_err:
-            logger.error(f"[MCP-Direct] HTTP Request failed for {method}: {http_err}")
+            logger.error("[MCP-Direct] HTTP Request failed for %s: %s", method, http_err)
             raise
         finally:
             session_mgr._active_requests = max(0, getattr(session_mgr, "_active_requests", 1) - 1)
             if session_mgr._active_requests == 0:
                 session_mgr._active_requests_changed.set()
+            if resp is not None:
+                try:
+                    await resp.aclose()
+                except Exception:
+                    pass
 
-        # Capture Session ID from initialization
-        if method == "initialize" and resp.status_code == 200:
-            s_id = resp.headers.get("mcp-session-id")
+        if method == "initialize" and status_code == 200:
+            s_id = response_headers.get("mcp-session-id") or response_headers.get("Mcp-Session-Id")
             if not s_id:
                 try:
                     try:
-                        res_data = resp.json().get("result", {})
+                        res_data = json.loads(raw_text).get("result", {})
                     except json.JSONDecodeError:
-                        res_data = (cls._parse_sse_payload(resp.text) or {}).get("result", {})
+                        res_data = (cls._parse_sse_payload(raw_text) or {}).get("result", {})
                     s_id = res_data.get("_experimental", {}).get("session_id") or res_data.get("session_id")
                 except Exception:
                     pass
             if s_id:
                 session_mgr.mcp_session_id = s_id
-                logger.info(f"[MCP-Direct] Captured Session ID: {s_id}")
+                logger.info("[MCP-Direct] Captured Session ID: %s", s_id)
 
-        # Accept all 2xx codes (200, 201, 202, 204)
-        if 200 <= resp.status_code < 300:
-            if resp.status_code == 204 or not resp.text:
+        if 200 <= status_code < 300:
+            if status_code == 204 or not raw_text:
                 return None
 
-            raw_text = resp.text
             try:
-                data = resp.json()
+                data = json.loads(raw_text)
             except json.JSONDecodeError:
                 data = cls._parse_sse_payload(raw_text)
                 if data is None:
-                    logger.warning(f"[MCP-Direct] Non-JSON success response: {raw_text[:200]}")
-                    return None  # Success but not JSON (e.g. 202 Accepted)
-                logger.info(f"[MCP-Direct] Parsed SSE-encoded response for {method}")
+                    logger.warning("[MCP-Direct] Non-JSON success response: %s", raw_text[:200])
+                    return None
+                logger.info("[MCP-Direct] Parsed SSE-encoded response for %s", method)
 
             if "result" in data:
                 return data["result"]
@@ -628,27 +725,30 @@ class McpClientService:
                         params,
                         is_notification,
                         retry_count=retry_count + 1,
+                        extra_headers=extra_headers,
                     )
-                logger.error(f"[MCP-Direct] RPC Error Response: {data['error']}")
-                raise Exception(f"RPC Error {data['error'].get('code')}: {data['error'].get('message')}")
+                logger.error("[MCP-Direct] RPC Error Response: %s", data["error"])
+                raise Exception(
+                    f"RPC Error {data['error'].get('code')}: {data['error'].get('message')}"
+                )
             return data
 
         error_payload = None
         try:
-            error_payload = resp.json()
+            error_payload = json.loads(raw_text) if raw_text else None
         except json.JSONDecodeError:
-            error_payload = cls._parse_sse_payload(resp.text)
+            error_payload = cls._parse_sse_payload(raw_text)
         if (
             request_session_id
             and retry_count < 1
             and not is_notification
             and method != "initialize"
-            and resp.status_code in {400, 401, 404, 410}
+            and status_code in {400, 401, 404, 410}
             and cls._is_session_expired_payload(error_payload)
         ):
             logger.warning(
                 "[MCP-Direct] HTTP %s invalidated session for %s; reinitializing before retrying %s",
-                resp.status_code,
+                status_code,
                 session_mgr.server_id,
                 method,
             )
@@ -659,10 +759,11 @@ class McpClientService:
                 params,
                 is_notification,
                 retry_count=retry_count + 1,
+                extra_headers=extra_headers,
             )
 
-        logger.error(f"[MCP-Direct] Error Response Body: {resp.text[:500]}")
-        raise Exception(f"HTTP {resp.status_code}: {resp.text}")
+        logger.error("[MCP-Direct] Error Response Body: %s", (raw_text or "")[:500])
+        raise Exception(f"HTTP {status_code}: {raw_text}")
 
     @classmethod
     async def sync_tools(cls, server_id: str):

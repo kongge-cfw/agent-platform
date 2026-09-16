@@ -68,16 +68,20 @@ async def search_knowledge_base(query: str, dataset_ids: Optional[str | list[str
         async with AsyncSessionLocal() as session:
             perm = PermissionService(session)
             agent_granted_ids = set(ctx.agent_dataset_ids or [])
+            embed_session = str((ctx.user_dimensions or {}).get("session_type") or "").strip().lower() == "embed"
             restricted_datasets = [
                 dataset_id
                 for dataset_id in target_datasets
                 if dataset_id not in agent_granted_ids
             ]
-            allowed_restricted = await perm.filter_knowledge_dataset_ids(
-                int(ctx.user_id),
-                user_name,
-                restricted_datasets,
-            )
+            if embed_session:
+                allowed_restricted = []
+            else:
+                allowed_restricted = await perm.filter_knowledge_dataset_ids(
+                    int(ctx.user_id),
+                    user_name,
+                    restricted_datasets,
+                )
             allowed_restricted_set = set(allowed_restricted)
             denied = [
                 dataset_id

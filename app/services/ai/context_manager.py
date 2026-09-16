@@ -216,45 +216,68 @@ class AgentContextManager:
         user_dims = {}
 
         if user_info:
+            from app.services.ai.business_context import AUTHENTICATED_IDENTITY_KEYS
+            from app.services.embed_identity import is_embed_session, is_platform_admin, platform_acl_user_id
+
             raw_uid = user_info.get("user_id", user_info.get("id"))
             if raw_uid:
-                u_id_val = int(raw_uid)
-            is_admin_val = user_info.get("role") == "admin"
+                try:
+                    u_id_val = int(raw_uid)
+                except (TypeError, ValueError):
+                    u_id_val = None
+            is_admin_val = is_platform_admin(user_info)
+            if is_embed_session(user_info):
+                operator_id = platform_acl_user_id(user_info)
+                if operator_id is not None:
+                    u_id_val = operator_id
             if not api_key_val:
                 api_key_val = user_info.get("api_key")
 
-            # Extract Dimensions for SQL Rewriter
             user_dims = {
                 "id": u_id_val,
                 "user_name": user_info.get("user_name"),
                 "real_name": user_info.get("real_name"),
-                "role": user_info.get("role"),
+                "role": "user" if is_embed_session(user_info) else user_info.get("role"),
                 "dept_code": user_info.get("dept_code"),
                 "org_path": user_info.get("org_path"),
+                "session_type": user_info.get("session_type") or "",
+                "platform_user_id": user_info.get("created_by_user_id") or "",
+                "platform_user_name": user_info.get("created_by_user_name") or "",
+                "platform_role": user_info.get("created_by_role") or "",
+                "external_subject": user_info.get("external_subject") or "",
+                "session_owner": user_info.get("session_owner") or "",
+                "embed_app_id": user_info.get("embed_app_id") or "",
+                "embed_app_key": user_info.get("embed_app_key") or "",
+                "data_permission_mode": user_info.get("data_permission_mode") or "",
+                "isolate_datasets_by_tenant": user_info.get("isolate_datasets_by_tenant") or "",
+                "tenant_id": user_info.get("tenant_id") or "",
             }
 
-            # Flatten extra_data into user_dims
             extra_data = user_info.get("extra_data")
             if extra_data:
                 try:
                     import json
                     extra_dict = {}
                     if isinstance(extra_data, str):
-                        # Attempt to parse if it's a JSON string
                         extra_dict = json.loads(extra_data)
                     elif isinstance(extra_data, dict):
                         extra_dict = extra_data
 
                     if isinstance(extra_dict, dict):
+                        flatten_allow = {"tenant_id", "external_subject"}
                         for k, v in extra_dict.items():
-                            # Avoid overwriting core dimensions
-                            if k not in user_dims:
-                                user_dims[k] = v
+                            key_name = str(k)
+                            lowered = key_name.lower()
+                            if lowered in AUTHENTICATED_IDENTITY_KEYS and lowered not in flatten_allow:
+                                continue
+                            if key_name not in user_dims or not user_dims.get(key_name):
+                                user_dims[key_name] = v
                 except Exception as e:
                     logger.warning(f"Failed to parse or flatten extra_data: {e}")
 
-            # Keep original extra_data for backward compatibility
             user_dims["extra_data"] = extra_data
+        else:
+            from app.services.embed_identity import is_embed_session
 
         from app.services.ai.knowledge_utils import merge_dataset_id_sources
 
@@ -278,8 +301,17 @@ class AgentContextManager:
             )
         )
         if request_dataset_ids:
-            # 用户显式选择是硬范围，不能被智能体默认知识库扩展。
-            effective_dataset_ids = request_dataset_ids
+            if is_embed_session(user_info):
+                allowed = set(configured_agent_dataset_ids or [])
+                effective_dataset_ids = [
+                    dataset_id for dataset_id in request_dataset_ids if dataset_id in allowed
+                ]
+            else:
+                # 用户显式选择是硬范围，不能被智能体默认知识库扩展。
+                effective_dataset_ids = request_dataset_ids
+        elif is_embed_session(user_info):
+            # 嵌入执行只使用智能体绑定的知识库，不合并影子账号或服务账号的个人知识库授权。
+            effective_dataset_ids = configured_agent_dataset_ids
         else:
             # 无显式选择时，智能体绑定知识库与当前用户可访问知识库合并。
             user_permitted_ids = []

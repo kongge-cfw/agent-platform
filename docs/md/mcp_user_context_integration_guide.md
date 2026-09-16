@@ -12,7 +12,7 @@
 
 ## 2. 请求约定
 
-开启后，业务 MCP 收到：
+开启后，**initialize 与后续 tools/call 使用同一套 Header**（身份不能只加在调用上）。业务 MCP 收到：
 
 ```http
 Authorization: Bearer <该 MCP 的 Token 值，如已配置>
@@ -49,7 +49,7 @@ password、token、api_key、authorization、cookie、secret、private_key、ses
 ## 3. 业务 MCP 如何处理
 
 1. 如果配置了 Authorization，先按原方式校验 Bearer Token。
-2. 读取 `X-Nanzi-User-Context`，`JSON.parse` 后用 `user_id` 关联业务用户。
+2. 读取 `X-Nanzi-User-Context`，`JSON.parse` 后用 `user_id` 关联用户。默认嵌入会话里 `user_id` 是南孜运行账号，与站内一致；仅当嵌入应用为 `mcp_only` 时，`user_id` 才是业务 `identity.subject`，南孜账号在 `platform_user_id`。
 3. 用 `X-Request-ID` / `request_id` 关联两侧日志。
 4. 业务权限、租户隔离仍由业务 MCP 自己判断。
 

@@ -121,7 +121,10 @@ class OpenClawExecutor(BaseExecutor):
 
                 datasets: list[dict[str, Any]] = []
                 if self.user_info:
-                    raw_uid = self.user_info.get("user_id") or self.user_info.get("id")
+                    from app.services.embed_identity import resolve_catalog_acl
+
+                    acl = resolve_catalog_acl(self.user_info)
+                    raw_uid = acl.get("user_id")
                     if raw_uid is not None:
                         try:
                             from app.core.orm import AsyncSessionLocal
@@ -130,6 +133,17 @@ class OpenClawExecutor(BaseExecutor):
                             uid_int = int(raw_uid)
                             async with AsyncSessionLocal() as db:
                                 datasets = await PermissionService(db).get_accessible_ragflow_meta_datasets(uid_int)
+                                tenant = str(acl.get("tenant_id") or "").strip()
+                                if acl.get("isolate_by_tenant"):
+                                    if not tenant:
+                                        datasets = []
+                                    else:
+                                        datasets = [
+                                            item
+                                            for item in datasets
+                                            if not str(item.get("tenant_id") or "").strip()
+                                            or str(item.get("tenant_id") or "").strip() == tenant
+                                        ]
                         except Exception as e:
                             logger.warning(
                                 "OpenClaw AUTH_CONTEXT datasets resolve failed: %s", e,

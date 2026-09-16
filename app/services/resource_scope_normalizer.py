@@ -32,18 +32,21 @@ async def normalize_resource_scope_for_user(
     from app.services.ai.skill_resolver import get_user_personal_skills_dir
     from app.services.permission_service import PermissionService
     from app.api.portal.endpoints.skills import parse_skill_metadata
+    from app.services.embed_identity import resolve_catalog_acl, resource_visible_for_tenant
     from sqlalchemy import and_, select
     from sqlalchemy.orm import joinedload
 
     raw_scope = raw_scope if isinstance(raw_scope, dict) else {}
-    raw_user_id = user_info.get("user_id") or user_info.get("id")
-    try:
-        user_id = int(raw_user_id) if raw_user_id is not None else None
-    except (TypeError, ValueError):
-        user_id = None
-    is_admin = user_info.get("role") == "admin"
+    acl = resolve_catalog_acl(user_info)
+    user_id = acl.get("user_id")
+    is_admin = bool(acl.get("is_admin"))
     datasets = await MetadataService.list_accessible_dataset_options(
-        db, user_id=user_id, is_admin=is_admin, status=1
+        db,
+        user_id=user_id,
+        is_admin=is_admin,
+        status=1,
+        tenant_id=acl.get("tenant_id") or "",
+        isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
     )
     dataset_by_token: Dict[str, Any] = {}
     for dataset in datasets:
@@ -76,7 +79,7 @@ async def normalize_resource_scope_for_user(
         }
 
     kb_access = await PermissionService(db).get_knowledge_base_access(
-        int(user_id), user_info.get("user_name")
+        int(user_id), acl.get("user_name") or user_info.get("user_name")
     ) if user_id is not None else {"is_admin": False, "accessible_ids": set()}
     kb_stmt = select(KnowledgeBaseMetadata).where(KnowledgeBaseMetadata.status != "deleted")
     kb_rows = list((await db.execute(kb_stmt)).scalars().all())
@@ -84,6 +87,8 @@ async def normalize_resource_scope_for_user(
     kb_by_token: Dict[str, Any] = {}
     for kb in kb_rows:
         if allowed_kb_ids is not None and str(kb.ragflow_dataset_id) not in allowed_kb_ids:
+            continue
+        if not resource_visible_for_tenant(kb, user_info):
             continue
         for token in (kb.ragflow_dataset_id, kb.name, kb.id):
             if token is not None and str(token).strip():

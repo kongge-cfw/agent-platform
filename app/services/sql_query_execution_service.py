@@ -420,6 +420,10 @@ async def execute_sql_query_core(
                 "dept_code": u_info.get("dept_code"),
                 "org_path": u_info.get("org_path"),
                 "extra_data": u_info.get("extra_data"),
+                "session_type": u_info.get("session_type") or "",
+                "platform_user_id": u_info.get("created_by_user_id") or "",
+                "platform_user_name": u_info.get("created_by_user_name") or "",
+                "external_subject": u_info.get("external_subject") or "",
             }
             if agent_context is not None:
                 agent_context.user_dimensions = dims
@@ -428,12 +432,25 @@ async def execute_sql_query_core(
     if agent_context is not None and getattr(agent_context, "is_admin", False):
         is_admin_eff = True
     ud = _user_dims_for_rewrite(agent_context, user_dimensions)
+    embed_session = str(ud.get("session_type") or "").strip().lower() == "embed"
+    if embed_session:
+        is_admin_eff = False
+    elif str(ud.get("role") or "").strip().lower() == "admin":
+        is_admin_eff = True
+    table_acl_user_id = user_id_eff
+    if embed_session:
+        raw_platform = str(ud.get("platform_user_id") or "").strip()
+        if raw_platform:
+            try:
+                table_acl_user_id = int(raw_platform)
+            except (TypeError, ValueError):
+                pass
     user_identity_label = None
     if user_id_eff is not None:
         user_name = str(ud.get("user_name") or "").strip()
-        user_identity_label = f"{user_name}({user_id_eff})" if user_name else f"user_id={user_id_eff}"
-    if str(ud.get("role") or "").strip().lower() == "admin":
-        is_admin_eff = True
+        subject = str(ud.get("external_subject") or "").strip()
+        label_id = subject or user_id_eff
+        user_identity_label = f"{user_name}({label_id})" if user_name else f"user_id={label_id}"
 
     ds = None
     if dataset_name:
@@ -487,7 +504,7 @@ async def execute_sql_query_core(
             session,
             refs=refs,
             dialect=dialect,
-            user_id_eff=user_id_eff,
+            user_id_eff=table_acl_user_id,
             is_admin_eff=is_admin_eff,
             user_identity_label=user_identity_label,
             binding=binding,
@@ -499,7 +516,9 @@ async def execute_sql_query_core(
         if column_err:
             return column_err
 
-    if ds and ds.enable_data_perm:
+    from app.services.embed_identity import skip_sql_row_rewrite
+
+    if ds and ds.enable_data_perm and not skip_sql_row_rewrite(ud):
         _append_trace(
             agent_context,
             trace_logs,

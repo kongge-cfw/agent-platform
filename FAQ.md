@@ -1051,7 +1051,7 @@ sequenceDiagram
 
     User->>HostFront: 登录并打开业务工单/分析页面
     HostFront->>HostBack: 请求加载 AI 助手
-    HostBack->>NanziAPI: POST /api/v1/embed/tickets (携带系统 Master Key & username)
+    HostBack->>NanziAPI: POST /api/v1/embed/tickets (携带系统 Master Key & identity)
     Note over HostBack,NanziAPI: 长期 API Key 留在宿主后端环境变量，绝不出内网
     NanziAPI-->>HostBack: 返回 5 分钟一次性 Ticket (如 emt_a8f9c2d1...)
     HostBack-->>HostFront: 下发 ticket
@@ -1072,8 +1072,13 @@ sequenceDiagram
 - **请求体 (JSON)**：
   ```json
   {
-    "username": "zhangsan",          // 必填：目标员工用户名（代表谁提问，自动关联该用户权限与记忆）
-    "agent_id": "sys-agent-chatbi",  // 可选：指定初始锁定的智能体 ID（留空则直接进入默认 Main 智能委派）
+    "app_key": "crm_portal",         // 可选：嵌入应用，校验智能体/域名/claims 白名单
+    "identity": {                    // 推荐：业务用户声明，不必预先在南孜建账号
+      "subject": "crm:zhangsan",
+      "display_name": "张三",
+      "tenant_id": "t_1001"
+    },
+    "agent_id": "sys-agent-chatbi",  // 使用 identity 或 app_key 时必填：锁定智能体
     "expires_in": 300                // 可选：Ticket 有效期（秒，默认 300 秒，一次性核销）
   }
   ```

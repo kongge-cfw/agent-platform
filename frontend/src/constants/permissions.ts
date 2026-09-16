@@ -64,6 +64,15 @@ export const MENU_TREE = [
         ]
     },
     {
+        id: 'menu:embed_apps',
+        label: '嵌入应用',
+        children: [
+            { id: 'element:embed_apps:create', label: '登记嵌入应用' },
+            { id: 'element:embed_apps:edit', label: '编辑嵌入应用' },
+            { id: 'element:embed_apps:delete', label: '删除嵌入应用' }
+        ]
+    },
+    {
         id: 'menu:mcp_service',
         label: 'MCP 服务台',
         children: [

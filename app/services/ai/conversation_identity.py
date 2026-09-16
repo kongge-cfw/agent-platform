@@ -19,6 +19,9 @@ def require_user_id(value: Any) -> str:
 
     raw_value = value
     if isinstance(value, Mapping):
+        owner = str(value.get("session_owner") or "").strip()
+        if owner:
+            return owner
         raw_value = value.get("user_id") or value.get("id")
     elif not isinstance(value, (str, int)):
         raw_value = getattr(value, "user_id", None) or getattr(value, "id", None)

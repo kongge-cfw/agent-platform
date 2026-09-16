@@ -76,6 +76,7 @@ class DatasetBase(BaseModel):
     status: Optional[int] = 0
     enable_data_perm: Optional[bool] = False
     row_filter_config: Optional[Dict[str, Any]] = None
+    tenant_id: Optional[str] = None
 
 class DatasetCreate(DatasetBase):
     pass
@@ -88,6 +89,7 @@ class DatasetUpdate(BaseModel):
     status: Optional[int] = None
     enable_data_perm: Optional[bool] = None
     row_filter_config: Optional[Dict[str, Any]] = None
+    tenant_id: Optional[str] = None
 
 class DatasetResponse(DatasetBase):
     id: int
@@ -116,6 +118,7 @@ class DatasetOptionResponse(BaseModel):
     description: Optional[str] = None
     data_source: Optional[str] = None
     status: Optional[int] = 1
+    tenant_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

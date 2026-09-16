@@ -79,6 +79,13 @@ def _require_chat_user_id(user_info: Optional[Dict[str, Any]]) -> str:
 
 def _require_numeric_chat_user_id(user_info: Optional[Dict[str, Any]]) -> int:
     """需要整型主键的聊天接口也必须先通过稳定身份校验。"""
+    from app.services.embed_identity import embed_numeric_user_id, is_embed_session
+
+    if is_embed_session(user_info):
+        numeric = embed_numeric_user_id(user_info)
+        if numeric is not None:
+            _require_chat_user_id(user_info)
+            return numeric
     stable_user_id = _require_chat_user_id(user_info)
     try:
         return int(stable_user_id)
@@ -1385,6 +1392,11 @@ async def create_chat_completion(
         completion_request.messages,
         completion_request.conversation_id,
     )
+    from app.services.embed_identity import is_embed_session, locked_agent_id
+    if is_embed_session(user_info):
+        locked = locked_agent_id(user_info)
+        if locked and not completion_request.agent_id:
+            completion_request.agent_id = locked
 
     # 会话资源范围以服务端 Redis 为准，客户端只用于立即刷新 UI，不能伪造范围。
     conversation_scope = {
@@ -1472,14 +1484,16 @@ async def create_chat_completion(
     accessible_resource_snapshot = None
     try:
         from app.services.ai.accessible_resource_catalog import fetch_accessible_resource_snapshot
+        from app.services.embed_identity import resolve_catalog_acl
 
-        raw_numeric_user_id = user_info.get("user_id") or user_info.get("id")
-        numeric_user_id = int(raw_numeric_user_id) if raw_numeric_user_id is not None else None
+        acl = resolve_catalog_acl(user_info)
         accessible_resource_snapshot = await fetch_accessible_resource_snapshot(
             db,
-            user_id=numeric_user_id,
-            user_name=user_info.get("user_name") or user_info.get("username"),
-            is_admin=user_info.get("role") == "admin",
+            user_id=acl.get("user_id"),
+            user_name=acl.get("user_name") or user_info.get("user_name") or user_info.get("username"),
+            is_admin=bool(acl.get("is_admin")),
+            tenant_id=acl.get("tenant_id") or "",
+            isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
         )
         authorized_resource_scope = accessible_resource_snapshot.counts
     except Exception as exc:  # 目录统计只用于可观测性，不能阻断聊天请求

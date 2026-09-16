@@ -166,12 +166,20 @@ class QuotaService:
         )
 
     async def check_before_call(self, user_info: dict) -> Optional[str]:
-        user_id = user_info.get("user_id")
-        username = user_info.get("user_name") or user_info.get("username")
-        if not user_id or not username:
-            return None
+        from app.services.embed_identity import is_embed_session, platform_acl_user_id, platform_acl_user_name
 
-        status = await self.get_user_quota_status(int(user_id), str(username))
+        if is_embed_session(user_info):
+            op_uid = platform_acl_user_id(user_info)
+            op_name = platform_acl_user_name(user_info)
+            if not op_uid or not op_name:
+                return None
+            status = await self.get_embed_operator_quota_status(int(op_uid), str(op_name))
+        else:
+            user_id = user_info.get("user_id")
+            username = user_info.get("user_name") or user_info.get("username")
+            if not user_id or not username:
+                return None
+            status = await self.get_user_quota_status(int(user_id), str(username))
         if status.is_admin_bypass or status.limit_tokens is None:
             return None
         if status.used_tokens >= status.limit_tokens:
@@ -180,6 +188,41 @@ class QuotaService:
                 "请联系管理员调整额度。"
             )
         return None
+
+    async def get_embed_operator_monthly_usage(self, operator_user_id: int) -> int:
+        from app.services.embed_identity import shadow_remark_for_operator
+
+        remark = shadow_remark_for_operator(operator_user_id)
+        shadow_ids = (
+            await self.db.execute(select(User.id).where(User.remark == remark))
+        ).scalars().all()
+        if not shadow_ids:
+            return 0
+        start, end = self._month_window()
+        id_strs = [str(item) for item in shadow_ids]
+        stmt = select(
+            func.coalesce(func.sum(AgentExecutionHistory.total_tokens), 0)
+        ).where(
+            AgentExecutionHistory.user_id.in_(id_strs),
+            AgentExecutionHistory.created_at >= start,
+            AgentExecutionHistory.created_at <= end,
+        )
+        return int((await self.db.execute(stmt)).scalar() or 0)
+
+    async def get_embed_operator_quota_status(
+        self, operator_user_id: int, operator_username: str
+    ) -> QuotaStatusResponse:
+        used = await self.get_embed_operator_monthly_usage(operator_user_id)
+        limit, source, label = await self._resolve_effective_limit(operator_user_id, operator_username)
+        is_admin = source == "admin_bypass"
+        embed_label = f"嵌入应用：{label}" if label else "嵌入应用"
+        return self._build_status(
+            used_tokens=used,
+            limit_tokens=limit,
+            source=source,
+            source_label=embed_label,
+            is_admin_bypass=is_admin,
+        )
 
     def build_warning_message(self, status: QuotaStatusResponse) -> Optional[str]:
         if status.is_admin_bypass or status.limit_tokens is None:

@@ -638,6 +638,19 @@ class AgentManagerService:
 
     @staticmethod
     def _extract_user_identity(user: Any) -> tuple[bool, str, str]:
+        from app.services.embed_identity import (
+            is_embed_session,
+            operator_is_admin,
+            platform_acl_user_id,
+            platform_acl_user_name,
+        )
+
+        if isinstance(user, dict) and is_embed_session(user):
+            is_admin = operator_is_admin(user)
+            username = platform_acl_user_name(user)
+            acl_uid = platform_acl_user_id(user)
+            user_id = str(acl_uid) if acl_uid is not None else ""
+            return bool(is_admin), username, user_id
         if isinstance(user, dict):
             is_admin = user.get("role", "") == "admin"
             username = user.get("user_name", "") or ""
@@ -653,6 +666,12 @@ class AgentManagerService:
         """Whether the user may chat with this agent (same rules as list_allowed_agents)."""
         if not user or not agent:
             return False
+        from app.services.embed_identity import agent_matches_lock, is_embed_session, locked_agent_id
+
+        if is_embed_session(user):
+            locked = locked_agent_id(user)
+            if locked and not agent_matches_lock(agent, locked):
+                return False
         is_admin, username, user_id = AgentManagerService._extract_user_identity(user)
         if is_admin:
             return True
@@ -701,6 +720,22 @@ class AgentManagerService:
         """
         if not user:
             return []
+
+        from app.services.embed_identity import is_embed_session, locked_agent_id
+
+        if is_embed_session(user):
+            locked = locked_agent_id(user)
+            if locked:
+                stmt = select(AIAgent).where(
+                    AIAgent.is_enabled == True,
+                    or_(AIAgent.id == locked, AIAgent.name == locked),
+                ).limit(1)
+                agent = (await session.execute(stmt)).scalar_one_or_none()
+                if not agent:
+                    return []
+                if not await AgentManagerService._user_can_execute_agent(session, agent, user):
+                    return []
+                return [agent]
 
         # User Info extraction
         is_admin, username, user_id = AgentManagerService._extract_user_identity(user)

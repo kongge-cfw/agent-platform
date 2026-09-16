@@ -39,6 +39,8 @@ def test_welcome_dashboard_renders_personal_resources_before_capabilities():
     assert "刷新我的资源" in dashboard
     assert "personalResourcesRefreshing" in dashboard
     assert "快捷入口" in dashboard
+    assert "hidePersonalResources" in dashboard
+    assert "isEmbeddedInIframe" in dashboard
     resources_pos = dashboard.find("open-personal-resources")
     quick_entry_pos = dashboard.find("快捷入口")
     caps_pos = dashboard.find("grid-cols-1 sm:grid-cols-3")
@@ -61,6 +63,7 @@ def test_embed_chat_wires_workbench_home_and_personal_resources_modal():
     assert "personalResourceFallbackItems" in embed
     assert "open-personal-resources" in embed or "openPersonalResources" in embed
     assert "filterEmbedWelcomePersonalResources" in embed
+    assert "isEmbeddedInIframe" in embed
     constants = _source("frontend/src/constants/personalResources.ts")
     assert '"memory"' in constants and '"data"' in constants
     assert '"inbox"' in constants

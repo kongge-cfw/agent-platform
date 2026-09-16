@@ -31,7 +31,7 @@ sequenceDiagram
     participant A as 南孜平台 API (NanZi Backend)
 
     Note over S, A: 1. 服务端代客申请临时 Ticket (Server-to-Server)
-    S->>A: POST /api/v1/embed/tickets<br/>Headers: X-API-Key: {宿主系统内网服务Key}<br/>Body: { "username": "zhangsan", "agent_id": "sys-agent-chatbi" }
+    S->>A: POST /api/v1/embed/tickets<br/>Headers: X-API-Key: {宿主系统内网服务Key}<br/>Body: { "agent_id": "sys-agent-chatbi", "identity": { "subject": "crm:zhangsan" } }
     A-->>S: 返回一次性 Ticket: { "ticket": "emt_9f8a2c...", "expires_in": 300 }
 
     Note over S, H: 2. 宿主将临时 Ticket 下发给前端
@@ -77,11 +77,52 @@ sequenceDiagram
 
 | 字段名              | 类型         | 必填 | 默认值          | 说明                                                                        |
 | ------------------- | ------------ | ---- | --------------- | --------------------------------------------------------------------------- |
-| `username`        | string       | 否   | 当前调用者      | 目标业务用户的用户名（代表哪个用户进行对话）。                              |
-| `user_id`         | integer      | 否   | -               | 目标用户的 ID（与`username` 二选一）。                                    |
-| `agent_id`        | string       | 否   | 内置通用助手    | 锁定对话的智能体 ID（如`sys-agent-chatbi`、`sys-agent-data`）。         |
-| `allowed_origins` | list[string] | 否   | `[]` (不限制) | 限定允许嵌入该 Ticket 的前端域名列表（如`["https://crm.company.com"]`）。 |
+| `identity`        | object       | 否   | -               | **推荐**。业务方已登录用户声明。不要求该用户事先存在于南孜；执行时 SQL/MCP 以这份身份为准。 |
+| `identity.subject` | string     | identity 时必填 | -     | 业务用户稳定唯一标识，建议 `业务系统:登录名`。                              |
+| `identity.display_name` | string | 否   | subject         | 展示名。                                                                    |
+| `identity.dept_code` | string     | 否   | -               | 部门代码，供 ChatBI 行级改写使用。                                          |
+| `identity.org_path` | string      | 否   | -               | 组织路径。                                                                  |
+| `identity.tenant_id` | string     | 否   | -               | 租户 ID，写入 extra_data。                                                  |
+| `identity.extra_data` | object    | 否   | -               | 业务属性（如 data_scope、region_codes）。禁止传 `role` / `is_admin` / `permissions`。 |
+| `username`        | string       | 否   | 当前调用者      | **兼容旧代客模式**：目标南孜用户名。与 `identity` 同时传时以 `identity` 为准。 |
+| `user_id`         | integer      | 否   | -               | 目标南孜用户 ID。提供 `identity` 时忽略。                                   |
+| `agent_id`        | string       | identity 或 app_key 时必填 | - | 锁定对话的智能体 ID。嵌入会话不能再切换入口智能体。                       |
+| `app_key`         | string       | 否   | -               | **嵌入应用**标识。管理端登记时自动生成，Ticket 带上后按应用校验智能体、域名、业务身份字段。 |
+| `allowed_origins` | list[string] | 否   | `[]` (不限制) | 限定允许嵌入该 Ticket 的前端域名。若绑定了应用，必须是应用域名白名单的子集。 |
 | `expires_in`      | integer      | 否   | `300`         | Ticket 兑换有效时长（秒），取值范围 60 ~ 1800 秒。                          |
+
+业务员工 **不必登录南孜、不必预先同步全量用户**。控制面（能否嵌这个智能体、配额）认宿主服务账号；数据面行级 SQL 认 `identity`。默认模式下 MCP `X-Nanzi-User-Context.user_id` 与站内相同（签发人/映射账号），只有「权限下沉 MCP」才把 `identity.subject` 作为 MCP `user_id`。iframe 的 `UPDATE_CONTEXT` 只能传业务对象，不能传身份。
+
+### 嵌入应用（平台化）
+
+管理端「智能体开发平台 → 嵌入应用」登记宿主系统后，Ticket 应传 `app_key`：
+
+| 应用配置 | 作用 |
+| --- | --- |
+| 应用 Key | 登记时自动生成，宿主 Ticket 传此值；创建后不可改 |
+| 允许的智能体 | Ticket `agent_id` 必须在列表中（空=签发人权限内均可） |
+| 允许的域名 | 兑换时 Origin 必须匹配；Ticket 不可扩大域名 |
+| 必须提交业务用户身份 | 打开后禁止旧 `username` 代客 |
+| 允许宿主声明的身份字段 | 勾选固定字段：`subject`（始终保留）、`display_name`、`dept_code`、`org_path`、`tenant_id`、`extra_data`。未勾选的字段会被丢弃 |
+| 在平台用户表写入映射账号 | 默认开启，仅兼容旧会话存储，业务用户不能登录管理端。关闭后不再写 `ai_agent_users`，会话按业务用户标识归属 |
+| 数据权限 | `nanzi_sql_rewrite`（默认，南孜按身份字段改写行级 SQL）或 `mcp_only`（南孜不改写 SQL，身份整包交给业务 MCP） |
+| 按租户隔离 | 打开后必须传 `identity.tenant_id`，数据集/知识库只看见该租户或未打租户标签的资源 |
+
+嵌入 session **不能**调用用户管理、MCP 注册、角色、系统配置等管理接口。宿主可用 `POST /api/v1/embed/sessions/revoke`（`app_key` + `subject`）作废该业务用户已兑换的会话。
+
+```json
+{
+  "app_key": "crm_portal",
+  "agent_id": "sys-agent-chatbi",
+  "identity": {
+    "subject": "crm:zhangsan",
+    "display_name": "张三",
+    "dept_code": "SH01",
+    "tenant_id": "t_1001",
+    "extra_data": { "data_scope": "dept" }
+  }
+}
+```
 
 - **响应格式 (JSON)**：
   ```json
@@ -93,8 +134,9 @@ sequenceDiagram
       "expires_in": 300,
       "target_user": {
         "user_id": 102,
-        "user_name": "zhangsan",
-        "real_name": "张三"
+        "user_name": "ext:crm:zhangsan",
+        "real_name": "张三",
+        "subject": "crm:zhangsan"
       }
     }
   }
@@ -133,8 +175,12 @@ public class AiEmbedController {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-API-Key", nanziApiKey);
 
+        Map<String, Object> identity = new HashMap<>();
+        identity.put("subject", "crm:" + currentUsername);
+        identity.put("display_name", currentUsername);
+
         Map<String, Object> body = new HashMap<>();
-        body.put("username", currentUsername);
+        body.put("identity", identity);
         body.put("agent_id", "sys-agent-chatbi");
         body.put("expires_in", 300);
 
@@ -169,7 +215,10 @@ async def get_ai_embed_ticket(current_username: str = "zhangsan"):
             f"{NANZI_API_URL}/api/v1/embed/tickets",
             headers={"X-API-Key": NANZI_API_KEY},
             json={
-                "username": current_username,
+                "identity": {
+                    "subject": f"crm:{current_username}",
+                    "display_name": current_username,
+                },
                 "agent_id": "sys-agent-chatbi",
                 "expires_in": 300
             }
@@ -200,7 +249,10 @@ func GetEmbedTicketHandler(c *gin.Context) {
 	apiKey := os.Getenv("NANZI_API_KEY")
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
-		"username":   currentUsername,
+		"identity": map[string]interface{}{
+			"subject":      "crm:" + currentUsername,
+			"display_name": currentUsername,
+		},
 		"agent_id":   "sys-agent-chatbi",
 		"expires_in": 300,
 	})
@@ -233,7 +285,11 @@ curl -X POST "https://nanzi-ai.yourcompany.com/api/v1/embed/tickets" \
      -H "Content-Type: application/json" \
      -H "X-API-Key: sk-your-system-service-key" \
      -d '{
-       "username": "zhangsan",
+       "identity": {
+         "subject": "crm:zhangsan",
+         "display_name": "张三",
+         "dept_code": "SH01"
+       },
        "agent_id": "sys-agent-chatbi",
        "expires_in": 300
      }'
@@ -521,13 +577,13 @@ frame.contentWindow.postMessage({
 
 ### Q2: 宿主后端调用 `/api/v1/embed/tickets` 报 `403 Forbidden`？
 
-- **解答**：若在请求体中指定了其他用户的 `username` 或 `user_id` 进行代客签发（Impersonation），调用方必须具备代客权限。
-- **解决方案**：请确保调用该接口的服务账号具备管理员权限（`admin`）或在权限管理中已分配 `GET:/api/v1/users/profile`（获取用户画像）API 权限。普通用户若未获授权只能为自身签发 Ticket。
+- **解答**：提交 `identity` 或以 `username`/`user_id` 代他人签发时，调用方必须具备代客权限。
+- **解决方案**：请确保调用该接口的服务账号具备管理员权限（`admin`）或在权限管理中已分配 `GET:/api/v1/users/profile`（获取用户画像）API 权限。普通用户若未获授权只能为自身签发 Ticket，且不能提交 `identity`。
 
-### Q3: 报错 `404 Target user not found`？
+### Q3: 业务用户必须先在南孜建账号吗？
 
-- **解答**：传给 `username` 的用户在南孜平台尚不存在。
-- **解决方案**：南孜平台需提前同步该用户账号，或在创建 Ticket 前先通过用户管理接口确保账号已创建。
+- **解答**：推荐模式不需要。宿主后端提交 `identity.subject` 即可。默认会在平台用户表写入一条映射账号（不能登录管理端），仅作会话存储兼容；嵌入应用可关闭该项，会话按业务用户标识归属。
+- **解决方案**：生产嵌入请改用 `app_key` + `identity` + 服务账号 `X-API-Key`，并指定 `agent_id`。不要把业务 JWT 塞进 iframe 或 `UPDATE_CONTEXT`。
 
 ### Q4: 移动端 H5 嵌入时如何防止横向滚动？
 
@@ -537,3 +593,13 @@ frame.contentWindow.postMessage({
     <iframe src="..." style="width: 100%; height: 100%; border: none;"></iframe>
   </div>
   ```
+
+### Q5: 嵌入会话能否调用用户管理或注册 MCP？
+
+- **解答**：不能。嵌入 session 只能走对话、资源挂载、工作区等运行面接口，用户管理 / MCP 注册 / 角色 / 系统配置一律 403。
+- **解决方案**：这些能力由宿主服务账号在内网调用，不要把管理 API 暴露给 iframe。
+
+### Q6: 业务中台已有权限引擎，还要南孜改写 SQL 吗？
+
+- **解答**：嵌入应用把「数据权限」设为「不下改写，交给业务 MCP」后，南孜只做表级 ACL（认签发人），行级条件不再改写；`identity` 整包进入 MCP `X-Nanzi-User-Context`。
+- **解决方案**：数据集仍须打 `tenant_id`（若开启租户隔离），行级规则由业务 MCP 解释 `dept_code` / `extra_data`。

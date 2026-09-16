@@ -63,11 +63,16 @@ async def list_accessible_datasets() -> str:
 
     try:
         async with AsyncSessionLocal() as db:
+            from app.services.embed_identity import resolve_catalog_acl_from_context
+
+            acl = resolve_catalog_acl_from_context(ctx)
             rows = await MetadataService.list_accessible_dataset_options(
                 db,
-                user_id=ctx.user_id,
-                is_admin=bool(ctx.is_admin),
+                user_id=acl.get("user_id"),
+                is_admin=bool(acl.get("is_admin")),
                 status=1,
+                tenant_id=acl.get("tenant_id") or "",
+                isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
             )
             items = [_dataset_item(row) for row in rows]
             return json.dumps({"items": items, "count": len(items)}, ensure_ascii=False)
@@ -91,12 +96,17 @@ async def list_accessible_knowledge_bases() -> str:
     try:
         user_name = _context_user_name(ctx)
         async with AsyncSessionLocal() as db:
+            from app.services.embed_identity import resolve_catalog_acl_from_context
+
+            acl = resolve_catalog_acl_from_context(ctx)
             catalog = await fetch_authorized_knowledge_catalog(
                 db,
-                user_id=int(ctx.user_id),
-                user_name=user_name,
-                is_admin=bool(ctx.is_admin),
+                user_id=acl.get("user_id") or int(ctx.user_id),
+                user_name=acl.get("user_name") or user_name,
+                is_admin=bool(acl.get("is_admin")),
                 permission_service=PermissionService(db),
+                tenant_id=acl.get("tenant_id") or "",
+                isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
             )
             items = [_knowledge_item(row) for row in catalog.items]
             items.sort(key=lambda x: x.get("ragflow_dataset_id") or "")

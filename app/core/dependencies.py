@@ -45,6 +45,10 @@ async def require_api_key(
 
     request.state.user = user_info
 
+    from app.services.embed_api_guard import enforce_embed_api_surface
+
+    enforce_embed_api_surface(request, user_info)
+
     # 在线状态是展示性数据；Redis 写入失败不能影响正常认证和业务请求。
     try:
         await OnlinePresenceService.touch(user_info)

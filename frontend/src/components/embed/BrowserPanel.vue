@@ -1026,6 +1026,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import axios from '@/utils/axios';
 
 type ApprovalMode = 'guarded' | 'autopilot';
 type ControlOwner = 'ai' | 'human';
@@ -1391,14 +1392,11 @@ const panelCacheSizeDisplay = computed(() => {
 const fetchPanelCacheSize = async () => {
   panelCacheLoading.value = true;
   try {
-    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : '';
-    const res = await fetch('/api/v1/chat/browser/profiles', {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (res.ok) {
-      const profiles: Array<{ disk_size_bytes?: number | null }> = await res.json();
-      panelCacheSizeBytes.value = profiles.reduce((acc, p) => acc + (p.disk_size_bytes ?? 0), 0);
-    }
+    const res = await axios.get('/api/v1/chat/browser/profiles');
+    const profiles: Array<{ disk_size_bytes?: number | null }> = Array.isArray(res.data)
+      ? res.data
+      : ((res.data as any)?.data || []);
+    panelCacheSizeBytes.value = profiles.reduce((acc, p) => acc + (p.disk_size_bytes ?? 0), 0);
   } catch { /* 静默忽略 */ }
   finally { panelCacheLoading.value = false; }
 };
@@ -1414,18 +1412,12 @@ const clearPanelCache = async () => {
   panelClearConfirm.value = false;
   panelClearing.value = true;
   try {
-    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : '';
-    const res = await fetch('/api/v1/chat/browser/profiles/clear', {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (res.ok) {
-      panelCacheSizeBytes.value = 0;
-      remoteFocusMessage.value = '✅ 云端浏览器缓存已清除';
-      setTimeout(() => {
-        if (remoteFocusMessage.value.includes('缓存已清除')) remoteFocusMessage.value = '';
-      }, 3000);
-    }
+    await axios.delete('/api/v1/chat/browser/profiles/clear');
+    panelCacheSizeBytes.value = 0;
+    remoteFocusMessage.value = '✅ 云端浏览器缓存已清除';
+    setTimeout(() => {
+      if (remoteFocusMessage.value.includes('缓存已清除')) remoteFocusMessage.value = '';
+    }, 3000);
   } catch { /* 静默 */ }
   finally { panelClearing.value = false; }
 };

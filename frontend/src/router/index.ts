@@ -217,6 +217,12 @@ const router = createRouter({
           meta: { perm: 'menu:ui_cards', title: '对话卡片' }
         },
         {
+          path: 'embed-apps',
+          name: 'EmbedApps',
+          component: () => import('../views/EmbedApps.vue'),
+          meta: { perm: 'menu:embed_apps', title: '嵌入应用' }
+        },
+        {
           path: 'mcp-service',
           name: 'McpServiceDesk',
           component: () => import('../views/McpServiceDesk.vue'),
