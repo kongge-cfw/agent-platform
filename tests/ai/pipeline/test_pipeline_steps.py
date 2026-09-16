@@ -824,13 +824,33 @@ async def test_finalize_completes_todo_and_retracts_untrusted_content_before_sta
 
 
 @pytest.mark.asyncio
-async def test_finalize_awaiting_user_skips_completed_audit():
-    """等待用户回答属于暂停态，不能记录成已完成事务。"""
+async def test_finalize_awaiting_user_persists_paused_audit():
+    """提问卡等待用户是本轮终态：必须写入历史，否则刷新后出卡轮会消失。"""
     context = PipelineContext(
         messages=[{"role": "user", "content": "需要确认"}],
         user_info={"user_id": 123},
     )
     context.execution_status = "awaiting_user"
+    context.user_query = "需要确认"
+
+    with patch(
+        "app.services.ai.agent_service.AuditManager.log_transaction",
+        new_callable=AsyncMock,
+    ) as audit:
+        _ = [chunk async for chunk in FinalizeStep().run(context)]
+
+    audit.assert_awaited()
+    assert audit.await_args.args[5] == "awaiting_user"
+
+
+@pytest.mark.asyncio
+async def test_finalize_awaiting_permission_skips_completed_audit():
+    """工具权限确认会在同一条 trace 上恢复，不能先记成完结事务。"""
+    context = PipelineContext(
+        messages=[{"role": "user", "content": "需要确认"}],
+        user_info={"user_id": 123},
+    )
+    context.execution_status = "awaiting_permission"
     context.user_query = "需要确认"
 
     with patch(

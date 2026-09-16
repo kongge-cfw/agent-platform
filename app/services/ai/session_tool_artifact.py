@@ -72,6 +72,9 @@ _EXCLUDED_TOOL_NAMES = frozenset(
         "create_skills",
         "update_user_preference",
         "delete_user_preference",
+        "ask_user_question",
+        "request_user_confirmation",
+        "show_ui_card",
     }
 )
 
@@ -277,6 +280,10 @@ def should_inject_session_artifact(
         return True
     q = str(user_question or "").strip()
     if not q:
+        return False
+    from app.services.ai.runtime.agentscope.stream_reconcile import is_hitl_receipt_user_query
+
+    if is_hitl_receipt_user_query(q):
         return False
     if CLICKED_REPLY_MARKER.lower() in q.lower():
         # 客户端附带的旧回复可能自己提到“最新数据”，只能检查按钮动作文本。

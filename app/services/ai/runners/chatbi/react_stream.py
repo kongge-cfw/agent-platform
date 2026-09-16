@@ -372,6 +372,7 @@ async def stream_agentscope_events(
 
         from app.services.ai.business_confirmation import build_business_confirmation_sse
         from app.services.ai.user_question import build_user_question_sse, persist_user_question_event
+        from app.services.ai.ui_card import build_ui_card_sse, persist_ui_card_event
 
         if not is_error:
             confirmation_event = build_business_confirmation_sse(
@@ -402,6 +403,27 @@ async def stream_agentscope_events(
                     }
                     return
                 yield question_event
+            card_event = build_ui_card_sse(
+                tool_name=tool_name,
+                tool_output=output,
+                tool_call_id=tool_id,
+            )
+            if card_event:
+                try:
+                    await persist_ui_card_event(
+                        event=card_event,
+                        user_id=runner._runtime_user_id(),
+                        conversation_id=runner.conversation_id or "",
+                    )
+                except Exception:
+                    logger.exception("Failed to persist pending ui card")
+                    yield {
+                        "type": "error",
+                        "status": "error",
+                        "content": "无法保存业务卡片，请稍后重试。",
+                    }
+                    return
+                yield card_event
 
     def track_sql_plan_delta(delta: str) -> None:
         state.text_window = (state.text_window + delta)[-4000:]

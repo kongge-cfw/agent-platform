@@ -42,8 +42,9 @@ _COOKIE_HEADER_RE = re.compile(
 _BEARER_RE = re.compile(r"(\bBearer\s+)[^\s,;]+", re.IGNORECASE)
 _URL_CREDENTIALS_RE = re.compile(r"(://)[^\s/@:]+:[^\s/@]+@")
 _KNOWN_TOKEN_RE = re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{8,}\b")
+# 只打码宿主绝对路径。/workspace/... 是模型合同路径，打码后无法先 Read 再覆盖。
 _INTERNAL_PATH_RE = re.compile(
-    r"(?:/Users/|/home/|/root/|/private/var/|/var/|/workspace/)[^\s,;)'\"]*"
+    r"(?:/Users/|/home/|/root/|/private/var/|/var/)[^\s,;)'\"]*"
     r"|(?:[A-Za-z]:\\)[^\s,;)'\"]*"
 )
 

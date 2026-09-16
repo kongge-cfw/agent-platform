@@ -11,6 +11,7 @@ import ToolPermissionCard from "@/components/chat/ToolPermissionCard.vue";
 import GroundingBlockedCard from "@/components/GroundingBlockedCard.vue";
 import BusinessConfirmationCard from "@/components/BusinessConfirmationCard.vue";
 import UserQuestionCard from "@/components/UserQuestionCard.vue";
+import UiCardHost from "@/components/UiCardHost.vue";
 import DatasetCapabilityMenu from "@/components/chatbi/DatasetCapabilityMenu.vue";
 import DatasetPortalDrawer from "@/components/chatbi/DatasetPortalDrawer.vue";
 import ChatBIInsightPanel from "@/components/chatbi/ChatBIInsightPanel.vue";
@@ -76,6 +77,11 @@ import {
   buildUserQuestionUserMessage,
   type UserQuestionState,
 } from "@/utils/userQuestion";
+import {
+  buildUiCardUserMessage,
+  type UiCardState,
+} from "@/utils/uiCard";
+import { visibleUserMessageContent } from "@/utils/hitlReceiptDisplay";
 import { useToast } from "../composables/useToast";
 import { useTokenQuota } from "@/composables/useTokenQuota";
 import { useContextUsage } from "@/composables/useContextUsage";
@@ -1375,6 +1381,7 @@ interface Message {
   groundingBlocked?: GroundingBlockedPayload;
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
+  uiCard?: UiCardState;
   prompt_tokens?: number;
   completion_tokens?: number;
 }
@@ -3891,6 +3898,25 @@ const submitUserQuestion = async (
   await sendMessage();
 };
 
+const submitUiCard = async (
+  msg: Message,
+  payload: { action: string; payload: Record<string, unknown> },
+) => {
+  const card = msg.uiCard;
+  if (!card || card.status !== "pending" || isProcessing.value) return;
+  const content = buildUiCardUserMessage(
+    card.card_id,
+    card.card_key,
+    payload.action,
+    payload.payload,
+  );
+  card.action = payload.action;
+  card.payload = payload.payload;
+  card.status = "submitted";
+  userInput.value = content;
+  await sendMessage();
+};
+
 const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
   const pending = msg.pendingPermission;
   if (!pending || pending.status !== "pending" || pending.isSubmitting) return;
@@ -4514,7 +4540,7 @@ onUnmounted(() => {
               <div
                 class="bg-primary text-white px-5 py-3.5 rounded-2xl rounded-tr-none shadow-sm text-sm leading-relaxed text-left relative"
               >
-                <template v-for="parts in [splitUserMessageContent(msg.content)]" :key="'user-parts'">
+                <template v-for="parts in [splitUserMessageContent(visibleUserMessageContent(msg.content))]" :key="'user-parts'">
                   <template v-if="parts.hasContext">
                     <MessageRenderer v-if="parts.userPart" :content="parts.userPart" @open-canvas="handleOpenCanvas" />
                     <div v-if="parts.userPart" class="my-2.5 border-t border-white/30" role="separator" />
@@ -4530,7 +4556,7 @@ onUnmounted(() => {
                       </div>
                     </details>
                   </template>
-                  <MessageRenderer v-else :content="msg.content" @open-canvas="handleOpenCanvas" />
+                  <MessageRenderer v-else :content="visibleUserMessageContent(msg.content)" @open-canvas="handleOpenCanvas" />
                 </template>
 
                 <!-- Attached Files In Bubble -->
@@ -4917,7 +4943,7 @@ onUnmounted(() => {
                 <MessageRenderer
                   v-if="!msg.groundingBlocked && !msg.datasetNavigation?.groups?.length"
                   :content="visibleStreamBody(msg)"
-                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"
+                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion || !!msg.uiCard"
                   @quick-question="handleQuickQuestion"
                   @show-citation="(payload) => handleShowCitation(msg, payload.id, payload.anchor)"
                   @open-canvas="handleOpenCanvas"
@@ -5049,6 +5075,13 @@ onUnmounted(() => {
                 :payload="msg.userQuestion"
                 :disabled="isProcessing"
                 @submit="(payload) => submitUserQuestion(msg, payload)"
+              />
+
+              <UiCardHost
+                v-if="msg.uiCard"
+                :payload="msg.uiCard"
+                :disabled="isProcessing"
+                @submit="(payload) => submitUiCard(msg, payload)"
               />
 
               <style scoped>

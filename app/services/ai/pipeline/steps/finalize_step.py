@@ -13,12 +13,12 @@ from app.core.cancellation import await_unless_cancelling, current_task_cancelli
 
 logger = logging.getLogger(__name__)
 
-# 不需要在此刻做完结审计的状态（等待外部恢复）
+# 会在同一条 trace 上恢复、因此不能当作本轮终态审计的状态。
+# 提问卡 / 确认卡 / 对话卡片的 awaiting_user 不在此列：下一轮是新回执，本轮必须写入历史。
 AWAITING_RESUME_STATUSES = {
     "interrupted",
     "awaiting_permission",
     "awaiting_external_execution",
-    "awaiting_user",
 }
 
 # 原版（重构前）在 chat_completion_stream 外层早退、根本没有任何终结产物的状态。

@@ -55,6 +55,15 @@ export const MENU_TREE = [
         children: []
     },
     {
+        id: 'menu:ui_cards',
+        label: '对话卡片',
+        children: [
+            { id: 'element:ui_cards:create', label: '登记卡片' },
+            { id: 'element:ui_cards:edit', label: '编辑卡片' },
+            { id: 'element:ui_cards:delete', label: '删除卡片' }
+        ]
+    },
+    {
         id: 'menu:mcp_service',
         label: 'MCP 服务台',
         children: [

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "/Users/cfw/.local/bin/uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=unrestricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:Jtys.823!@203.33.158.210:5432/nanzi_ai_agent_platform"
+      }
+    }
+  }
+}

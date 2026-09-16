@@ -414,6 +414,10 @@ def _turn_status_signal(chunk: Dict[str, Any]) -> Optional[str]:
         return "awaiting_external_execution"
     if chunk_type == "user_question":
         return "awaiting_user"
+    if chunk_type == "business_confirmation":
+        return "awaiting_user"
+    if chunk_type == "ui_card":
+        return "awaiting_user"
     if chunk_type == "error":
         return "error"
     if chunk_type:

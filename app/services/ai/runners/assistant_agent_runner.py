@@ -87,9 +87,12 @@ from app.services.ai.runtime.agentscope.text_sanitize import sanitize_assistant_
 from app.services.ai.runtime.agentscope.stream_reconcile import (
     build_tool_review_lines,
     GENERIC_SYNTHESIS_EMPTY_FALLBACK,
+    HITL_RECEIPT_EMPTY_FALLBACK,
     compute_stream_reconcile_gap,
+    is_hitl_receipt_user_query,
     needs_tool_synthesis_fallback,
     truncate_for_display,
+    visible_user_facing_reply,
 )
 from app.services.ai.runtime.agentscope.session_lock import (
     SessionLockTimeout,
@@ -2247,7 +2250,9 @@ class AssistantAgentRunner(BaseExecutor):
                             status="saved",
                             payload=saved_meta,
                         )
-                if not interrupted and self.conversation_id:
+                if self.conversation_id and (
+                    not interrupted or state.get("hitl_card_emitted")
+                ):
                     await agent_state_store.save(
                         user_id=self._runtime_user_id(),
                         conversation_id=self.conversation_id,
@@ -2487,6 +2492,7 @@ class AssistantAgentRunner(BaseExecutor):
             if result.get("log"):
                 yield result["log"]
             if result.get("business_confirmation"):
+                state["hitl_card_emitted"] = True
                 yield result["business_confirmation"]
             if result.get("user_question"):
                 from app.services.ai.user_question import persist_user_question_event
@@ -2506,7 +2512,28 @@ class AssistantAgentRunner(BaseExecutor):
                         "content": "无法保存待回答问题，请稍后重试。",
                     }
                     return
+                state["hitl_card_emitted"] = True
                 yield question_event
+            if result.get("ui_card"):
+                from app.services.ai.ui_card import persist_ui_card_event
+
+                card_event = result["ui_card"]
+                try:
+                    await persist_ui_card_event(
+                        event=card_event,
+                        user_id=self._runtime_user_id(),
+                        conversation_id=self.conversation_id or "",
+                    )
+                except Exception:
+                    logger.exception("Failed to persist pending ui card")
+                    yield {
+                        "type": "error",
+                        "status": "error",
+                        "content": "无法保存业务卡片，请稍后重试。",
+                    }
+                    return
+                state["hitl_card_emitted"] = True
+                yield card_event
             if result.get("citation"):
                 yield result["citation"]
             if result.get("trace"):
@@ -2564,6 +2591,9 @@ class AssistantAgentRunner(BaseExecutor):
             state=state,
             native_model=native_model,
         ):
+            yield chunk
+
+        async for chunk in self._ensure_hitl_receipt_visible_reply(state):
             yield chunk
 
         if state["full_content"] and not state["synthesis_recorded"]:
@@ -2730,6 +2760,24 @@ class AssistantAgentRunner(BaseExecutor):
             native_model=native_model,
             append_after_partial=append_sep,
         ):
+            yield chunk
+
+    async def _ensure_hitl_receipt_visible_reply(
+        self,
+        state: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """回执轮若没有新卡片、也没有用户可见正文，补一句明确提示避免空白气泡。"""
+        if state.get("hitl_card_emitted"):
+            return
+        query = str(state.get("user_query") or "")
+        if not is_hitl_receipt_user_query(query):
+            return
+        if visible_user_facing_reply(state.get("full_content") or ""):
+            return
+        logger.warning(
+            "[AssistantAgentRunner] HITL receipt turn produced no visible reply; emitting fallback"
+        )
+        async for chunk in self._emit_reply_text_chunks(state, HITL_RECEIPT_EMPTY_FALLBACK):
             yield chunk
 
     def _build_synthesis_user_message(self, user_query: str, execution_review: str) -> str:
@@ -3391,7 +3439,9 @@ class AssistantAgentRunner(BaseExecutor):
                             status="saved",
                             payload=saved_meta,
                         )
-                if not interrupted and self.conversation_id:
+                if self.conversation_id and (
+                    not interrupted or state.get("hitl_card_emitted")
+                ):
                     tools_fingerprint = build_tools_fingerprint(self.config, tools)
                     await agent_state_store.save(
                         user_id=self._runtime_user_id(),
@@ -3568,6 +3618,7 @@ class AssistantAgentRunner(BaseExecutor):
 
         from app.services.ai.business_confirmation import build_business_confirmation_sse
         from app.services.ai.user_question import build_user_question_sse
+        from app.services.ai.ui_card import build_ui_card_sse
 
         confirmation_output = tool_output
         if isinstance(tool_output, dict) and "text" in tool_output:
@@ -3589,6 +3640,13 @@ class AssistantAgentRunner(BaseExecutor):
             "user_question": None
             if is_error
             else build_user_question_sse(
+                tool_name=tool_name,
+                tool_output=confirmation_output,
+                tool_call_id=tool_id,
+            ),
+            "ui_card": None
+            if is_error
+            else build_ui_card_sse(
                 tool_name=tool_name,
                 tool_output=confirmation_output,
                 tool_call_id=tool_id,

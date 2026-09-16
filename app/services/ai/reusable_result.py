@@ -665,6 +665,10 @@ def resolve_reusable_result(
 ) -> ReusableResultDecision:
     """决定本轮是否优先使用已有结果；缺失/不足时交给原有路径回退。"""
     question = str(user_question or "").strip()
+    from app.services.ai.runtime.agentscope.stream_reconcile import is_hitl_receipt_user_query
+
+    if is_hitl_receipt_user_query(question):
+        return ReusableResultDecision(mode="none", reason="hitl_receipt")
     intent_question = extract_reusable_action_query(question)
     if _FRESH_DATA_PATTERN.search(intent_question):
         return ReusableResultDecision(mode="fallback", reason="freshness_requested")

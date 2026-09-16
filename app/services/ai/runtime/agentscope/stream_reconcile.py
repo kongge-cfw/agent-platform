@@ -220,6 +220,39 @@ def needs_tool_synthesis_fallback(
 GENERIC_SYNTHESIS_EMPTY_FALLBACK = (
     "未能生成完整回答，请查看上方工具执行日志，或简化问题后重试。"
 )
+HITL_RECEIPT_EMPTY_FALLBACK = (
+    "已收到你的选择，但本轮没有生成可展示的回复。请再发送一次，或换种说法继续。"
+)
+_INTERNAL_CONTEXT_BLOCK_RE = re.compile(
+    r"<\s*(backend_tool_result_context|backend_tool_run_summary)\b[^>]*>"
+    r"[\s\S]*?"
+    r"<\s*/\s*\1\s*>",
+    re.IGNORECASE,
+)
+_AGENT_SIGNATURE_RE = re.compile(
+    r"^\[本回复由智能体「[^」]+」生成\]\s*",
+    re.MULTILINE,
+)
+
+
+def is_hitl_receipt_user_query(text: str | None) -> bool:
+    """当前用户消息是否为提问卡 / 确认卡 / 对话卡片回执。"""
+    from app.services.ai.business_confirmation import is_business_confirmation_receipt_message
+    from app.services.ai.ui_card import is_ui_card_receipt_message
+    from app.services.ai.user_question import is_user_question_receipt_message
+
+    return (
+        is_user_question_receipt_message(text)
+        or is_business_confirmation_receipt_message(text)
+        or is_ui_card_receipt_message(text)
+    )
+
+
+def visible_user_facing_reply(text: str | None) -> str:
+    """去掉模型复述的内部工具上下文，判断用户是否真能看到正文。"""
+    cleaned = _INTERNAL_CONTEXT_BLOCK_RE.sub("", str(text or ""))
+    cleaned = _AGENT_SIGNATURE_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _normalize_reply_for_compare(text: str) -> str:

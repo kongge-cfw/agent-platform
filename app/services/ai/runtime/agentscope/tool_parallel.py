@@ -18,6 +18,7 @@ MAX_CONCURRENT_TOOLS_LIMIT = 20
 EXCLUSIVE_TOOL_NAMES = frozenset({
     "request_user_confirmation",
     "ask_user_question",
+    "show_ui_card",
     "sub_agent_call",
     "sub_agent_batch_call",
     "web_renderer_and_snapshot",

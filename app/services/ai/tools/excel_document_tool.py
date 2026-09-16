@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
 from app.core.context import get_current_agent_context
@@ -102,6 +103,52 @@ def _normalize_excel_read_action(
     raise DocumentPathError("excel_document_read 仅支持 inspect 或 read_range")
 
 
+def _format_sheet_names(sheetnames: list[str]) -> str:
+    names = [str(name) for name in sheetnames if str(name).strip()]
+    if not names:
+        return "（无）"
+    return "、".join(names)
+
+
+def _resolve_sheet_name(requested: str | None, sheetnames: list[str]) -> str:
+    """Exact match, then unique prefix/contains. Ambiguous or missing names list all sheets."""
+    wanted = str(requested or "").strip()
+    if not wanted:
+        raise DocumentPathError(
+            f"需要工作表名称。当前工作簿的工作表：{_format_sheet_names(sheetnames)}"
+        )
+    names = [str(name) for name in sheetnames]
+    if wanted in names:
+        return wanted
+
+    folded = wanted.casefold()
+    case_hits = [name for name in names if name.casefold() == folded]
+    if len(case_hits) == 1:
+        return case_hits[0]
+    if len(case_hits) > 1:
+        raise DocumentPathError(
+            f"工作表「{wanted}」匹配到多个同名表：{_format_sheet_names(case_hits)}"
+        )
+
+    prefix_hits = [name for name in names if name.startswith(wanted)]
+    if len(prefix_hits) == 1:
+        return prefix_hits[0]
+
+    contains_hits = [name for name in names if wanted in name]
+    if len(contains_hits) == 1:
+        return contains_hits[0]
+
+    if prefix_hits or contains_hits:
+        candidates = prefix_hits or contains_hits
+        raise DocumentPathError(
+            f"工作表「{wanted}」不唯一，候选：{_format_sheet_names(candidates)}。"
+            f"请用 inspect 返回的完整表名。当前工作簿的工作表：{_format_sheet_names(names)}"
+        )
+    raise DocumentPathError(
+        f"工作表「{wanted}」不存在。当前工作簿的工作表：{_format_sheet_names(names)}"
+    )
+
+
 @tool
 async def excel_document_read(
     path: str,
@@ -114,6 +161,9 @@ async def excel_document_read(
     action:
     - inspect: list sheets and a small preview. Use this first. Do not pass action=read.
     - read_range: requires sheet_name and cell_range such as A1:G50.
+      Prefer the exact title from inspect. A unique prefix or substring of
+      an existing sheet name is also accepted. Each call is capped at 200
+      rows and 50 columns; oversized ranges are truncated and return next_range.
     """
     action = _normalize_excel_read_action(action, sheet_name, cell_range)
     input_path = await _input_path(path)
@@ -134,14 +184,63 @@ async def excel_document_read(
             return {"status": "ok", "summary": f"工作簿包含 {len(sheets)} 个工作表", "data": {"sheets": sheets}, "truncated": False}
         if not sheet_name or not cell_range:
             raise DocumentPathError("read_range 需要 sheet_name 和 cell_range")
-        if sheet_name not in workbook.sheetnames:
-            raise DocumentPathError("工作表不存在")
+        sheet_name = _resolve_sheet_name(sheet_name, list(workbook.sheetnames))
         min_col, min_row, max_col, max_row = range_boundaries(cell_range)
-        if max_row - min_row + 1 > _MAX_RANGE_ROWS or max_col - min_col + 1 > _MAX_RANGE_COLUMNS:
-            raise DocumentPathError("读取范围超过 200 行或 50 列限制")
+        requested_rows = max_row - min_row + 1
+        requested_cols = max_col - min_col + 1
+        end_row = max_row
+        end_col = max_col
+        truncated = False
+        if requested_rows > _MAX_RANGE_ROWS:
+            end_row = min_row + _MAX_RANGE_ROWS - 1
+            truncated = True
+        if requested_cols > _MAX_RANGE_COLUMNS:
+            end_col = min_col + _MAX_RANGE_COLUMNS - 1
+            truncated = True
         worksheet = workbook[sheet_name]
-        values = [list(row) for row in worksheet.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col, values_only=True)]
-        return {"status": "ok", "summary": f"已读取 {sheet_name}!{cell_range}", "data": {"values": values}, "truncated": False}
+        values = [
+            list(row)
+            for row in worksheet.iter_rows(
+                min_row=min_row,
+                max_row=end_row,
+                min_col=min_col,
+                max_col=end_col,
+                values_only=True,
+            )
+        ]
+        read_range = (
+            f"{get_column_letter(min_col)}{min_row}:"
+            f"{get_column_letter(end_col)}{end_row}"
+        )
+        payload: dict[str, Any] = {
+            "values": values,
+            "requested_range": cell_range,
+            "read_range": read_range,
+        }
+        summary = f"已读取 {sheet_name}!{read_range}"
+        if truncated:
+            next_row = end_row + 1
+            if next_row <= max_row:
+                next_end = min(max_row, next_row + _MAX_RANGE_ROWS - 1)
+                payload["next_range"] = (
+                    f"{get_column_letter(min_col)}{next_row}:"
+                    f"{get_column_letter(end_col)}{next_end}"
+                )
+            payload["limit"] = {
+                "max_rows": _MAX_RANGE_ROWS,
+                "max_columns": _MAX_RANGE_COLUMNS,
+            }
+            summary += (
+                f"（已截取，原范围 {cell_range} 超过 {_MAX_RANGE_ROWS} 行或 "
+                f"{_MAX_RANGE_COLUMNS} 列；下一段用 read_range "
+                f"{payload.get('next_range') or '继续分页'}）"
+            )
+        return {
+            "status": "ok",
+            "summary": summary,
+            "data": payload,
+            "truncated": truncated,
+        }
     finally:
         workbook.close()
 
@@ -177,8 +276,8 @@ async def excel_document_write(
         workbook = load_workbook(await _input_path(path), data_only=False)
         if not sheet_name:
             raise DocumentPathError("修改工作簿需要 sheet_name")
-        if action != "create_sheet" and sheet_name not in workbook.sheetnames:
-            raise DocumentPathError("工作表不存在")
+        if action != "create_sheet":
+            sheet_name = _resolve_sheet_name(sheet_name, list(workbook.sheetnames))
     changes: dict[str, Any] = {}
     if action == "create":
         if cells:

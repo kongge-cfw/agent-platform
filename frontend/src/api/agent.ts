@@ -88,6 +88,11 @@ export const agentApi = {
   // List all agents
   listAgents: () => axios.get<AIAgent[]>('/api/portal/agents/'),
 
+  listAllowedAgents: (keyword?: string) =>
+    axios.get<AIAgent[]>('/api/portal/agents/allowed', {
+      params: keyword?.trim() ? { keyword: keyword.trim() } : {},
+    }),
+
   // Read-only global tool-call timeout shown in the version editor
   getGlobalToolcallTimeout: () => axios.get<{ seconds: number }>('/api/portal/agents/toolcall-timeout'),
   

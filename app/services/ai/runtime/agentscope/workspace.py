@@ -3490,12 +3490,19 @@ def _map_docker_workspace_tool_input(
 WORKSPACE_ERROR_HEALING_HINT = (
     "\n\n[系统建议] 目标路径不存在、无法访问或权限受限。若您不确定当前环境具体目录结构、平台公共文档（如 data/docs/ 官方手册）与用户工作区（docs/、sessions/）的路径映射或读写权限，"
     "建议优先调用 list_accessible_directories 工具查看当前环境完整目录清单与推荐用途。"
+    "若目标是脚本输出，请先确认 Write/Bash 已成功，再用 Glob 查看 sessions/ 下实际文件，不要读取尚未生成的路径。"
+)
+
+WRITE_UNREAD_EXISTING_HINT = (
+    "\n\n[系统建议] 该文件已存在。覆盖 docs/ 等持久文件前必须先 Read；"
+    "sessions/ 下的临时脚本可换新文件名，或直接再次 Write（平台会允许覆盖会话临时文件）。"
 )
 
 _WORKSPACE_ERROR_MARKERS = (
     "filenotfounderror",
     "no such file or directory",
     "file not found",
+    "does not exist",
     "permission denied",
     "permissiondenied",
     "is a directory",
@@ -3505,11 +3512,20 @@ _WORKSPACE_ERROR_MARKERS = (
     "container-only",
 )
 
+_WRITE_UNREAD_EXISTING_MARKERS = (
+    "has not been read yet",
+    "read the file first before writing",
+)
+
 
 def enhance_workspace_error_message(text_or_exc: Any) -> str:
     """如果工具报错涉及找不到文件、权限受限或越界，自动追加 list_accessible_directories 自愈建议。"""
     raw = str(text_or_exc)
     lower = raw.lower()
+    if any(marker in lower for marker in _WRITE_UNREAD_EXISTING_MARKERS):
+        if WRITE_UNREAD_EXISTING_HINT.strip() not in raw:
+            return f"{raw}{WRITE_UNREAD_EXISTING_HINT}"
+        return raw
     if "list_accessible_directories" in raw:
         return raw
     if any(marker in lower for marker in _WORKSPACE_ERROR_MARKERS):
@@ -3739,6 +3755,20 @@ def _assert_workspace_file_access(
             f"文件访问被拒绝：当前用户无权{operation}该路径 {target_path}"
         )
     return mapped
+
+
+def _prepare_session_scratch_overwrite(tool_name: str, mapped_input: Mapping[str, Any]) -> None:
+    """AgentScope Write 要求先 Read 再覆盖；会话临时文件允许直接重写。"""
+    if tool_name != "Write":
+        return
+    target = str(mapped_input.get("file_path") or "").strip()
+    if not target:
+        return
+    real = os.path.realpath(target)
+    normalized = real.replace("\\", "/").lower()
+    if "/sessions/" not in normalized or not os.path.isfile(real):
+        return
+    os.remove(real)
 
 
 _PYTHON_GREP_EXCLUDED_DIRS = {
@@ -4010,6 +4040,7 @@ class _WorkspaceFileAccessNativeTool:
 
     async def __call__(self, **kwargs: Any) -> Any:
         mapped_input = self._map(kwargs)
+        _prepare_session_scratch_overwrite(self.name, mapped_input)
         scan_kind = _public_runtime_help_scan_kind(self.name, mapped_input)
         if scan_kind == "glob":
             return await asyncio.to_thread(_python_root_help_glob, mapped_input)

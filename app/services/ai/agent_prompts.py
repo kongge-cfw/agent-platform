@@ -125,14 +125,23 @@ class AgentServicePrompts:
 - 收到「【业务确认】用户已取消」：**立即终止本次录入/变更流程**；禁止调用写入类工具；**禁止再次调用 request_user_confirmation**（不得重新弹确认卡）。只可用自然语言简短确认已取消，并询问用户是否要修改后重试或彻底放弃；仅当用户随后明确提供新的/修改后的业务数据并要求继续录入时，才允许重新调用 request_user_confirmation。
 - 业务数据确认（字段对不对）与工具执行确认（允许/拒绝工具调用）是两层能力，不要混淆。"""
 
+    _PLATFORM_UI_CARD_SECTION = """## 业务对话卡片
+- 需要用**已登记的定制化页面**展示业务数据（查看明细/看板）、或让用户确认、驳回、修改时，必须调用 **show_ui_card**；只传已登记的 `card_key` 与 `data`，禁止传 URL 或 HTML，也禁止用 markdown 表格/编造页面代替。
+- 简单选项提问用 **ask_user_question**，扁平字段确认用 **request_user_confirmation**。
+- 工具返回 `awaiting_user` 后必须停止，等待「【UI卡片】」回执；**不得在未回执前声称已展示完毕或已写入成功**。
+- 回执后按 `action` 继续：`confirm` 等写入意向再调用写入类 HTTP/MCP 工具；`reject` 立即终止写入，只用文字确认已驳回；`ack`/`close`/`viewed` 等查看类动作只根据 payload 用文字继续，禁止写库。
+- 同一 `card_key` 在用户未提供新数据、也未明确要求再看一遍前不要连续弹出。"""
+
     _PLATFORM_USER_QUESTION_SECTION = """## 主动向用户提问
-- **主动互动模式优先**：用户明确要求提问、让你问他/她、希望被引导或测验时，视为“用户明确要求提问”，必须调用 **ask_user_question**，即使当前没有阻塞性任务。例如“随便问我几个问题”“考考我”“我不知道怎么提问，你引导我”“一个一个问我”。
+- **主动互动模式优先**：用户明确要求提问、让你问他/她，希望被引导或测验时，视为“用户明确要求提问”，必须调用 **ask_user_question**，即使当前没有阻塞性任务。例如“随便问我几个问题”“考考我”“我不知道怎么提问，你引导我”“一个一个问我”。
 - “列出问题”或“给我几个问题”是普通文字生成请求，不等同于“问我几个问题”；只有明确要求用户回答、逐个提问或互动引导时才进入主动互动模式。
 - **决策收集模式**：当用户需要在多个同等合理的业务分支之间选择时，调用 **ask_user_question**；问题必须具体，选项应互斥、可理解，并尽量提供必要的补充输入入口。
 - **任务澄清模式**：当继续执行确实缺少一个或多个关键输入时，调用 **ask_user_question**；能通过当前工具、会话上下文或用户画像确定的内容，不要重复询问。
 - 不要为了寒暄、已知信息或可由工具查到的信息提问；后台自动任务、定时任务和订阅交付不得等待用户回答。
 - 调用后必须停止本轮生成，等待用户回答卡；不得在同一轮继续调用工具、输出结论或追加 quick 建议。
 - 收到「【用户回答】」回执后，按回执中的选项和补充说明继续原问题；不要把回执当作新的独立问题，也不要再次询问已经回答的字段。
+- **回执后若原任务仍缺关键输入**：本轮必须立刻再调用 **ask_user_question**（或已挂载的 show_ui_card / request_user_confirmation）弹出下一张卡；禁止只写「还需要确认以下执行细节」这类预告却不出卡。已经答过的字段不要重问。
+- 信息已齐则直接执行原任务，不要空转收尾。
 - 收到 `cancelled=true` 的「【用户回答】」回执后，立即停止当前任务，不调用任何查询或写入工具，只简短确认已取消；除非用户提出新的明确任务，不得再次询问同一问题。"""
 
     # ------------------------------------------------------------------
@@ -224,6 +233,7 @@ class AgentServicePrompts:
         (("get_myinfo", "has_all"), "| 「我的用户信息」「我的部门/角色/权限」「查看我的资料」 | 调用 **get_myinfo**（只读取当前上下文中的本人，不接受 userid 或其他参数） |"),
         (("request_user_confirmation", "has_all"), "| 录入/修改/删除业务数据、向外部系统写入记录 | 先调用 **request_user_confirmation** 展示可编辑确认卡；等待「【业务确认】」用户回执后再决定是否调用写入工具；用户取消后禁止立刻再次弹确认卡 |"),
         (("ask_user_question", "has_all"), "| 缺少继续处理所需的关键输入，或存在需要用户选择的业务分支 | 调用 **ask_user_question** 展示 2-12 个清晰选项；等待「【用户回答】」回执后继续，禁止在本轮自行猜测或继续执行 |"),
+        (("show_ui_card", "has_all"), "| 需要用已登记的定制化页面查看、确认、驳回或修改业务数据 | 调用 **show_ui_card**（只传已登记 card_key 与 data）；等待「【UI卡片】」回执后再按 action 继续 |"),
         (("__fetch__", "special"), "__FETCH__"),
         (("update_user_preference", "has_all"), "| 用户要求「记住…」 | **update_user_preference**（勿虚构已写入） |"),
         (("search_knowledge_base", "has_all"), "| 制度/SOP/操作指引、已选知识库 | **search_knowledge_base**（未绑定则不得编造文档内容） |"),
@@ -242,6 +252,7 @@ class AgentServicePrompts:
         "get_myinfo": "读取当前用户本人的基本信息、扩展信息、详情信息、角色与权限",
         "request_user_confirmation": "录入/修改/删除业务数据前，向用户展示可编辑确认卡并等待【业务确认】回执",
         "ask_user_question": "缺少关键输入或存在业务分支时，向用户展示选项提问并等待【用户回答】回执",
+        "show_ui_card": "向用户展示已登记的定制化业务卡片（查看/确认/驳回/修改），等待【UI卡片】回执后再按 action 继续",
         "sub_agent_call": "委派其他专有子智能体执行特定任务（如查数、查手册等）",
         "sub_agent_batch_call": "并行委派多个彼此独立的子智能体任务，并按请求顺序返回结果",
         "todo_write": "记录和更新多步骤任务的结构化执行清单",
@@ -253,7 +264,7 @@ class AgentServicePrompts:
         "get_dataset_schema": "获取数据集/表/字段元数据",
         "execute_sql_query": "执行 SQL 查数",
         "Read": "读取文件内容（不清楚公共手册或个人目录映射时先调用 list_accessible_directories）",
-        "Write": "写入/创建文件（持久文件放 docs/，临时脚本放 sessions/，严禁写入公共只读目录）",
+        "Write": "写入/创建文件（持久文件放 docs/，临时脚本放 sessions/；覆盖 sessions 已有临时文件可直接 Write，覆盖 docs 已有文件须先 Read。严禁写入公共只读目录）",
         "Edit": "精确编辑文件内容",
         "Grep": "按关键字/正则表达式搜索文件文本内容",
         "Glob": "按文件名模式查找匹配文件",
@@ -660,6 +671,8 @@ class AgentServicePrompts:
                 "必须优先调用对应的 *_read 工具获取真实内容（仅限本轮已绑定工具）；"
                 "excel_document_read 的 action 只能是 inspect 或 read_range，不要传 read；"
                 "先 inspect 再按需 read_range；"
+                "sheet_name 须用 inspect 返回的完整表名，不要自行缩写；"
+                "read_range 单次最多 200 行、50 列，超限会截取首段并返回 next_range，禁止一次读整列；"
                 "不要仅凭模型记忆或普通文字承诺已读取 |"
             )
         if office_write_tools:
@@ -713,6 +726,9 @@ class AgentServicePrompts:
 
         if "ask_user_question" in tool_names:
             prompt_parts.append(AgentServicePrompts._PLATFORM_USER_QUESTION_SECTION)
+
+        if "show_ui_card" in tool_names:
+            prompt_parts.append(AgentServicePrompts._PLATFORM_UI_CARD_SECTION)
             
         if quick_suggestions_forbidden:
             interaction_section = AgentServicePrompts._PLATFORM_INTERACTION_QUICK_FORBIDDEN_SECTION

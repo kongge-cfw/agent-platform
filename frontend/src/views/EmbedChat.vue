@@ -385,7 +385,7 @@
                 class="max-w-[85%] text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed transition-colors duration-300 relative"
                 :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }"
               >
-                <template v-for="parts in [splitUserMessageContent(msg.content)]" :key="'user-parts'">
+                <template v-for="parts in [splitUserMessageContent(visibleUserMessageContent(msg.content))]" :key="'user-parts'">
                   <template v-if="parts.hasContext">
                     <div v-if="parts.userPart" class="whitespace-pre-wrap">{{ parts.userPart }}</div>
                     <div v-if="parts.userPart" class="my-2.5 border-t border-white/30" role="separator" />
@@ -401,7 +401,7 @@
                       </div>
                     </details>
                   </template>
-                  <div v-else class="whitespace-pre-wrap">{{ msg.content }}</div>
+                  <div v-else class="whitespace-pre-wrap">{{ visibleUserMessageContent(msg.content) }}</div>
                 </template>
 
                 <!-- Attached Files In Bubble -->
@@ -613,7 +613,7 @@
               :class="[
                 `markdown-theme-${config.markdownTheme || 'default'}`,
                 { 'message-borderless': config.hideMessageBorder },
-                visibleStreamBody(msg) || msg.groundingBlocked || msg.businessConfirmation || msg.userQuestion || (msg.processTimeline && msg.processTimeline.length > 0)
+                visibleStreamBody(msg) || msg.groundingBlocked || msg.businessConfirmation || msg.userQuestion || msg.uiCard || (msg.processTimeline && msg.processTimeline.length > 0)
                   ? [
                       'px-4 py-3 rounded-2xl rounded-tl-sm shadow-none border border-gray-100 dark:border-gray-700 border-l-4 border-l-primary/60 dark:border-l-primary/40 min-h-[46px]',
                       msg.isThinking
@@ -768,7 +768,7 @@
                                                                   :conversation-id="conversationId"
                                                                   :enable-browser-open="true"
                                                                   :quick-context="quickContextForMessage(msg)"
-                                                                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"
+                                                                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion || !!msg.uiCard"
                                                                   @quick-question="handleQuickQuestion"
                                                                   @show-citation="(payload) => handleShowCitation(msg, payload.id, payload.anchor)"
                                                                   @open-canvas="handleOpenCanvas"
@@ -808,6 +808,13 @@
                 :payload="msg.userQuestion"
                 :disabled="isProcessing"
                 @submit="(payload) => submitUserQuestion(msg, payload)"
+              />
+
+              <UiCardHost
+                v-if="msg.uiCard"
+                :payload="msg.uiCard"
+                :disabled="isProcessing"
+                @submit="(payload) => submitUiCard(msg, payload)"
               />
 
                                 <!-- AI Stalled Thinking Prompt (Moved out to be sibling to msg.content) -->
@@ -2091,6 +2098,7 @@ import ToolPermissionCard from "@/components/chat/ToolPermissionCard.vue";
 import GroundingBlockedCard from "@/components/GroundingBlockedCard.vue";
 import BusinessConfirmationCard from "@/components/BusinessConfirmationCard.vue";
 import UserQuestionCard from "@/components/UserQuestionCard.vue";
+import UiCardHost from "@/components/UiCardHost.vue";
 import DatasetCapabilityMenu from "@/components/chatbi/DatasetCapabilityMenu.vue";
 import DatasetPortalDrawer from "@/components/chatbi/DatasetPortalDrawer.vue";
 import ChatBIInsightPanel from "@/components/chatbi/ChatBIInsightPanel.vue";
@@ -2231,6 +2239,11 @@ import {
   buildUserQuestionUserMessage,
   type UserQuestionState,
 } from "@/utils/userQuestion";
+import {
+  buildUiCardUserMessage,
+  type UiCardState,
+} from "@/utils/uiCard";
+import { visibleUserMessageContent } from "@/utils/hitlReceiptDisplay";
 // --- Types ---
 interface LogEntry {
   id: number | string;
@@ -2242,7 +2255,7 @@ interface LogEntry {
   error_reason?: string;
   isExpanded: boolean;
   isRouter?: boolean;
-  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'tool_resolution' | 'intent' | 'permission' | 'external' | 'model' | 'agent' | 'context' | 'business_confirmation' | 'user_question' | 'system' | 'default';
+  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'tool_resolution' | 'intent' | 'permission' | 'external' | 'model' | 'agent' | 'context' | 'business_confirmation' | 'user_question' | 'ui_card' | 'system' | 'default';
   tool_name?: string;
   file_metadata?: import("@/utils/processTimeline").FileToolMetadata;
   resolution_status?: 'disabled' | 'missing' | 'filtered';
@@ -2402,6 +2415,7 @@ interface Message {
   };
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
+  uiCard?: UiCardState;
   _hasSilentlyRefreshed?: boolean;
 }
 
@@ -6612,6 +6626,55 @@ const hasMoreHistory = ref(true);
 const HISTORY_LIMIT = 20;
 const isLoadingHistory = ref(false);
 let historyRequestSequence = 0;
+const mapServerConversationMessages = (rawMessages: any[], idOffset = 0): Message[] => {
+  const batch: Message[] = [];
+  rawMessages.forEach((item: any, idx: number) => {
+    const role = String(item?.role || "").toLowerCase();
+    if (role === "user") {
+      batch.push({
+        id: Date.now() + idx * 2 + idOffset,
+        trace_id: item.trace_id,
+        role: "user",
+        content: String(item.content || ""),
+        files: Array.isArray(item.files) ? item.files : undefined,
+        logs: [],
+        isThinking: false,
+        feedback: null,
+        timestamp: item.timestamp,
+      });
+      return;
+    }
+    if (role !== "assistant" && role !== "agent") return;
+    if (!(item.content || item.process_timeline || item.reasoning_content)) return;
+    batch.push({
+      id: Date.now() + idx * 2 + 1 + idOffset,
+      trace_id: item.trace_id,
+      role: "agent",
+      content: String(item.content || ""),
+      reasoningContent: item.reasoning_content ?? undefined,
+      processTimeline: hydrateHistoryProcessTimeline(item.process_timeline, item.reasoning_content),
+      logs: [],
+      isThinking: false,
+      feedback: item.feedback ?? null,
+      agentName: item.agent_name ?? undefined,
+      agentDisplayName: item.agent_display_name || (String(item.agent_name || "").startsWith("sys_") ? "系统助手" : undefined),
+      agentType: item.agent_type ?? undefined,
+      prompt_tokens: item.prompt_tokens ?? undefined,
+      completion_tokens: item.completion_tokens ?? undefined,
+      total_tokens: item.total_tokens ?? undefined,
+      hasDataOutput: Boolean(item.has_data_output),
+      reusableResultStatus: item.reusable_result_id
+        ? {
+            status: item.reusable_result_status || "saved",
+            resultId: String(item.reusable_result_id),
+          }
+        : undefined,
+      timestamp: item.timestamp,
+    });
+  });
+  return batch;
+};
+
 const fetchConversationHistory = async (
   isLoadMore = false,
   expectedInitializationGeneration = conversationInitializationGeneration,
@@ -6632,11 +6695,11 @@ const fetchConversationHistory = async (
       headers["Authorization"] = `Bearer ${config.token}`;
       headers["X-API-Key"] = config.token;
     }
-    const page = Math.floor((isLoadMore ? historyOffset.value : 0) / HISTORY_LIMIT) + 1;
+    const offset = isLoadMore ? historyOffset.value : 0;
     const res = await axios.get(
-      `/api/v1/chat/history`,
+      `/api/v1/chat/conversation/${encodeURIComponent(historyConversationId)}`,
       {
-          params: { conversation_id: historyConversationId, page: page, page_size: HISTORY_LIMIT },
+          params: { limit: HISTORY_LIMIT, offset },
           headers
       }
     );
@@ -6645,112 +6708,63 @@ const fetchConversationHistory = async (
       expectedInitializationGeneration !== conversationInitializationGeneration ||
       conversationId.value !== historyConversationId
     ) return;
-    if (res.data?.data && Array.isArray(res.data.data.items)) {
-      const rawItems = res.data.data.items;
-      // Update offset and check if more
-      if (rawItems.length < HISTORY_LIMIT) {
-        hasMoreHistory.value = false;
-      }
-      historyOffset.value += rawItems.length;
+    const rawMessages = Array.isArray(res.data?.data?.messages) ? res.data.data.messages : [];
+    if (rawMessages.length < HISTORY_LIMIT) {
+      hasMoreHistory.value = false;
+    }
+    historyOffset.value += rawMessages.length;
 
-      const newHistoryBatch: Message[] = [];
-      const offset = isLoadMore ? historyOffset.value : 0;
-
-      // Items are returned newest first. Reverse to oldest first for UI.
-      const sortedItems = [...rawItems].reverse();
-
-      sortedItems.forEach((item: any, idx: number) => {
-          if (item.query) {
-              newHistoryBatch.push({
-                  id: Date.now() + idx * 2 + offset,
-                  trace_id: item.trace_id,
-                  role: 'user',
-                  content: item.query,
-                  logs: [],
-                  isThinking: false,
-                  feedback: null,
-                  timestamp: item.created_at
-              });
-          }
-          if (item.summary || item.process_timeline || item.reasoning_content) {
-              newHistoryBatch.push({
-                  id: Date.now() + idx * 2 + 1 + offset,
-                  trace_id: item.trace_id,
-                  role: 'agent',
-                  content: item.summary,
-                  reasoningContent: item.reasoning_content ?? undefined,
-                  processTimeline: hydrateHistoryProcessTimeline(item.process_timeline, item.reasoning_content),
-                  logs: [],
-                  isThinking: false,
-                  feedback: null,
-                  agentName: item.agent_name ?? undefined,
-                  agentDisplayName: item.agent_display_name || (String(item.agent_name || '').startsWith('sys_') ? '系统助手' : undefined),
-                  agentType: item.agent_type ?? undefined,
-                  prompt_tokens: item.prompt_tokens ?? undefined,
-                  completion_tokens: item.completion_tokens ?? undefined,
-                  total_tokens: item.total_tokens ?? undefined,
-                  hasDataOutput: Boolean(item.has_data_output),
-                  reusableResultStatus: item.reusable_result_id
-                    ? {
-                        status: item.reusable_result_status || "saved",
-                        resultId: String(item.reusable_result_id),
-                      }
-                    : undefined,
-                  timestamp: item.created_at
-              });
-          }
-      });
-      if (newHistoryBatch.length > 0) {
-        if (
-          requestSequence !== historyRequestSequence ||
-          expectedInitializationGeneration !== conversationInitializationGeneration ||
-          conversationId.value !== historyConversationId
-        ) return;
-        if (isLoadMore) {
-           // Prepend to messages (remove existing "History Start" separator if it exists)
-           messages.value = [...newHistoryBatch, ...messages.value.filter(m => m.role !== 'system' || m.content !== '以上是历史会话，可以重置会话清除')];
-           // Restore scroll position
-           await nextTick();
-           if (
-             requestSequence !== historyRequestSequence ||
-             expectedInitializationGeneration !== conversationInitializationGeneration ||
-             conversationId.value !== historyConversationId
-           ) return;
-           if (container) {
-             const newScrollHeight = container.scrollHeight;
-             const heightAdded = newScrollHeight - oldScrollHeight;
-             // Use behavior: 'instant' to prevent jumps and ignore any default scrolling behaviors
-             container.scrollTo({
-                top: heightAdded + oldScrollTop,
-                behavior: 'instant' as any
-             });
-           }
-        } else {
-          // First Load
-          // Add Separator
-           const lastMsgInfo = rawItems.length > 0 ? rawItems[0] : null;
-          let timeStr = "";
-          if (lastMsgInfo && lastMsgInfo.created_at) {
-             try {
-                const date = new Date(lastMsgInfo.created_at);
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, "0");
-                const day = String(date.getDate()).padStart(2, "0");
-                const hours = String(date.getHours()).padStart(2, "0");
-                const minutes = String(date.getMinutes()).padStart(2, "0");
-                timeStr = `${year}-${month}-${day} ${hours}:${minutes}`;
-             } catch (e) {}
-          }
-          newHistoryBatch.push({
-            id: Date.now() + 999999,
-            role: "system",
-            content: "以上是历史会话，可以重置会话清除",
-            timestamp: timeStr,
-          });
-          messages.value = newHistoryBatch;
-          nextTick(scrollToBottom);
+    const newHistoryBatch = mapServerConversationMessages(rawMessages, offset);
+    if (newHistoryBatch.length > 0) {
+      if (
+        requestSequence !== historyRequestSequence ||
+        expectedInitializationGeneration !== conversationInitializationGeneration ||
+        conversationId.value !== historyConversationId
+      ) return;
+      if (isLoadMore) {
+         // Prepend to messages (remove existing "History Start" separator if it exists)
+         messages.value = [...newHistoryBatch, ...messages.value.filter(m => m.role !== 'system' || m.content !== '以上是历史会话，可以重置会话清除')];
+         // Restore scroll position
+         await nextTick();
+         if (
+           requestSequence !== historyRequestSequence ||
+           expectedInitializationGeneration !== conversationInitializationGeneration ||
+           conversationId.value !== historyConversationId
+         ) return;
+         if (container) {
+           const newScrollHeight = container.scrollHeight;
+           const heightAdded = newScrollHeight - oldScrollHeight;
+           // Use behavior: 'instant' to prevent jumps and ignore any default scrolling behaviors
+           container.scrollTo({
+              top: heightAdded + oldScrollTop,
+              behavior: 'instant' as any
+           });
+         }
+      } else {
+        const lastMsgInfo = rawMessages[rawMessages.length - 1];
+        let timeStr = "";
+        if (lastMsgInfo && lastMsgInfo.timestamp) {
+           try {
+              const date = new Date(lastMsgInfo.timestamp);
+              const year = date.getFullYear();
+              const month = String(date.getMonth() + 1).padStart(2, "0");
+              const day = String(date.getDate()).padStart(2, "0");
+              const hours = String(date.getHours()).padStart(2, "0");
+              const minutes = String(date.getMinutes()).padStart(2, "0");
+              timeStr = `${year}-${month}-${day} ${hours}:${minutes}`;
+           } catch (e) {}
         }
+        newHistoryBatch.push({
+          id: Date.now() + 999999,
+          role: "system",
+          content: "以上是历史会话，可以重置会话清除",
+          timestamp: timeStr,
+        });
+        messages.value = newHistoryBatch;
+        nextTick(scrollToBottom);
       }
+    } else if (!isLoadMore) {
+      hasMoreHistory.value = false;
     }
   } catch (e) {
     console.warn("Failed to load session history", e);
@@ -7834,6 +7848,25 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
+  userInput.value = content;
+  await sendMessage();
+};
+
+const submitUiCard = async (
+  msg: Message,
+  payload: { action: string; payload: Record<string, unknown> },
+) => {
+  const card = msg.uiCard;
+  if (!card || card.status !== "pending" || isProcessing.value) return;
+  const content = buildUiCardUserMessage(
+    card.card_id,
+    card.card_key,
+    payload.action,
+    payload.payload,
+  );
+  card.action = payload.action;
+  card.payload = payload.payload;
+  card.status = "submitted";
   userInput.value = content;
   await sendMessage();
 };
