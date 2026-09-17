@@ -46,6 +46,16 @@ def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     assert embed_path_allowed("GET", "/api/portal/models") is True
     assert embed_path_allowed("POST", "/api/portal/models") is False
     assert embed_path_allowed("DELETE", "/api/portal/saved-reports/abc") is False
+    assert embed_path_allowed("POST", "/api/portal/chatbi-monitors") is True
+    assert embed_path_allowed("POST", "/api/portal/chatbi-export/result") is True
+    assert embed_path_allowed("PUT", "/api/portal/portal-prefs/markdown-theme") is True
+    assert embed_path_allowed("GET", "/api/portal/memory/my/summaries") is True
+    assert embed_path_allowed("GET", "/api/portal/memory/my/summaries/conv-1") is True
+    assert embed_path_allowed("DELETE", "/api/portal/memory/my/summaries/conv-1") is True
+    assert embed_path_allowed("DELETE", "/api/portal/memory/my/session-memory") is True
+    assert embed_path_allowed("GET", "/api/portal/memory/my/ltm") is False
+    assert embed_path_allowed("GET", "/api/portal/memory/summaries") is False
+    assert embed_path_allowed("DELETE", "/api/portal/memory/users/7") is False
 
 
 def test_embed_identity_helpers_force_non_admin_and_stable_shadow_name():

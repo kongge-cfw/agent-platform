@@ -195,6 +195,7 @@ class DataPortalHomeService:
         user_id: int,
         role_ids: Optional[Iterable[int]] = None,
         now: Optional[datetime] = None,
+        session_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         role_ids = [int(value) for value in (role_ids or [])]
         visible_conditions = [PortalSavedReport.owner_user_id == user_id]
@@ -286,7 +287,7 @@ class DataPortalHomeService:
             conversation_result = await db.execute(
                 select(AgentExecutionHistory)
                 .where(
-                    AgentExecutionHistory.user_id == str(user_id),
+                    AgentExecutionHistory.user_id == str(session_user_id or user_id),
                     AgentExecutionHistory.agent_id.in_(list(data_agents)),
                     AgentExecutionHistory.conversation_id.isnot(None),
                 )

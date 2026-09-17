@@ -37,11 +37,28 @@ from app.services.sql_query_execution_service import (
     attach_permission_notice_to_payload,
     execute_sql_query_core,
 )
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.services.saved_report_subscription_service import schedule_to_cron
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_session_user_id(user_info: Dict[str, Any]) -> str:
+    """会话 Redis 缓存钥匙：嵌入用 session_owner，报表 ACL 仍用平台整型 user_id。"""
+    try:
+        return require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def _require_session_user_id(user_info: Dict[str, Any]) -> str:
+    """会话 Redis 缓存钥匙：嵌入用 session_owner，报表 ACL 仍用平台整型 user_id。"""
+    try:
+        return require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 class SaveReportRequest(BaseModel):
     title: str = Field(..., description="报表自定义标题")
@@ -2196,7 +2213,9 @@ async def analyze_saved_report(
         try:
             from app.services.ai.memory_service import memory_service
 
-            cached = await memory_service.get_last_data_result(str(user_id), conv_id)
+            cached = await memory_service.get_last_data_result(
+                _require_session_user_id(user_info), conv_id
+            )
         except Exception:
             cached = None
         if isinstance(cached, dict) and str(cached.get("report_id") or "") == str(report_id):
@@ -2255,13 +2274,14 @@ async def analyze_saved_report(
         try:
             from app.services.ai.memory_service import memory_service
 
-            cached = await memory_service.get_last_data_result(str(user_id), conv_id)
+            session_uid = _require_session_user_id(user_info)
+            cached = await memory_service.get_last_data_result(session_uid, conv_id)
             if isinstance(cached, dict) and str(cached.get("report_id") or "") == str(report_id):
                 cached = dict(cached)
                 cached["analysis"] = analysis_result.get("analysis")
                 cached["column_labels"] = column_labels or cached.get("column_labels")
                 cached["column_meta"] = column_meta or cached.get("column_meta")
-                await memory_service.set_last_data_result(str(user_id), conv_id, cached)
+                await memory_service.set_last_data_result(session_uid, conv_id, cached)
         except Exception as cache_err:
             logger.warning("Failed to update analysis in last_data_result: %s", cache_err)
 
@@ -2470,7 +2490,7 @@ async def _execute_saved_report_impl(
                     "saved_at": datetime.now(timezone.utc).isoformat(),
                     "trace_id": None,
                 }
-                await memory_service.set_last_data_result(str(user_id), conversation_id, cache_payload)
+                await memory_service.set_last_data_result(_require_session_user_id(user_info), conversation_id, cache_payload)
             except Exception as cache_err:
                 logger.warning("Failed to save report data to memory_service cache: %s", cache_err)
 

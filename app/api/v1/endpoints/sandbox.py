@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from app.core.dependencies import require_api_key
 from app.schemas.response import StandardResponse
+from app.services.ai.conversation_identity import try_session_user_id
 from app.services.ai.runtime.agentscope.k8s_workspace import K8sSandboxUnavailableError
 from app.services.ai.runtime.agentscope.docker_prebuild import (
     docker_workspace_prebuild_status,
@@ -288,7 +289,7 @@ async def ensure_docker_workspace_endpoint(
 
     try:
         workspace = await ensure_docker_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -329,7 +330,7 @@ async def stop_docker_workspace_endpoint(
 
     try:
         result = await stop_docker_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -366,7 +367,7 @@ async def restart_docker_workspace_endpoint(
 
     try:
         result = await restart_docker_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -403,7 +404,7 @@ async def exec_docker_workspace_endpoint(
 
     try:
         result = await exec_docker_workspace_command_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -442,7 +443,7 @@ async def get_docker_workspace_status_endpoint(
 
     try:
         status = await docker_workspace_status_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -489,7 +490,7 @@ async def ensure_k8s_workspace_endpoint(
 
     try:
         result = await ensure_k8s_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -526,7 +527,7 @@ async def stop_k8s_workspace_endpoint(
 
     try:
         result = await stop_k8s_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -563,7 +564,7 @@ async def restart_k8s_workspace_endpoint(
 
     try:
         result = await restart_k8s_workspace_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -600,7 +601,7 @@ async def get_k8s_workspace_status_endpoint(
 
     try:
         status = await k8s_workspace_status_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,
@@ -637,7 +638,7 @@ async def exec_k8s_workspace_endpoint(
 
     try:
         result = await exec_k8s_workspace_command_runtime(
-            user_id=user_info.get("user_id") or user_info.get("id"),
+            user_id=try_session_user_id(user_info) or user_info.get("user_id") or user_info.get("id"),
             user_name=user_info.get("user_name") or user_info.get("username"),
             user_info=user_info,
             conversation_id=conversation_id,

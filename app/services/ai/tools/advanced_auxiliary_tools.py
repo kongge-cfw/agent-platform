@@ -17,17 +17,30 @@ logger = logging.getLogger(__name__)
 _LEGACY_SANDBOX_DIR = os.path.join("data", "sandbox")
 
 
+def _workspace_user_info_from_context(ctx) -> Optional[Dict[str, Any]]:
+    """工作区路径用会话 owner；不要只用签发人 ctx.user_id 拼 user_info。"""
+    from app.services.ai.conversation_identity import (
+        try_session_user_id_from_agent_context,
+        user_info_from_agent_context,
+    )
+
+    if ctx is None:
+        return None
+    if try_session_user_id_from_agent_context(ctx) is None and getattr(ctx, "user_id", None) is None:
+        return None
+    user_info = user_info_from_agent_context(ctx)
+    user_info["role"] = "admin" if bool(getattr(ctx, "is_admin", False)) else "user"
+    return user_info
+
+
 def _resolve_sqlite_scratchpad_dir() -> str:
     """优先使用当前用户私有 sandbox；无 Agent 上下文时回退旧公共目录（单测/脚本）。"""
     from app.core.context import get_current_agent_context
     from app.utils.fs_access import get_user_sandbox_dir
 
     ctx = get_current_agent_context()
-    if ctx and ctx.user_id is not None:
-        user_info = {
-            "user_id": ctx.user_id,
-            "role": "admin" if ctx.is_admin else "user",
-        }
+    user_info = _workspace_user_info_from_context(ctx)
+    if user_info:
         sandbox_dir = get_user_sandbox_dir(user_info)
         if sandbox_dir:
             return sandbox_dir
@@ -102,21 +115,7 @@ def directory_tree_navigator(path: str, suffix: str = None, keyword: str = None)
     try:
         ctx = get_current_agent_context()
         is_admin = bool(getattr(ctx, "is_admin", False))
-        user_info = None
-        if ctx is not None and getattr(ctx, "user_id", None) is not None:
-            dimensions = getattr(ctx, "user_dimensions", None) or {}
-            user_name = None
-            if isinstance(dimensions, dict):
-                raw_name = dimensions.get("user_name") or dimensions.get("username")
-                user_name = str(raw_name).strip() if raw_name is not None else None
-                user_name = user_name or None
-            user_info = {
-                "user_id": ctx.user_id,
-                "id": ctx.user_id,
-                "user_name": user_name,
-                "username": user_name,
-                "role": "admin" if is_admin else "user",
-            }
+        user_info = _workspace_user_info_from_context(ctx)
 
         from app.services.ai.runtime.agentscope.workspace import default_workspace_root
         from app.utils.fs_access import (

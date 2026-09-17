@@ -231,6 +231,7 @@ async def _write_export_file(
     result_id: Optional[str],
 ) -> tuple[Path, Path]:
     """构造 DataFrame 并写 CSV/XLSX 到用户工作区 export 目录，返回 (workspace_root, file_path)。"""
+    from app.services.ai.conversation_identity import try_session_user_id
     from app.services.ai.runtime.agentscope.workspace import (
         resolve_workspace_root,
         resolve_workspace_user_key,
@@ -239,7 +240,7 @@ async def _write_export_file(
     df = pd.DataFrame(rows, columns=columns)
     workspace_root = Path((await resolve_workspace_root()) or ".")
     user_key = resolve_workspace_user_key(
-        user_id=user_id,
+        user_id=try_session_user_id(user_info) or user_id,
         user_name=user_info.get("user_name"),
     )
     export_dir = workspace_root / user_key / "export"

@@ -242,6 +242,12 @@ async def register_artifact(
 
     if owner_user_id is None:
         raise ValueError("登记工作区产物需要 owner_user_id")
+    try:
+        owner_int = int(owner_user_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "ai_artifacts.owner_user_id 必须为平台用户整型 ID，不能使用会话 owner"
+        ) from exc
 
     expires_at = datetime.now(timezone.utc) + ttl
     token = secrets.token_urlsafe(32)
@@ -249,7 +255,7 @@ async def register_artifact(
     async with AsyncSessionLocal() as session:
         artifact = AiArtifact(
             id=uuid.uuid4().hex,
-            owner_user_id=int(owner_user_id),
+            owner_user_id=owner_int,
             conversation_id=conversation_id or None,
             trace_id=trace_id or None,
             artifact_type=artifact_type,

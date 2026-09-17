@@ -5,6 +5,18 @@ from app.services.ai.memory_service import ltm_service
 
 logger = logging.getLogger(__name__)
 
+
+def _ltm_user_id(requested: str | None = None) -> str | None:
+    """长期记忆必须跟会话 owner 隔离；忽略模型传入的他人/签发人 ID。"""
+    from app.core.context import get_current_agent_context
+    from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+
+    uid = try_session_user_id_from_agent_context(get_current_agent_context())
+    if uid:
+        return uid
+    requested = str(requested or "").strip()
+    return requested or None
+
 @tool
 async def update_user_preference(user_id: str, key: str, value: str) -> str:
     """
@@ -16,7 +28,10 @@ async def update_user_preference(user_id: str, key: str, value: str) -> str:
         value: 对应的具体偏好内容值 (如 dark, Chinese, senior_data_analyst)。
     """
     try:
-        success = await ltm_service.update_preference(user_id, key, value)
+        uid = _ltm_user_id(user_id)
+        if not uid:
+            return "无法识别当前用户，拒绝写入长期记忆。"
+        success = await ltm_service.update_preference(uid, key, value)
         if success:
             return f"成功持久化保存用户偏好记忆！已记录 '{key}': '{value}'。"
         else:
@@ -33,7 +48,10 @@ async def fetch_user_long_term_memory(user_id: str) -> str:
         user_id: 用户的 ID 标识。
     """
     try:
-        data = await ltm_service.fetch_memory(user_id)
+        uid = _ltm_user_id(user_id)
+        if not uid:
+            return "无法识别当前用户，拒绝检索长期记忆。"
+        data = await ltm_service.fetch_memory(uid)
         if not data:
             return "当前用户没有任何长期记忆或事实偏好记录。"
             
@@ -51,7 +69,10 @@ async def delete_user_preference(user_id: str, key: str) -> str:
         key: 需要清除的长期偏好或事实的键名。
     """
     try:
-        success = await ltm_service.delete_preference(user_id, key)
+        uid = _ltm_user_id(user_id)
+        if not uid:
+            return "无法识别当前用户，拒绝清除长期记忆。"
+        success = await ltm_service.delete_preference(uid, key)
         if success:
             return f"成功删除用户偏好记忆！已清除键为 '{key}' 的偏好记录。"
         else:

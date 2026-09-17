@@ -85,7 +85,25 @@ def user_info_from_agent_context(context: Any) -> dict[str, Any]:
         "user_name": dims.get("user_name") or dims.get("username"),
         "username": dims.get("username") or dims.get("user_name"),
         "session_owner": dims.get("session_owner") or "",
+        "external_subject": dims.get("external_subject") or "",
     }
+
+
+def prompt_display_user_id(user_info: Any) -> str:
+    """提示词/画像展示用的业务身份，不是控制面签发人。
+
+    嵌入优先 ``external_subject``，否则 ``session_owner``；不要把 ``user_id=1``
+    或哈希 ``e:…`` 以外的平台整型误当成宿主业务用户编号。
+    """
+    if not isinstance(user_info, Mapping):
+        return ""
+    subject = str(user_info.get("external_subject") or "").strip()
+    if subject:
+        return subject
+    owner = str(user_info.get("session_owner") or "").strip()
+    if owner:
+        return owner
+    return str(user_info.get("user_id") or user_info.get("id") or "").strip()
 
 
 _SESSION_OWNER_BIGINT_FLAG = 0x4000000000000000
@@ -120,5 +138,6 @@ __all__ = [
     "session_user_id_from_agent_context",
     "try_session_user_id_from_agent_context",
     "user_info_from_agent_context",
+    "prompt_display_user_id",
     "session_numeric_user_id",
 ]

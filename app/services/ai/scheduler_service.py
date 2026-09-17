@@ -1135,9 +1135,15 @@ async def _system_memory_consolidation_job():
             user_ids = result.scalars().all()
             
         logger.info(f"Loaded {len(user_ids)} active users for memory consolidation.")
-        
-        # 3. 逐个用户执行记忆降噪合并
-        for u_id in user_ids:
+        embed_owners = await MemoryIndexService.list_embed_memory_owner_ids()
+        if embed_owners:
+            logger.info(
+                "Loaded %s embed session owners for memory consolidation.",
+                len(embed_owners),
+            )
+
+        # 3. 逐个用户执行记忆降噪合并（平台用户 + 嵌入 session_owner）
+        for u_id in list(user_ids) + embed_owners:
             try:
                 # 传入 str(u_id) 因为记忆是以 string 作为 user_id 键存储的
                 await MemoryIndexService.consolidate_user_memories(str(u_id))

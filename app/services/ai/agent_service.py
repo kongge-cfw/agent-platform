@@ -58,7 +58,12 @@ from app.services.ai.turn_decision import (
 )
 from app.services.ai.intent_service import looks_like_current_model_query
 from app.services.ai.business_context import sanitize_injected_context
-from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
+from app.services.ai.conversation_identity import (
+    MissingUserIdentityError,
+    prompt_display_user_id,
+    require_user_id,
+    try_session_user_id,
+)
 from app.services.schema_chunk_format import estimate_text_tokens
 
 logger = logging.getLogger(__name__)
@@ -531,7 +536,7 @@ def _build_request_validation_log(
     """
     metadata = request_observability or {}
     user_info = user_info or {}
-    user_id = str(user_info.get("user_id") or user_info.get("id") or "未知")
+    user_id = prompt_display_user_id(user_info) or "未知"
     user_name = str(
         user_info.get("real_name")
         or user_info.get("user_name")
@@ -899,7 +904,7 @@ class AgentService:
         Builds a read-only system message from verified API Key identity.
         """
         raw_name = user_info.get("user_name") or user_info.get("username", "Unknown User")
-        user_id = str(user_info.get("user_id") or user_info.get("id") or "")
+        user_id = prompt_display_user_id(user_info)
         real_name = user_info.get("real_name") or raw_name
         dept = user_info.get("dept_name") or user_info.get("department")
         org_path = user_info.get("org_path")
@@ -1914,7 +1919,7 @@ class AgentService:
             ignore_ltm = True
 
         if not ignore_ltm and should_inject_ltm(early_turn_kind) and user_info:
-            u_id = user_info.get("user_id", user_info.get("id"))
+            u_id = try_session_user_id(user_info)
             if u_id:
                 try:
                     from app.services.ai.memory_service import ltm_service
@@ -1941,7 +1946,7 @@ class AgentService:
 
         preloaded_memories_text: Optional[str] = None
         if should_run_active_memory_preload(early_turn_kind) and user_info and user_query:
-            u_id = user_info.get("user_id", user_info.get("id"))
+            u_id = try_session_user_id(user_info)
             if u_id:
                 try:
                     from app.services.memory_config_service import MemoryConfigService

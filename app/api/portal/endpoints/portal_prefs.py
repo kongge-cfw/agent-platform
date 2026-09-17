@@ -17,6 +17,7 @@ from app.core.dependencies import require_api_key
 from app.core.orm import get_db_session
 from app.core.redis import get_redis
 from app.services.ai.agent_manager import AgentManagerService
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,16 @@ MAX_CARD_ORDER = 200   # 最多记录排序的卡片数
 MAX_QUESTION_CLICKS = 500  # 最多记录的问题点击 key 数
 
 
-def _redis_key(user_id: int) -> str:
+def _redis_key(user_id: int | str) -> str:
     return f"agent:portal_prefs:{user_id}"
+
+
+def _prefs_user_id(user_info: Dict[str, Any]) -> str:
+    """门户偏好 Redis 钥匙：嵌入用 session_owner，避免多个业务用户共用签发人。"""
+    try:
+        return require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
 class PortalPrefs(BaseModel):
@@ -82,7 +91,7 @@ async def get_portal_prefs(
     if not redis:
         return {"code": 0, "data": PortalPrefs().model_dump()}
 
-    user_id = int(user_info["user_id"])
+    user_id = _prefs_user_id(user_info)
     key = _redis_key(user_id)
     try:
         raw = await redis.get(key)
@@ -119,7 +128,7 @@ async def update_portal_prefs(
             detail="Redis 服务不可用",
         )
 
-    user_id = int(user_info["user_id"])
+    user_id = _prefs_user_id(user_info)
     key = _redis_key(user_id)
 
     existing = PortalPrefs()
@@ -251,7 +260,7 @@ async def update_routing_prefs(
             detail="Redis 服务不可用",
         )
 
-    user_id = int(user_info["user_id"])
+    user_id = _prefs_user_id(user_info)
     key = _redis_key(user_id)
     prefs = PortalPrefs()
     try:
@@ -304,7 +313,7 @@ async def update_markdown_theme(
             detail="Redis 服务不可用",
         )
 
-    user_id = int(user_info["user_id"])
+    user_id = _prefs_user_id(user_info)
     key = _redis_key(user_id)
 
     # 1. 读取原有的配置

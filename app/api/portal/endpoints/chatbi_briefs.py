@@ -10,12 +10,14 @@ from app.core.orm import get_db_session
 from app.models.chatbi_analysis import ChatBIBrief
 from app.schemas.response import StandardResponse
 from app.services.ai.chatbi_result_stack import ChatBIResultRef, resolve_result_reference
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.services.ai.memory_service import memory_service
 from app.services.chatbi_brief_service import (
     BriefInputError,
     build_business_brief_async,
     publish_business_brief_docx,
 )
+from app.services.embed_identity import platform_acl_user_id
 
 router = APIRouter()
 
@@ -37,10 +39,16 @@ async def create_chatbi_brief(
     user_info=Depends(require_api_key),
     db: AsyncSession = Depends(get_db_session),
 ):
-    user_id = str(user_info["user_id"])
-    stack = await memory_service.get_data_result_stack(user_id, body.conversation_id)
+    try:
+        session_uid = require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    owner_id = platform_acl_user_id(user_info)
+    if owner_id is None:
+        raise HTTPException(status_code=401, detail="当前用户身份格式无效")
+    stack = await memory_service.get_data_result_stack(session_uid, body.conversation_id)
     if not stack:
-        legacy = await memory_service.get_current_data_result(user_id, body.conversation_id)
+        legacy = await memory_service.get_current_data_result(session_uid, body.conversation_id)
         stack = [legacy] if legacy else []
     refs = [ChatBIResultRef.from_dict(item) for item in stack if isinstance(item, dict)]
     reference = resolve_result_reference(
@@ -65,7 +73,8 @@ async def create_chatbi_brief(
         artifact_payload = (
             await publish_business_brief_docx(
                 brief,
-                owner_user_id=user_id,
+                owner_user_id=owner_id,
+                workspace_user_id=session_uid,
                 user_name=user_info.get("user_name") or user_info.get("username"),
                 conversation_id=body.conversation_id,
             )
@@ -73,7 +82,7 @@ async def create_chatbi_brief(
     brief_id = f"brief_{uuid.uuid4().hex}"
     row = ChatBIBrief(
         id=brief_id,
-        owner_user_id=int(user_id),
+        owner_user_id=owner_id,
         conversation_id=body.conversation_id,
         result_id=reference.result.result_id,
         title=brief["title"],

@@ -198,6 +198,17 @@ async def test_update_expert_routing_rejects_forbidden_agent(monkeypatch):
     assert redis.saved is None
 
 
+def test_portal_prefs_redis_key_isolates_embed_session_owner():
+    owner = "e:" + "a" * 40
+    native = portal_prefs._prefs_user_id(user_info(user_id=1))
+    embed = portal_prefs._prefs_user_id(
+        {"user_id": 1, "session_owner": owner, "role": "user"}
+    )
+    assert native == "1"
+    assert embed == owner
+    assert portal_prefs._redis_key(native) != portal_prefs._redis_key(embed)
+
+
 async def _resolved(value):
     return value
 

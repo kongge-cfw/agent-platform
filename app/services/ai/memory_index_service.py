@@ -1,6 +1,7 @@
 """RediSearch-backed session summary index with SCAN fallback."""
 import json
 import logging
+import re
 import struct
 import time
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,8 @@ from app.services.memory_config_service import MemoryConfigService
 logger = logging.getLogger(__name__)
 
 SUMMARY_KEY_PREFIX = "memory:summary:"
+_DAILY_SUMMARY_KEY_PREFIX = "memory:summary:daily:"
+_EMBED_SESSION_OWNER_RE = re.compile(r"^e:[0-9a-f]{40}$")
 # RediSearch 索引名（固定，不可通过 memory_service_configs 修改）
 MEMORY_REDIS_INDEX_NAME = "nanzi:idx:memory:session_summary"
 
@@ -23,6 +26,21 @@ _ensure_index_cache: Dict[str, tuple] = {}  # idx -> (ok_expires_monotonic, ok_b
 
 def _doc_key(user_id: str, conversation_id: str) -> str:
     return f"{SUMMARY_KEY_PREFIX}{user_id}:{conversation_id}"
+
+
+def embed_owner_from_memory_key(key: Any) -> Optional[str]:
+    """从 memory:summary: / memory:summary:daily: 钥匙解析嵌入 session_owner。"""
+    text = key.decode("utf-8") if isinstance(key, bytes) else str(key or "")
+    if text.startswith(_DAILY_SUMMARY_KEY_PREFIX):
+        rest = text[len(_DAILY_SUMMARY_KEY_PREFIX):]
+    elif text.startswith(SUMMARY_KEY_PREFIX):
+        rest = text[len(SUMMARY_KEY_PREFIX):]
+    else:
+        return None
+    owner = rest[:42]
+    if _EMBED_SESSION_OWNER_RE.fullmatch(owner):
+        return owner
+    return None
 
 
 def _conversation_id_from_doc_key(key: str, user_id: str) -> str:
@@ -631,6 +649,23 @@ class MemoryIndexService:
             await redis.delete(key)
             count += 1
         return count
+
+    @staticmethod
+    async def list_embed_memory_owner_ids() -> List[str]:
+        """扫描 Redis 中嵌入会话的记忆 owner（``e:`` + 40 位 hex）。"""
+        redis = await get_redis()
+        if not redis:
+            return []
+        owners: set[str] = set()
+        for pattern in (
+            f"{SUMMARY_KEY_PREFIX}e:*",
+            f"{_DAILY_SUMMARY_KEY_PREFIX}e:*",
+        ):
+            async for key in redis.scan_iter(match=pattern, count=200):
+                owner = embed_owner_from_memory_key(key)
+                if owner:
+                    owners.add(owner)
+        return sorted(owners)
 
     @staticmethod
     async def consolidate_user_memories(user_id: str) -> None:

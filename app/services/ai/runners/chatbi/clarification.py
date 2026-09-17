@@ -35,9 +35,10 @@ def _build_user_profile_block(runner: Any) -> str | None:
     if not runner.user_info:
         return None
     from app.services.ai.agent_prompts import AgentServicePrompts
+    from app.services.ai.conversation_identity import prompt_display_user_id
 
     raw_name = runner.user_info.get("user_name") or runner.user_info.get("username", "Unknown User")
-    user_id = str(runner.user_info.get("user_id") or runner.user_info.get("id") or "")
+    user_id = prompt_display_user_id(runner.user_info)
     real_name = runner.user_info.get("real_name") or raw_name
     dept = runner.user_info.get("dept_name") or runner.user_info.get("department")
     org_path = runner.user_info.get("org_path")

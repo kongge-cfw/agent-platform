@@ -299,6 +299,7 @@ async def publish_business_brief_docx(
     brief: Mapping[str, Any],
     *,
     owner_user_id: int | str,
+    workspace_user_id: int | str | None = None,
     user_name: str | None = None,
     conversation_id: str | None = None,
 ):
@@ -331,6 +332,7 @@ async def publish_business_brief_docx(
             path,
             path.name,
             owner_user_id=owner_user_id,
+            workspace_user_id=workspace_user_id,
             user_name=user_name,
             conversation_id=conversation_id,
             artifact_type="word",

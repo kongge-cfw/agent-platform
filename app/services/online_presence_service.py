@@ -34,7 +34,9 @@ class OnlinePresenceService:
         now: Optional[int] = None,
     ) -> bool:
         """记录用户活跃状态；同一用户最多每 30 秒写入一次。"""
-        user_id = _as_text(user_info.get("user_id")).strip()
+        from app.services.ai.conversation_identity import try_session_user_id
+
+        user_id = try_session_user_id(user_info) or _as_text(user_info.get("user_id")).strip()
         if not user_id:
             return False
 

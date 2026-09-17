@@ -18,3 +18,9 @@ def test_personal_memory_panel_exists_and_is_used_by_personal_center():
     assert "长期记忆" in panel
     assert "/api/portal/memory/my/" in panel
     assert "PersonalMemoryPanel" in center
+
+
+def test_memory_browser_drawer_uses_my_memory_apis():
+    drawer = _source("frontend/src/components/embed/MemoryBrowserDrawer.vue")
+    assert "/api/portal/memory/my/summaries" in drawer
+    assert "/api/portal/memory/my/session-memory" in drawer

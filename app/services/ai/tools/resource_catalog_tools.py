@@ -205,13 +205,16 @@ async def list_accessible_directories() -> str:
         )
 
         user_name = _context_user_name(ctx)
-        user_info = {
-            "user_id": ctx.user_id,
-            "id": ctx.user_id,
-            "user_name": user_name,
-            "username": user_name,
-            "role": "admin" if ctx.is_admin else "user",
-        }
+        from app.services.ai.conversation_identity import (
+            try_session_user_id,
+            user_info_from_agent_context,
+        )
+
+        user_info = user_info_from_agent_context(ctx)
+        user_info["role"] = "admin" if ctx.is_admin else "user"
+        if user_name:
+            user_info["user_name"] = user_name
+            user_info["username"] = user_name
         conversation_id = str(getattr(ctx, "conversation_id", "") or "").strip() or None
 
         policy_raw = await ConfigService.get("sandbox_policy", SANDBOX_POLICY_LOCAL)
@@ -220,7 +223,7 @@ async def list_accessible_directories() -> str:
 
         workspace_root = await resolve_workspace_root(ensure_exists=False)
         resolved_user_id, resolved_user_name = extract_workspace_identity(
-            user_id=ctx.user_id,
+            user_id=try_session_user_id(user_info) or ctx.user_id,
             user_name=user_name,
             user_info=user_info,
         )
@@ -509,7 +512,7 @@ async def list_accessible_directories() -> str:
             "deployment_environment": "docker_container" if is_container_env else "host_machine",
             "sandbox_execution_mode": "docker_sandbox" if is_docker_sandbox else "host_local",
             "user_identity": {
-                "user_id": ctx.user_id,
+                "user_id": try_session_user_id(user_info) or ctx.user_id,
                 "user_name": user_name,
                 "user_key": user_key,
                 "is_admin": bool(ctx.is_admin),

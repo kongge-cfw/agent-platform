@@ -103,7 +103,109 @@ async def test_delete_my_summary():
         )
 
     assert res["status"] == "success"
-    mock_delete.assert_awaited_once_with("7", "conv-123", include_summary=True)
+    mock_delete.assert_awaited_once_with(
+        "7",
+        "conv-123",
+        include_summary=True,
+        user_name="user_7",
+        user_info={"user_id": 7, "user_name": "user_7"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_my_summaries_uses_session_owner_without_int():
+    owner = "e:" + "a" * 40
+    rows = [
+        {
+            "user_id": owner,
+            "conversation_id": "conv-embed",
+            "summary": "嵌入会话摘要",
+            "last_active": 100,
+        }
+    ]
+    current_user = {
+        "user_id": 1,
+        "session_owner": owner,
+        "external_subject": "crm:zhangsan",
+        "display_name": "张三",
+        "user_name": "ext:crm:zhangsan",
+    }
+    with patch(
+        "app.api.portal.endpoints.memory.MemoryIndexService.list_summaries",
+        new_callable=AsyncMock,
+        return_value=rows,
+    ) as mock_list, patch(
+        "app.api.portal.endpoints.memory.memory_service.history_exists",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "app.api.portal.endpoints.memory._user_display_names",
+        new_callable=AsyncMock,
+        return_value={},
+    ) as mock_names:
+        res = await list_my_summaries(
+            keyword=None,
+            limit=10,
+            current_user=current_user,
+            _health={"ok": True},
+        )
+
+    mock_list.assert_awaited_once_with(owner, keyword=None, limit=10)
+    mock_names.assert_not_awaited()
+    assert res["status"] == "success"
+    assert res["data"][0]["user_id"] == owner
+    assert res["data"][0]["display_name"] == "张三"
+
+
+@pytest.mark.asyncio
+async def test_delete_my_summary_uses_session_owner():
+    owner = "e:" + "b" * 40
+    current_user = {
+        "user_id": 1,
+        "session_owner": owner,
+        "user_name": "ext:crm:lisi",
+    }
+    with patch(
+        "app.api.portal.endpoints.memory.memory_service.delete_session_memory",
+        new_callable=AsyncMock,
+    ) as mock_delete:
+        res = await delete_my_summary(
+            conversation_id="conv-embed",
+            current_user=current_user,
+            _health={"ok": True},
+        )
+
+    assert res["status"] == "success"
+    mock_delete.assert_awaited_once_with(
+        owner,
+        "conv-embed",
+        include_summary=True,
+        user_name="ext:crm:lisi",
+        user_info=current_user,
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_all_my_session_memory_uses_session_owner():
+    from app.api.portal.endpoints.memory import delete_all_my_session_memory
+
+    owner = "e:" + "c" * 40
+    with patch(
+        "app.api.portal.endpoints.memory._clear_all_session_memory_for_user",
+        new_callable=AsyncMock,
+        return_value={
+            "session_summaries_deleted": 1,
+            "daily_summaries_deleted": 0,
+            "history_deleted": 1,
+        },
+    ) as mock_clear:
+        res = await delete_all_my_session_memory(
+            current_user={"user_id": 1, "session_owner": owner},
+            _health={"ok": True},
+        )
+
+    mock_clear.assert_awaited_once_with(owner)
+    assert res["total_deleted"] == 2
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.schemas.response import StandardResponse
 from app.core.dependencies import require_api_key
 from app.core.redis import get_redis
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.utils.fs_paths import get_data_base_dir, normalize_under_base
 from app.utils.fs_access import (
     assert_path_allowed,
@@ -1178,8 +1179,19 @@ class WorkspaceRecentFilesResponse(BaseModel):
     items: List[WorkspaceRecentFileItem] = Field(default_factory=list)
 
 
-def _workspace_recent_redis_key(user_id: int) -> str:
+def _workspace_recent_redis_key(user_id: int | str) -> str:
     return f"{WORKSPACE_RECENT_REDIS_PREFIX}{user_id}"
+
+
+def _workspace_browser_prefs_redis_key(user_id: int | str) -> str:
+    return f"{WORKSPACE_BROWSER_PREFS_REDIS_PREFIX}{user_id}"
+
+
+def _fs_session_user_id(user_info: Dict[str, Any]) -> str:
+    try:
+        return require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 def _is_trash_path_segment(path: str) -> bool:
@@ -1232,7 +1244,7 @@ async def get_workspace_recent_files(
     if not redis:
         return StandardResponse(data=WorkspaceRecentFilesResponse(items=[]))
 
-    user_id = int(user_info["user_id"])
+    user_id = _fs_session_user_id(user_info)
     key = _workspace_recent_redis_key(user_id)
     try:
         raw = await redis.get(key)
@@ -1273,7 +1285,7 @@ async def save_workspace_recent_files(
     if not redis:
         raise HTTPException(status_code=503, detail="Redis 服务不可用")
 
-    user_id = int(user_info["user_id"])
+    user_id = _fs_session_user_id(user_info)
     key = _workspace_recent_redis_key(user_id)
     items = _sanitize_workspace_recent_files(body.items, user_info)
     payload = WorkspaceRecentFilesResponse(items=items)
@@ -1295,10 +1307,6 @@ class WorkspaceBrowserPrefs(BaseModel):
 class WorkspaceBrowserPrefsPayload(BaseModel):
     include_subdirs: Optional[bool] = Field(None, description="搜索时是否包含子目录")
     type_filter: Optional[str] = Field(None, description="文件类型筛选")
-
-
-def _workspace_browser_prefs_redis_key(user_id: int) -> str:
-    return f"{WORKSPACE_BROWSER_PREFS_REDIS_PREFIX}{user_id}"
 
 
 def _sanitize_workspace_browser_prefs(
@@ -1333,7 +1341,7 @@ async def get_workspace_browser_prefs(
     if not redis:
         return StandardResponse(data=WorkspaceBrowserPrefs())
 
-    user_id = int(user_info["user_id"])
+    user_id = _fs_session_user_id(user_info)
     key = _workspace_browser_prefs_redis_key(user_id)
     try:
         raw = await redis.get(key)
@@ -1368,7 +1376,7 @@ async def save_workspace_browser_prefs(
     if not redis:
         raise HTTPException(status_code=503, detail="Redis 服务不可用")
 
-    user_id = int(user_info["user_id"])
+    user_id = _fs_session_user_id(user_info)
     key = _workspace_browser_prefs_redis_key(user_id)
 
     existing = WorkspaceBrowserPrefs()

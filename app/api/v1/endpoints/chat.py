@@ -25,6 +25,7 @@ from app.services.conversation_resource_service import ConversationResourceServi
 from app.services.resource_scope_normalizer import normalize_resource_scope_for_user
 from app.services.ai.business_context import sanitize_injected_context
 from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
+from app.services.embed_identity import is_embed_session
 from app.services.ai.memory_service import memory_service
 from app.services.ai.reusable_result import (
     build_reusable_result_client_summary,
@@ -133,6 +134,36 @@ async def _conversation_belongs_to_user(
     return False
 
 
+async def _conversation_ids_for_user(
+    db: AsyncSession,
+    user_id: str,
+    *,
+    limit: int = 500,
+) -> List[str]:
+    """当前会话身份名下的 conversation_id，用于嵌入产物列表隔离。"""
+    from sqlalchemy import select
+    from app.models.audit import AgentExecutionHistory
+
+    statement = (
+        select(AgentExecutionHistory.conversation_id)
+        .where(
+            AgentExecutionHistory.user_id == user_id,
+            AgentExecutionHistory.conversation_id.isnot(None),
+        )
+        .distinct()
+        .limit(limit)
+    )
+    rows = (await db.execute(statement)).scalars().all()
+    ids = [str(cid) for cid in rows if cid]
+    try:
+        active = await memory_service.get_active_conversation(user_id)
+        if active and str(active) not in ids:
+            ids.append(str(active))
+    except Exception:
+        pass
+    return ids
+
+
 @public_router.get("/generated-files/{artifact_id}")
 async def download_generated_file(artifact_id: str, token: str):
     from app.services.ai.tools.generated_file_service import resolve_for_download, resolve_workspace_artifact
@@ -191,12 +222,24 @@ async def list_artifacts(
     from sqlalchemy import func, select
 
     user_id = _require_numeric_chat_user_id(user_info)
+    session_uid = _require_chat_user_id(user_info)
 
     filters = [AiArtifact.owner_user_id == user_id]
     if artifact_type:
         filters.append(AiArtifact.artifact_type == artifact_type)
     if conversation_id:
+        if not await _conversation_belongs_to_user(db, session_uid, conversation_id):
+            return StandardResponse(
+                data=ListResponse(items=[], total=0, page=page, page_size=page_size)
+            )
         filters.append(AiArtifact.conversation_id == conversation_id)
+    elif is_embed_session(user_info):
+        owned_ids = await _conversation_ids_for_user(db, session_uid)
+        if not owned_ids:
+            return StandardResponse(
+                data=ListResponse(items=[], total=0, page=page, page_size=page_size)
+            )
+        filters.append(AiArtifact.conversation_id.in_(owned_ids))
     if trace_id:
         filters.append(AiArtifact.trace_id == trace_id)
     total = await db.scalar(
@@ -276,6 +319,9 @@ async def count_artifacts_by_trace(
     from sqlalchemy import func, select
 
     user_id = _require_numeric_chat_user_id(user_info)
+    session_uid = _require_chat_user_id(user_info)
+    if not await _conversation_belongs_to_user(db, session_uid, conversation_id):
+        return StandardResponse(data=ArtifactCountsByTrace(counts={}))
 
     rows = (
         await db.execute(
@@ -2410,12 +2456,11 @@ async def export_trace_data(
     else:
         out_path.write_bytes(content.encode("utf-8"))
 
-    # owner_user_id：优先取鉴权用户 id，回退 history.user_id（register_artifact 内部会 int() 转换）
-    owner_user_id = history_item.user_id
+    # 工作区目录用 history.user_id（嵌入为 e:…）；ai_artifacts 外键仍须平台整型 ID。
     artifact = await register_artifact(
         source_path=out_path,
         filename=out_name,
-        owner_user_id=owner_user_id,
+        owner_user_id=_require_numeric_chat_user_id(user_info),
         artifact_type="export",
         conversation_id=history_item.conversation_id,
         trace_id=trace_id,

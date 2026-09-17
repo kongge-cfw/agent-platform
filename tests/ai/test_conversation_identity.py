@@ -5,11 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.ai.context_compaction_log_service import ContextCompactionLogService
 from app.services.ai.conversation_identity import (
     MissingUserIdentityError,
+    prompt_display_user_id,
     require_user_id,
     session_numeric_user_id,
     session_user_id_from_agent_context,
     try_session_user_id,
 )
+from app.services.ai.memory_index_service import embed_owner_from_memory_key
 from app.services.ai.memory_service import MemoryService
 from app.services.conversation_resource_service import ConversationResourceService
 
@@ -71,6 +73,26 @@ def test_session_numeric_user_id_isolates_embed_owner_from_operator():
     assert hashed != 1
     assert hashed == session_numeric_user_id(embed)
     assert hashed >= 0x4000000000000000
+
+
+def test_prompt_display_user_id_prefers_external_subject():
+    assert prompt_display_user_id(
+        {
+            "user_id": 1,
+            "session_owner": "e:" + "a" * 40,
+            "external_subject": "host-user-9",
+        }
+    ) == "host-user-9"
+    assert prompt_display_user_id({"user_id": 1, "session_owner": "e:" + "b" * 40}) == "e:" + "b" * 40
+    assert prompt_display_user_id({"user_id": 7}) == "7"
+
+
+def test_embed_owner_from_memory_key_parses_session_and_daily_keys():
+    owner = "e:" + "c" * 40
+    assert embed_owner_from_memory_key(f"memory:summary:{owner}:conv-1") == owner
+    assert embed_owner_from_memory_key(f"memory:summary:daily:{owner}:2026-09-16") == owner
+    assert embed_owner_from_memory_key("memory:summary:1:conv-1") is None
+    assert embed_owner_from_memory_key("memory:summary:daily:1:2026-09-16") is None
 
 
 @pytest.mark.parametrize(

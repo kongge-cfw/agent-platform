@@ -7,6 +7,7 @@ from app.api.portal.endpoints.saved_reports import _get_user_role_ids as get_use
 from app.core.dependencies import require_api_key
 from app.core.orm import get_db_session
 from app.schemas.response import StandardResponse
+from app.services.ai.conversation_identity import try_session_user_id
 from app.services.data_portal_home_service import DataPortalHomeService
 
 
@@ -20,5 +21,10 @@ async def get_data_portal_home(
 ):
     user_id = int(user_info["user_id"])
     role_ids = await get_user_role_ids(db, user_id)
-    payload = await DataPortalHomeService.build(db, user_id=user_id, role_ids=role_ids)
+    payload = await DataPortalHomeService.build(
+        db,
+        user_id=user_id,
+        role_ids=role_ids,
+        session_user_id=try_session_user_id(user_info) or str(user_id),
+    )
     return StandardResponse(data=payload)

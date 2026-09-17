@@ -28,6 +28,23 @@ async def test_user_context_prompt_uses_verified_identity_fields():
     assert "Smart Addressing" in content
 
 
+@pytest.mark.asyncio
+async def test_user_context_prompt_uses_embed_external_subject():
+    msg = await AgentService()._build_user_context_msg(
+        {
+            "user_id": 1,
+            "session_owner": "e:" + "a" * 40,
+            "external_subject": "host-user-9",
+            "user_name": "李四",
+        }
+    )
+
+    content = msg["content"]
+    assert "host-user-9" in content
+    assert "**User ID**: 1" not in content
+    assert "李四" in content
+
+
 def test_user_context_prompt_treats_profile_as_advisory_not_authorization():
     content = AgentServicePrompts.user_context_message(
         user_id="42",

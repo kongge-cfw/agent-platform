@@ -410,11 +410,17 @@ async def _load_portal_activity(
     user_id: int,
     role_ids: Sequence[int],
     now: datetime,
+    *,
+    session_user_id: str | None = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     from app.services.data_portal_home_service import DataPortalHomeService
 
     payload = await DataPortalHomeService.build(
-        db, user_id=user_id, role_ids=role_ids, now=now
+        db,
+        user_id=user_id,
+        role_ids=role_ids,
+        now=now,
+        session_user_id=session_user_id,
     )
     reports: List[Dict[str, Any]] = []
     conversations: List[Dict[str, Any]] = []
@@ -555,7 +561,7 @@ def _resource_card(
     }
 
 
-async def _count_memory_items(user_id: int) -> int:
+async def _count_memory_items(user_id: int | str) -> int:
     from app.services.ai.daily_summary_service import DailySummaryService
     from app.services.ai.memory_index_service import MemoryIndexService
     from app.services.ai.memory_service import ltm_service
@@ -570,13 +576,23 @@ async def _count_memory_items(user_id: int) -> int:
 
 async def _count_month_tokens(db: AsyncSession, user: Mapping[str, Any], now: datetime) -> int:
     from app.models.audit import AgentExecutionHistory
+    from app.services.ai.conversation_identity import try_session_user_id
 
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    session_uid = try_session_user_id(user)
     username = str(user.get("user_name") or "")
-    stmt = select(func.coalesce(func.sum(AgentExecutionHistory.total_tokens), 0)).where(
+    conditions = [
         AgentExecutionHistory.created_at >= month_start,
         AgentExecutionHistory.created_at <= now,
-        AgentExecutionHistory.username == username,
+    ]
+    if session_uid:
+        conditions.append(AgentExecutionHistory.user_id == session_uid)
+    elif username:
+        conditions.append(AgentExecutionHistory.username == username)
+    else:
+        return 0
+    stmt = select(func.coalesce(func.sum(AgentExecutionHistory.total_tokens), 0)).where(
+        *conditions
     )
     value = (await db.execute(stmt)).scalar()
     return int(value or 0)
@@ -675,6 +691,7 @@ async def _load_personal_resources(
     role_ids: Sequence[int],
     user: Mapping[str, Any],
     now: datetime,
+    session_user_id: str | None = None,
 ) -> List[Dict[str, Any]]:
     cards: Dict[str, Dict[str, Any]] = {}
 
@@ -688,7 +705,7 @@ async def _load_personal_resources(
             logger.warning("Workbench personal resource %s failed", key, exc_info=True)
             cards[key] = _resource_card(key, value=0, status="error")
 
-    await _put("memory", lambda: _count_memory_items(user_id))
+    await _put("memory", lambda: _count_memory_items(session_user_id or user_id))
     await _put("tokens", lambda: _count_month_tokens(db, user, now))
     await _put("data", lambda: _count_data_portal_reports(db, user_id, role_ids))
     await _put("skills", lambda: _count_personal_skills(user))
@@ -709,6 +726,9 @@ class WorkbenchHomeService:
         now: datetime | None = None,
     ) -> Dict[str, Any]:
         current_time = now or datetime.now()
+        from app.services.ai.conversation_identity import try_session_user_id
+
+        session_user_id = try_session_user_id(user) or str(user_id)
         notifications, notification_status = await _safe_load(
             "notifications", lambda: _load_notifications(db, user_id)
         )
@@ -718,7 +738,9 @@ class WorkbenchHomeService:
         )
         portal, portal_status = await _safe_load(
             "reports",
-            lambda: _load_portal_activity(db, user_id, role_ids, current_time),
+            lambda: _load_portal_activity(
+                db, user_id, role_ids, current_time, session_user_id=session_user_id
+            ),
         )
         running_items, running_status = await _load_running_items(db, user_id)
         agents, agent_status = await _safe_load("agents", lambda: _load_agents(db, user))
@@ -729,6 +751,7 @@ class WorkbenchHomeService:
             role_ids=role_ids,
             user=user,
             now=current_time,
+            session_user_id=session_user_id,
         )
         portal = portal if isinstance(portal, dict) else {}
         reports = portal.get("reports", [])

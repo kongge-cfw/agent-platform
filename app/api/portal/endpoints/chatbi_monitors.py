@@ -12,7 +12,9 @@ from app.core.orm import get_db_session
 from app.models.saved_report import PortalSavedReport, PortalSavedReportSubscription
 from app.schemas.response import StandardResponse
 from app.services.ai.chatbi_result_stack import ChatBIResultRef, resolve_result_reference
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.services.ai.memory_service import memory_service
+from app.services.embed_identity import platform_acl_user_id
 from app.services.saved_report_subscription_service import schedule_to_cron
 
 router = APIRouter()
@@ -51,8 +53,14 @@ async def create_chatbi_monitor(
     user_info=Depends(require_api_key),
     db: AsyncSession = Depends(get_db_session),
 ):
-    user_id = str(user_info["user_id"])
-    stack = await memory_service.get_data_result_stack(user_id, body.conversation_id)
+    try:
+        session_uid = require_user_id(user_info)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    owner_id = platform_acl_user_id(user_info)
+    if owner_id is None:
+        raise HTTPException(status_code=401, detail="当前用户身份格式无效")
+    stack = await memory_service.get_data_result_stack(session_uid, body.conversation_id)
     refs = [ChatBIResultRef.from_dict(item) for item in stack if isinstance(item, dict)]
     reference = resolve_result_reference(refs, body.result_id or "当前结果")
     result = reference.result
@@ -78,13 +86,13 @@ async def create_chatbi_monitor(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    report_id = build_chatbi_monitor_report_id(user_id, body.conversation_id, result.result_id)
+    report_id = build_chatbi_monitor_report_id(session_uid, body.conversation_id, result.result_id)
     existing_report = await db.get(PortalSavedReport, report_id)
     if existing_report is not None:
         existing_subscription = (await db.execute(
             select(PortalSavedReportSubscription).where(
                 PortalSavedReportSubscription.report_id == report_id,
-                PortalSavedReportSubscription.user_id == int(user_id),
+                PortalSavedReportSubscription.user_id == owner_id,
             )
         )).scalars().first()
         return StandardResponse(data={
@@ -100,14 +108,14 @@ async def create_chatbi_monitor(
         data_source=result.data_source or "default",
         original_query=result.question,
         mode="static_sql",
-        owner_user_id=int(user_id),
+        owner_user_id=owner_id,
         owner_name=user_info.get("real_name") or user_info.get("user_name"),
         visibility="private",
         status="active",
     )
     subscription = PortalSavedReportSubscription(
         report_id=report_id,
-        user_id=int(user_id),
+        user_id=owner_id,
         schedule_type=body.schedule_type,
         cron_expr=cron_expr,
         timezone="Asia/Shanghai",

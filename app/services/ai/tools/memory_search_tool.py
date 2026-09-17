@@ -95,15 +95,16 @@ async def memory_search(
         return "记忆服务未启用，无法检索历史会话。"
 
     ctx = get_current_agent_context()
-    if not ctx or not ctx.user_id:
+    from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+
+    uid = try_session_user_id_from_agent_context(ctx)
+    if not uid:
         return "无法识别当前用户，拒绝检索记忆。"
 
     top_k = limit if limit is not None else await MemoryConfigService.get_int("memory_search_knn_top_k", 5)
     scope_norm = (scope or "summary").strip().lower()
     if scope_norm not in ("summary", "history", "both"):
         scope_norm = "summary"
-
-    uid = str(ctx.user_id)
     target_day = parse_date_from_query(query)
 
     daily_summary_data = None

@@ -43,7 +43,14 @@ _EMBED_ALLOWED = (
     ("POST", "/api/portal/saved-reports/*/analyze"),
     ("POST", "/api/portal/chat/feedback"),
     ("POST", "/api/portal/chatbi-briefs"),
+    ("POST", "/api/portal/chatbi-monitors"),
+    ("POST", "/api/portal/chatbi-export/result"),
+    ("PUT", "/api/portal/portal-prefs/markdown-theme"),
     ("GET", "/api/portal/ui-cards/session"),
+    ("GET", "/api/portal/memory/my/summaries"),
+    ("GET", "/api/portal/memory/my/summaries/*"),
+    ("DELETE", "/api/portal/memory/my/summaries/*"),
+    ("DELETE", "/api/portal/memory/my/session-memory"),
 )
 
 _EMBED_DENIED_PREFIXES = (

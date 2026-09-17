@@ -869,17 +869,16 @@ async def sub_agent_call(
             agent_name,
         )
 
-    # [CR Fix] 从 main_ctx 还原 user_info 并传给 dispatch，避免 session lock 和维度缺失
-    user_info = {
-        "user_id": main_ctx.user_id,
-        "role": "admin" if main_ctx.is_admin else "user",
-        "api_key": main_ctx.api_key,
-        "user_name": main_ctx.user_dimensions.get("user_name") if main_ctx.user_dimensions else None,
-        "real_name": main_ctx.user_dimensions.get("real_name") if main_ctx.user_dimensions else None,
-        "dept_code": main_ctx.user_dimensions.get("dept_code") if main_ctx.user_dimensions else None,
-        "org_path": main_ctx.user_dimensions.get("org_path") if main_ctx.user_dimensions else None,
-        "extra_data": main_ctx.user_dimensions.get("extra_data") if main_ctx.user_dimensions else None,
-    } if main_ctx else None
+    # 从主上下文还原完整 user_info（含 session_owner），避免子智能体会话钥匙退回签发人。
+    user_info = None
+    if main_ctx:
+        user_info = dict(main_ctx.user_dimensions or {})
+        user_info["user_id"] = main_ctx.user_id
+        user_info["id"] = user_info.get("id") or main_ctx.user_id
+        user_info["role"] = "admin" if main_ctx.is_admin else "user"
+        user_info["api_key"] = main_ctx.api_key
+        if not user_info.get("user_name"):
+            user_info["user_name"] = user_info.get("username")
 
     delegation_timeout = await _resolve_delegation_timeout_seconds()
     result_max_chars = await _resolve_delegation_result_max_chars()

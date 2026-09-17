@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.dependencies import require_api_key, require_permission
+from app.services.ai.conversation_identity import MissingUserIdentityError, require_user_id
 from app.services.ai.embedding_client import EmbeddingClient
 from app.services.ai.daily_summary_service import DailySummaryService
 from app.services.ai.memory_index_service import MemoryIndexService
@@ -22,6 +23,33 @@ MENU = ("menu", "menu:memory_management")
 
 def _current_uid(user: Dict) -> int:
     return int(user.get("user_id") or user.get("id"))
+
+
+def _session_uid(user: Dict) -> str:
+    """本人记忆 Redis 钥匙：嵌入用 session_owner，不对 e:… 做 int()。"""
+    try:
+        return require_user_id(user)
+    except MissingUserIdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+async def _labels_for_session_user(
+    user: Dict, uid: str
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """平台整型查用户表；嵌入 owner 用会话声明，禁止 int(e:…)。"""
+    if uid.isdigit():
+        return await _user_display_names([int(uid)])
+    subject = str(user.get("external_subject") or "").strip()
+    display = (
+        str(user.get("display_name") or user.get("real_name") or "").strip()
+        or subject
+        or str(user.get("user_name") or user.get("username") or "").strip()
+        or uid
+    )
+    username = str(
+        user.get("user_name") or user.get("username") or subject or uid
+    ).strip()
+    return {uid: {"user_name": username, "display_name": display}}
 
 
 async def _can_view_user(requester: Dict, target_user_id: int) -> bool:
@@ -549,11 +577,11 @@ async def list_my_summaries(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """拉取当前用户本人的会话记忆列表"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     items = await MemoryIndexService.list_summaries(
         uid, keyword=keyword, limit=limit
     )
-    names = await _user_display_names([int(uid)])
+    names = await _labels_for_session_user(current_user, uid)
     _attach_user_labels(items, names, uid)
     for item in items:
         cid = item.get("conversation_id")
@@ -576,11 +604,11 @@ async def get_my_summary_detail(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """获取当前用户本人特定会话的记忆明细与历史聊天记录"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     items = await MemoryIndexService.list_summaries(uid, conversation_id=conversation_id, limit=1)
     summary = items[0] if items else None
     if summary:
-        names = await _user_display_names([int(uid)])
+        names = await _labels_for_session_user(current_user, uid)
         _attach_user_labels([summary], names, uid)
         summary.pop("_embedding_vec", None)
         summary.setdefault("has_embedding", False)
@@ -602,7 +630,7 @@ async def delete_my_summary(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """物理清除当前用户本人特定会话的记忆摘要与 Redis 历史"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     await memory_service.delete_session_memory(
         uid,
         conversation_id,
@@ -619,7 +647,7 @@ async def delete_all_my_session_memory(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """物理清除当前用户本人的全部会话摘要、每日摘要与 Redis 聊天历史"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     stats = await _clear_all_session_memory_for_user(uid)
     total = (
         stats["session_summaries_deleted"]
@@ -640,7 +668,7 @@ async def get_my_ltm(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """拉取当前用户本人的长期记忆事实与偏好数据"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     data = await ltm_service.fetch_memory(uid)
     return {"status": "success", "data": data}
 
@@ -652,7 +680,7 @@ async def update_my_ltm(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """新增或修改当前用户本人的长期偏好键值对"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     key = body.key.strip()
     value = body.value.strip()
     if not key:
@@ -670,7 +698,7 @@ async def delete_my_ltm(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """删除当前用户本人的某项长期记忆偏好键"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     success = await ltm_service.delete_preference(uid, key)
     if not success:
         raise HTTPException(status_code=500, detail="删除偏好失败，请检查 Redis 状态")
@@ -687,7 +715,7 @@ async def list_my_daily_summaries(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """拉取当前用户本人的每日摘要列表"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     items = await DailySummaryService.list_daily_summaries(
         uid,
         keyword=keyword,
@@ -695,7 +723,7 @@ async def list_my_daily_summaries(
         date_to=date_to,
         limit=limit,
     )
-    names = await _user_display_names([int(uid)])
+    names = await _labels_for_session_user(current_user, uid)
     _attach_user_labels(items, names, uid)
     for item in items:
         item.pop("_embedding_vec", None)
@@ -712,10 +740,10 @@ async def get_my_daily_summary_detail(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """获取当前用户本人特定日期的每日摘要详情与关联会话"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     summary = await DailySummaryService.get_daily_summary(uid, day)
     if summary:
-        names = await _user_display_names([int(uid)])
+        names = await _labels_for_session_user(current_user, uid)
         _attach_user_labels([summary], names, uid)
         summary.pop("_embedding_vec", None)
     sessions = await MemoryIndexService.list_session_summaries_for_day(uid, day)
@@ -740,7 +768,7 @@ async def delete_my_daily_summary(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """删除当前用户本人特定日期的每日摘要"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     await DailySummaryService.delete_daily_summary(uid, day)
     return {"status": "success", "message": "已删除每日摘要"}
 
@@ -752,7 +780,7 @@ async def rebuild_my_daily_summary(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """重建当前用户本人特定日期的每日摘要"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     result = await DailySummaryService.refresh_for_date(uid, day)
     return {"status": "success", "data": result}
 
@@ -817,7 +845,7 @@ async def consolidate_my_memories(
     _health: Dict = Depends(require_memory_vector_ready),
 ):
     """当前用户本人手动触发自己长时记忆整理"""
-    uid = str(_current_uid(current_user))
+    uid = _session_uid(current_user)
     try:
         await MemoryIndexService.consolidate_user_memories(uid)
         return {"status": "success", "message": "记忆整理与合并归约成功完成"}
