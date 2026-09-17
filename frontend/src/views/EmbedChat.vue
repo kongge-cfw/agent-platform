@@ -10,13 +10,15 @@
       :loading-more="loadingMoreHistory"
       :has-more="historyHasMore"
       :history-list="groupedHistoryList"
-      active-trace-id=""
+      :active-conversation-id="conversationId"
       @fetch-history="fetchHistory()"
       @load-more="fetchHistory(true)"
       @load-chat="handleHistoryClick"
       @open-full-logs="openTraceLogs"
-      @delete-history="handleDeleteHistory"
+      @delete-history="handleDeleteSingleHistory"
       @delete-group="handleDeleteGroup"
+      @new-chat="handleNewChatFromSidebar"
+      @export-chat="handleExportChatFromSidebar"
       class="border-r border-gray-200 dark:border-gray-800"
     />
 
@@ -41,10 +43,30 @@
       <div
         class="h-12 border-b border-gray-100 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md px-4 flex items-center justify-between z-30 flex-shrink-0"
       >
-        <div class="flex items-center space-x-3 overflow-hidden">
-            <div class="flex flex-col min-w-0">
-                <div class="flex items-center space-x-2">
-                    <span class="text-sm font-black text-gray-800 dark:text-gray-100 truncate">
+        <div class="flex items-center space-x-2 min-w-0">
+          <div class="relative group inline-flex items-center flex-shrink-0">
+            <button
+              type="button"
+              @click="showHistorySidebar = !showHistorySidebar"
+              class="p-1.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
+              :class="{ 'text-primary bg-primary/10': showHistorySidebar }"
+              aria-label="历史会话"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="18" rx="3" stroke-width="1.8" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 3v18" />
+              </svg>
+            </button>
+            <div class="pointer-events-none absolute top-full left-0 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-start z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+              <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 ml-2.5 -mb-0.5"></div>
+              <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                {{ showHistorySidebar ? '收起会话历史 (⌘H)' : '展开会话历史 (⌘H)' }}
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-col min-w-0 overflow-hidden">
+                <div class="flex items-center space-x-1.5 leading-tight">
+                    <span class="text-[13px] font-semibold text-gray-800 dark:text-gray-100 truncate">
                         <template v-if="isProcessing">
                             {{ lastAgentMessage?.agentDisplayName || lastAgentMessage?.agentName || '智能体' }}
                         </template>
@@ -61,28 +83,28 @@
                     </span>
                     <span
                         v-else-if="headerExpertLabel"
-                        class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[9px] font-black uppercase tracking-wider shrink-0"
+                        class="inline-flex items-center px-1.5 py-0.2 rounded-full bg-primary/10 text-primary text-[9px] font-semibold uppercase tracking-wider shrink-0"
                     >
                         锁定
                     </span>
                 </div>
-                <div class="text-[10px] font-bold uppercase tracking-widest truncate flex items-center gap-1.5 min-w-0">
+                <div class="text-[11px] text-gray-400 dark:text-gray-500 truncate flex items-center gap-1.5 min-w-0 leading-tight mt-0.5">
                     <template v-if="isProcessing">
-                        <span class="text-gray-400">正在处理您的请求...</span>
+                        <span>正在处理您的请求...</span>
                     </template>
                     <template v-else-if="headerExpertLabel">
-                        <span class="text-gray-400 normal-case tracking-normal">准备就绪</span>
+                        <span class="normal-case tracking-normal">准备就绪</span>
                         <button
                             v-if="!isRoutingSettingsLocked"
                             type="button"
                             @click.stop="switchToAuto"
-                            class="text-gray-400 hover:text-red-500 normal-case tracking-normal font-bold transition-colors shrink-0"
+                            class="text-gray-400 hover:text-red-500 normal-case tracking-normal font-medium transition-colors shrink-0"
                         >
                             退出
                         </button>
                     </template>
                     <template v-else>
-                        <span class="text-gray-400">准备就绪</span>
+                        <span>准备就绪</span>
                     </template>
                 </div>
             </div>
@@ -90,29 +112,44 @@
 
         <div class="flex items-center space-x-2">
             <!-- Fullscreen Button (desktop only) -->
-            <button
-                v-if="!isMobile"
+            <div v-if="!isMobile" class="relative group inline-flex items-center">
+              <button
                 @click="toggleFullScreen"
                 class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
-                :title="isFullScreen ? '退出全屏' : '全屏模式'"
-            >
+                :aria-label="isFullScreen ? '退出全屏' : '全屏模式'"
+              >
                 <svg v-if="!isFullScreen" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                 </svg>
                 <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6v6m0-6l-6 6m16-6h-6v6m0-6l6 6M4 10h6V4m0 6L4 4m16 6h-6V4m0 6l6-6" />
                 </svg>
-	            </button>
-            <div class="relative">
-              <button
-                  v-if="isMobile || !config.showShortcuts"
-                  @click="handleHeaderShortcutsClick"
-                  class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
-                  :class="{ 'text-primary bg-primary/10': showShortcutsHint }"
-                  :title="isMobile ? '快捷指令' : '显示快捷指令'"
-              >
-                  <CommandLineIcon class="h-4 w-4" aria-hidden="true" />
               </button>
+              <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                  {{ isFullScreen ? '退出全屏' : '全屏模式' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- Shortcuts Button -->
+            <div class="relative group inline-flex items-center">
+              <button
+                v-if="isMobile || !config.showShortcuts"
+                @click="handleHeaderShortcutsClick"
+                class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
+                :class="{ 'text-primary bg-primary/10': showShortcutsHint }"
+                :aria-label="isMobile ? '快捷指令' : '显示快捷指令'"
+              >
+                <CommandLineIcon class="h-4 w-4" aria-hidden="true" />
+              </button>
+              <div v-if="!showShortcutsHint && (isMobile || !config.showShortcuts)" class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                  {{ isMobile ? '快捷指令' : '显示快捷指令' }}
+                </div>
+              </div>
 
               <!-- 折叠快捷指令后的右上角气泡引导提示 -->
               <transition
@@ -148,33 +185,63 @@
                 </div>
               </transition>
             </div>
-            <button
+
+            <!-- Help Button -->
+            <div class="relative group inline-flex items-center">
+              <button
                 @click="showHelpModal = true"
                 class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
-                title="查看帮助"
-            >
+                aria-label="查看帮助"
+              >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-            </button>
-            <button
+              </button>
+              <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                  查看帮助
+                </div>
+              </div>
+            </div>
+
+            <!-- Settings Button -->
+            <div class="relative group inline-flex items-center">
+              <button
                 @click="showSettings = true"
                 class="relative p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
                 :class="config.enableGrounding ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20' : ''"
-                :title="config.enableGrounding ? '对话设置 (反幻觉校验已开启)' : '对话设置'"
-            >
+                :aria-label="config.enableGrounding ? '对话设置 (反幻觉校验已开启)' : '对话设置'"
+              >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 <span v-if="config.enableGrounding" class="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-gray-800" />
-            </button>
-            <button
+              </button>
+              <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                  {{ config.enableGrounding ? '对话设置 (反幻觉校验已开启)' : '对话设置' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- Server Browser Button -->
+            <div class="relative group inline-flex items-center">
+              <button
                 @click="toggleBrowserPanel"
                 class="relative p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
                 :class="browserPanelVisible ? 'text-primary bg-primary/10' : ''"
-                title="打开服务端浏览器"
-            >
+                aria-label="打开服务端浏览器"
+              >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" stroke-width="1.8"/><path stroke-linecap="round" stroke-width="1.8" d="M3 8h18M7 6h.01M10 6h.01"/></svg>
                 <span v-if="browserPanelVisible" class="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            </button>
+              </button>
+              <div class="pointer-events-none absolute top-full right-0 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-end z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 mr-3 -mb-0.5"></div>
+                <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                  打开服务端浏览器
+                </div>
+              </div>
+            </div>
         </div>
       </div>
 
@@ -518,7 +585,7 @@
                 <span class="hidden sm:inline">复制</span>
               </button>
               <!-- Time -->
-              <span v-if="msg.timestamp" class="text-[10px] text-gray-400 dark:text-gray-500 select-none ml-1">{{ formatBubbleTime(msg.timestamp) }}</span>
+              <span v-if="msg.timestamp" class="text-[10px] text-gray-400 dark:text-gray-500 select-none ml-1 whitespace-nowrap shrink-0">{{ formatBubbleTime(msg.timestamp) }}</span>
               </div>
             </div>
           </div>
@@ -579,11 +646,11 @@
             <!-- Agent Name (Smart Status Capsule) -->
             <div class="mb-1 ml-1 flex items-center">
               <div
-                class="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium transition-all duration-500 ease-out border"
+                class="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-300 ease-out border"
                 :class="msg.agentName || msg.agentDisplayName
-                  ? 'bg-blue-50/80 border-blue-100 text-blue-700 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300 opacity-100 translate-y-0'
+                  ? 'bg-gray-50/90 dark:bg-gray-800/80 border-gray-200/70 dark:border-gray-700/70 text-gray-700 dark:text-gray-300 shadow-[0_1px_2px_rgba(0,0,0,0.02)] opacity-100 translate-y-0'
                   : msg.isThinking
-                    ? 'bg-gray-50 border-gray-200 text-gray-500 dark:bg-gray-800/70 dark:border-gray-700 dark:text-gray-400 opacity-100 translate-y-0'
+                    ? 'bg-gray-50/70 border-gray-200/50 text-gray-400 dark:bg-gray-800/50 dark:border-gray-700/50 dark:text-gray-500 opacity-100 translate-y-0'
                   : 'opacity-0 translate-y-1 bg-transparent border-transparent'"
               >
                 <!-- Text：调度占位（三点跳动）→ 智能体名（淡入轻微上滑） -->
@@ -593,10 +660,12 @@
                     :key="`agent-${msg.agentDisplayName || msg.agentName}`"
                     class="inline-flex items-center space-x-1.5"
                   >
-                    <span>{{ msg.agentDisplayName || msg.agentName }}</span>
-                    <span v-if="msg.agentName" class="opacity-70 font-normal">{{ String(msg.agentName || '').startsWith('sys_') ? '· 系统指令' : '· 为您服务' }}</span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary/70 shrink-0"></span>
+                    <span class="text-gray-800 dark:text-gray-200 font-medium">{{ msg.agentDisplayName || msg.agentName }}</span>
+                    <span v-if="msg.agentName" class="text-gray-400 dark:text-gray-500 font-normal">{{ String(msg.agentName || '').startsWith('sys_') ? '· 系统指令' : '· 为您服务' }}</span>
                   </span>
-                  <span v-else key="dispatch-placeholder" class="inline-flex items-center">
+                  <span v-else key="dispatch-placeholder" class="inline-flex items-center text-gray-400 dark:text-gray-500">
+                    <span class="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600 animate-pulse shrink-0 mr-1.5"></span>
                     智能体正在分配调度中
                     <span class="inline-flex ml-0.5" aria-hidden="true">
                       <span class="animate-bounce-dot font-bold" style="animation-delay: 0s">.</span>
@@ -850,33 +919,122 @@
               class="flex min-w-0 max-w-full flex-nowrap items-center space-x-2 overflow-x-auto sm:overflow-x-visible mt-1 scrollbar-hide"
             >
               <!-- Time -->
-              <span v-if="msg.timestamp" class="text-[10px] text-gray-400 dark:text-gray-500 select-none mr-1">{{ formatBubbleTime(msg.timestamp) }}</span>
-              <button
-                @click="copyMessage(visibleStreamBody(msg))"
-                class="flex min-h-8 shrink-0 items-center space-x-1 text-[11px] text-gray-500 hover:text-primary transition-colors rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800"
-                :class="windowWidth < 640 ? 'p-2.5' : 'px-2 py-1'"
-                title="复制"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              <span v-if="msg.timestamp" class="text-[10px] text-gray-400 dark:text-gray-500 select-none mr-1 whitespace-nowrap shrink-0">{{ formatBubbleTime(msg.timestamp) }}</span>
+              <!-- 复制 (纯图标 + 自定义 Tooltip) -->
+              <div class="group relative inline-flex items-center justify-center">
+                <button
+                  @click="copyMessage(visibleStreamBody(msg))"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:text-primary transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 dark:text-gray-400 dark:hover:text-primary-active"
+                  aria-label="复制"
                 >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-                <span class="hidden sm:inline">复制</span>
-              </button>
-              <MessageActionMenus
-                mode="regenerate"
-                :can-regenerate="msg === lastAgentMessage && !isProcessing"
-                @regenerate="regenerate"
-              />
+                  <svg
+                    class="w-3.5 h-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.75"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                    />
+                  </svg>
+                </button>
+                <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                  <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                  <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                    复制
+                  </div>
+                </div>
+              </div>
+
+              <!-- 重新生成 (纯图标 + 自定义 Tooltip) -->
+              <div
+                v-if="msg === lastAgentMessage && !isProcessing"
+                class="group relative inline-flex items-center justify-center"
+              >
+                <button
+                  @click="regenerate"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:text-primary transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 dark:text-gray-400 dark:hover:text-primary-active"
+                  aria-label="重新生成"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+                <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                  <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                  <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                    重新生成
+                  </div>
+                </div>
+              </div>
+
+              <!-- 点赞点踩移到重新生成后面 (纯图标 + 自定义 Tooltip) -->
+              <template v-if="!hideEmbedLikeDislike">
+                <!-- 点赞 -->
+                <div class="group relative inline-flex items-center justify-center">
+                  <button
+                    @click="handleFeedback(msg, 'up')"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-green-50 dark:hover:bg-green-900/20 text-gray-400 hover:text-green-500"
+                    :class="msg.feedback === 'up' ? 'text-green-500 bg-green-50 dark:bg-green-900/20' : ''"
+                    aria-label="很有帮助"
+                  >
+                    <svg
+                      class="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.75"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M14 10h4.708C19.712 10 20.5 10.743 20.5 11.658c0 .354-.05.7-.145 1.03l-1.921 6.641C18.232 20.141 17.514 21 16.5 21H8.5c-1.105 0-2-.895-2-2v-8c0-.55.224-1.05.586-1.414l5-5c.381-.381 1-.381 1.381 0L14 5v5z"
+                      />
+                    </svg>
+                  </button>
+                  <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                    <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                    <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                      很有帮助
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 点踩 -->
+                <div class="group relative inline-flex items-center justify-center">
+                  <button
+                    @click="handleFeedback(msg, 'down')"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"
+                    :class="msg.feedback === 'down' ? 'text-red-500 bg-red-50 dark:bg-red-900/20' : ''"
+                    aria-label="回答不准确"
+                  >
+                    <svg
+                      class="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.75"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M10 14H5.292C4.288 14 3.5 13.257 3.5 12.342c0-.354.05-.7.145-1.03l1.921-6.641C5.768 3.859 6.486 3 7.5 3h8c1.105 0 2 .895 2 2v8c0 .55-.224 1.05-.586 1.414l-5 5c-.381.381-1 .381-1.381 0L10 19v-5z"
+                      />
+                    </svg>
+                  </button>
+                  <div class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+                    <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
+                    <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
+                      回答不准确
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 数据 / 文件 -->
               <div class="hidden sm:block shrink-0">
                 <MessageActionMenus
                   mode="data"
@@ -892,83 +1050,34 @@
                   @open-artifacts="openMessageArtifacts(msg.trace_id)"
                 />
               </div>
-              <!-- Token 消耗：移动端仅 icon，桌面端展示 in/out 明细 -->
+              <!-- Token 消耗：移动端展示图标，桌面端展示 数据库图标 + 用量 12.4K tok -->
               <button
-                v-if="msg.prompt_tokens !== undefined || msg.completion_tokens !== undefined"
+                v-if="msg.prompt_tokens !== undefined || msg.completion_tokens !== undefined || msg.total_tokens !== undefined"
                 @click="openModelCallStats(msg)"
                 class="flex sm:hidden shrink-0 items-center justify-center text-gray-400 hover:text-primary transition-colors rounded hover:bg-gray-100 dark:hover:bg-gray-800 p-2.5"
-                title="查看 Token 消耗详情"
+                :title="getMessageTokenTooltip(msg)"
               >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h10M7 16h6M5 6a2 2 0 012-2h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6z" />
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3" />
+                  <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+                  <path d="M3 12a9 3 0 0 0 18 0" />
                 </svg>
               </button>
               <button
-                v-if="msg.prompt_tokens !== undefined || msg.completion_tokens !== undefined"
+                v-if="msg.prompt_tokens !== undefined || msg.completion_tokens !== undefined || msg.total_tokens !== undefined"
                 @click="openModelCallStats(msg)"
-                class="hidden sm:flex shrink-0 items-center space-x-1.5 text-[10px] text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-800/40 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-primary dark:hover:text-primary-active border border-gray-100/50 dark:border-gray-800/20 rounded px-1.5 py-0.5 select-none font-mono transition-all duration-200 cursor-pointer active:scale-95 ml-1"
-                title="点击查看详细的大模型调用统计指标（如单步耗时、工具调用明细、Token消耗详情等）"
+                class="hidden sm:flex shrink-0 items-center space-x-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-primary dark:hover:text-primary-active hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors rounded px-1.5 py-1 select-none cursor-pointer"
+                :title="getMessageTokenTooltip(msg)"
               >
-                <span class="flex items-center space-x-0.5">
-                  <span class="scale-90 text-[9px] text-gray-400/80">in:</span>
-                  <span class="font-medium text-gray-500 dark:text-gray-400">{{ msg.prompt_tokens || 0 }}</span>
-                </span>
-                <span class="text-gray-300 dark:text-gray-700">/</span>
-                <span class="flex items-center space-x-0.5">
-                  <span class="scale-90 text-[9px] text-gray-400/80">out:</span>
-                  <span class="font-medium text-gray-500 dark:text-gray-400">{{ msg.completion_tokens || 0 }}</span>
-                </span>
+                <svg class="w-3.5 h-3.5 shrink-0 text-gray-400 dark:text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3" />
+                  <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+                  <path d="M3 12a9 3 0 0 0 18 0" />
+                </svg>
+                <span>用量 {{ getMessageTokenAmount(msg) }}</span>
               </button>
-              <!-- 反馈与 ChatBI 扩展操作（保持完整宽度，随操作栏滚动） -->
+              <!-- 业务扩展与更多操作（保持完整宽度，随操作栏滚动） -->
               <div class="flex shrink-0 items-center space-x-1">
-                <template v-if="!hideEmbedLikeDislike">
-                <button
-                  @click="handleFeedback(msg, 'up')"
-                  class="rounded transition-colors hover:bg-green-50 dark:hover:bg-green-900/20 text-gray-400 hover:text-green-500"
-                  :class="[
-                    msg.feedback === 'up' ? 'text-green-500 bg-green-50 dark:bg-green-900/20' : '',
-                    windowWidth < 640 ? 'p-2.5' : 'p-2'
-                  ]"
-                  title="很有帮助"
-                >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M14 10h4.708C19.712 10 20.5 10.743 20.5 11.658c0 .354-.05.7-.145 1.03l-1.921 6.641C18.232 20.141 17.514 21 16.5 21H8.5c-1.105 0-2-.895-2-2v-8c0-.55.224-1.05.586-1.414l5-5c.381-.381 1-.381 1.381 0L14 5v5z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  @click="handleFeedback(msg, 'down')"
-                  class="rounded transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"
-                  :class="[
-                    msg.feedback === 'down' ? 'text-red-500 bg-red-50 dark:bg-red-900/20' : '',
-                    windowWidth < 640 ? 'p-2.5' : 'p-2'
-                  ]"
-                  title="回答不准确"
-                >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M10 14H5.292C4.288 14 3.5 13.257 3.5 12.342c0-.354.05-.7.145-1.03l1.921-6.641C5.768 3.859 6.486 3 7.5 3h8c1.105 0 2 .895 2 2v8c0 .55-.224 1.05-.586 1.414l-5 5c-.381.381-1 .381-1.381 0L10 19v-5z"
-                    />
-                  </svg>
-                </button>
-                </template>
                 <ChatBIContinueAnalysis
                   v-if="msg.chatbiInsight?.actions?.length && checkRole(msg, 'agent') && !msg.isThinking"
                   :actions="msg.chatbiInsight.actions"
@@ -2049,6 +2158,7 @@ import { useToast } from "../composables/useToast";
 import { useTokenQuota } from "../composables/useTokenQuota";
 import { useContextUsage } from "@/composables/useContextUsage";
 import { useContextCompactions } from "@/composables/useContextCompactions";
+import { useSandboxWorkspace } from "@/composables/chat/useSandboxWorkspace";
 import { buildQuotaStatusMarkdown } from "@/utils/quotaDisplay";
 import { useDatasetPortal } from "@/composables/useDatasetPortal";
 import { useDatasetMount } from "@/composables/useDatasetMount";
@@ -2123,11 +2233,16 @@ import { useKnowledgePortal } from "@/composables/useKnowledgePortal";
 import CitationPopover from "@/components/CitationPopover.vue";
 import { copyToClipboard as copyTextSecure } from "@/utils/clipboard";
 import {
+  formatTokenUsageAmount,
+  formatTokenUsageTooltip,
+} from "@/utils/tokenFormat";
+import {
   applyStreamErrorMessage,
   type StreamErrorDetail,
 } from "@/utils/streamErrorPresentation";
 import RagPreviewDrawer from "@/components/RagPreviewDrawer.vue";
 import ChatHistorySidebar from "@/components/ChatHistorySidebar.vue";
+import { downloadMarkdownFile } from "@/utils/chatSessionExport";
 import ConfirmModal from "@/components/ConfirmModal.vue";
 import ChatSettings from "@/components/embed/ChatSettings.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
@@ -2506,6 +2621,15 @@ const formatBubbleTime = (isoStr: string): string => {
     const day = String(date.getDate()).padStart(2, '0');
     return `${month}-${day} ${hours}:${minutes}`;
   } catch(e) { return ""; }
+};
+
+const getMessageTokenAmount = (msg: any): string => {
+  const total = msg?.total_tokens ?? ((msg?.prompt_tokens || 0) + (msg?.completion_tokens || 0));
+  return formatTokenUsageAmount(total);
+};
+
+const getMessageTokenTooltip = (msg: any): string => {
+  return formatTokenUsageTooltip(msg?.prompt_tokens, msg?.completion_tokens, msg?.total_tokens);
 };
 // --- State ---
 const messages = ref<Message[]>([]);
@@ -4107,350 +4231,37 @@ watch(conversationId, () => {
 }, { immediate: true });
 
 const { contextUsage, refreshContextUsage } = useContextUsage();
-type SandboxWorkspaceStatus = "idle" | "starting" | "stopping" | "running" | "error";
-const sandboxWorkspaceStatus = ref<SandboxWorkspaceStatus>("idle");
-const sandboxWorkspaceStatusLoaded = ref(false);
-const sandboxWorkspaceError = ref("");
-const sandboxWorkspaceInstanceId = ref<string | null>(null);
-const sandboxWorkspaceStartedAt = ref<string | null>(null);
-const sandboxWorkspaceUptimeSeconds = ref<number | null>(null);
-const effectiveSandboxPolicy = computed(() => (
-  String(contextUsage.value?.sandbox_policy || "").trim().toLowerCase()
-));
-const sandboxBackend = computed<"docker" | "k8s">(() => effectiveSandboxPolicy.value === "k8s" ? "k8s" : "docker");
-const showSandboxStopConfirm = ref(false);
-const isSandboxWorkspacePolicy = computed(() => {
-  const policy = effectiveSandboxPolicy.value;
-  return policy === "docker" || policy === "k8s";
+const {
+  sandboxWorkspaceStatus,
+  sandboxWorkspaceStatusLoaded,
+  sandboxWorkspaceError,
+  sandboxWorkspaceInstanceId,
+  sandboxWorkspaceStartedAt,
+  sandboxWorkspaceUptimeSeconds,
+  effectiveSandboxPolicy,
+  sandboxBackend,
+  isSandboxWorkspacePolicy,
+  showSandboxStopConfirm,
+  showDockerTerminal,
+  showK8sTerminal,
+  resetSandboxWorkspaceState,
+  refreshSandboxWorkspaceStatus,
+  pollSandboxWorkspaceUntilRunning,
+  maybeAutoWarmSandbox,
+  ensureSandboxWorkspace,
+  openDockerTerminal,
+  handleStopSandboxWorkspaceRequest,
+  confirmStopSandboxWorkspace,
+  stopSandboxWorkspace,
+  restartSandboxWorkspace,
+} = useSandboxWorkspace({
+  conversationId,
+  contextUsage,
+  authHeaders: embedAuthHeaders,
+  isProcessing,
+  remoteRunActive,
+  showToast,
 });
-const sandboxWorkspaceBaseEndpoint = computed(() => sandboxBackend.value === "k8s"
-  ? "/api/v1/sandbox/k8s/workspace"
-  : "/api/v1/sandbox/docker/workspace");
-
-const instanceIdFromData = (data: any): string | null => (
-  sandboxBackend.value === "k8s"
-    ? (data?.pod_name ?? null)
-    : (data?.container_id ?? null)
-);
-
-const mapSandboxStatus = (raw: string): SandboxWorkspaceStatus => {
-  if (raw === "running") return "running";
-  if (raw === "starting") return "starting";
-  if (raw === "stopping") return "stopping";
-  if (raw === "error") return "error";
-  return "idle"; // stopped / idle -> idle
-};
-
-const resetSandboxWorkspaceState = () => {
-  sandboxWorkspaceStatus.value = "idle";
-  sandboxWorkspaceStatusLoaded.value = false;
-  sandboxWorkspaceError.value = "";
-  sandboxWorkspaceInstanceId.value = null;
-  sandboxWorkspaceStartedAt.value = null;
-  sandboxWorkspaceUptimeSeconds.value = null;
-};
-
-/** 沙箱状态查询防重入（starting 状态下也允许手动刷新，仅拦并发请求）。 */
-let sandboxStatusRefreshInFlight = false;
-
-const refreshSandboxWorkspaceStatus = async (showFeedback = false) => {
-  if (!isSandboxWorkspacePolicy.value || !conversationId.value) return;
-  if (sandboxStatusRefreshInFlight) return;
-  sandboxStatusRefreshInFlight = true;
-  const requestedConversationId = conversationId.value;
-  try {
-    const response = await axios.get(
-      `${sandboxWorkspaceBaseEndpoint.value}/status`,
-      {
-        params: { conversation_id: requestedConversationId },
-        headers: embedAuthHeaders(),
-      },
-    );
-    if (conversationId.value !== requestedConversationId) return;
-    const data = response.data?.data ?? response.data;
-    sandboxWorkspaceInstanceId.value = instanceIdFromData(data);
-    sandboxWorkspaceStartedAt.value = data?.started_at || null;
-    sandboxWorkspaceUptimeSeconds.value = typeof data?.uptime_seconds === "number" ? data.uptime_seconds : null;
-    sandboxWorkspaceStatus.value = mapSandboxStatus(String(data?.status || "idle"));
-    sandboxWorkspaceError.value = "";
-    if (showFeedback) {
-      if (sandboxWorkspaceStatus.value === "running") {
-        const shortId = (sandboxWorkspaceInstanceId.value || "").slice(0, 12);
-        showToast(shortId ? `沙箱运行中 (${shortId})` : "沙箱运行中", "success");
-      } else if (sandboxWorkspaceStatus.value === "starting") {
-        showToast("沙箱启动中，请稍候...", "info");
-      } else {
-        showToast("沙箱状态已刷新：尚未启动", "info");
-      }
-    }
-  } catch (error: any) {
-    if (conversationId.value !== requestedConversationId) return;
-    const detail = error?.response?.data?.detail;
-    sandboxWorkspaceError.value = typeof detail === "string"
-      ? detail
-      : String(detail?.message || error?.message || "沙箱状态查询失败");
-    sandboxWorkspaceStatus.value = "error";
-    sandboxWorkspaceStartedAt.value = null;
-    sandboxWorkspaceUptimeSeconds.value = null;
-    if (showFeedback) {
-      showToast(sandboxWorkspaceError.value, "error");
-    }
-  } finally {
-    if (conversationId.value === requestedConversationId) {
-      sandboxWorkspaceStatusLoaded.value = true;
-    }
-    sandboxStatusRefreshInFlight = false;
-  }
-};
-
-/** 启动后自动轮询 status（每 2s，最长 ~60s），直到 Pod 就绪；支持自定义 readyMessage 与 readyToast 开关。 */
-const pollSandboxWorkspaceUntilRunning = async (
-  cid: string,
-  opts: { readyToast?: boolean; readyMessage?: string } = {},
-) => {
-  const { readyToast = true, readyMessage = "沙箱已就绪" } = opts;
-  const MAX_ATTEMPTS = 30; // 60s
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    if (conversationId.value !== cid) return;
-    try {
-      const response = await axios.get(
-        `${sandboxWorkspaceBaseEndpoint.value}/status`,
-        { params: { conversation_id: cid }, headers: embedAuthHeaders() },
-      );
-      const data = response.data?.data ?? response.data;
-      const mapped = mapSandboxStatus(String(data?.status || "idle"));
-      sandboxWorkspaceStatus.value = mapped;
-      sandboxWorkspaceInstanceId.value = instanceIdFromData(data);
-      sandboxWorkspaceStartedAt.value = data?.started_at || null;
-      sandboxWorkspaceUptimeSeconds.value = typeof data?.uptime_seconds === "number"
-        ? data.uptime_seconds
-        : null;
-      if (mapped === "running") {
-        if (readyToast) {
-          showToast(readyMessage, "success");
-        }
-        return;
-      }
-      if (mapped === "error") {
-        // 沙箱明确报错时立即终止轮询，避免继续空轮询
-        return;
-      }
-    } catch {
-      // 单次查询失败不中断轮询，继续尝试
-    }
-  }
-  // 超时仍未就绪：停留在当前状态并提示可手动刷新
-  if (conversationId.value === cid && sandboxWorkspaceStatus.value !== "running") {
-    if (readyToast) {
-      showToast("Pod 仍在创建中（可能镜像拉取较慢），可稍后点「刷新」查看", "info");
-    }
-  }
-};
-
-/** 会话打开/新建后自动预热一次（每个会话仅一次；仅当查询确认未运行且当前无任务）。 */
-let autoWarmedConversationKey = "";
-
-const maybeAutoWarmSandbox = async () => {
-  if (!isSandboxWorkspacePolicy.value || !conversationId.value) return;
-  if (isProcessing.value || remoteRunActive.value) return;
-  if (!sandboxWorkspaceStatusLoaded.value) return;
-  // 快路径：#config 已加载且显式关闭自动预热，直接跳过（后端 /ensure 仍会二次兜底）。
-  if (contextUsage.value?.sandbox_auto_warm === false) return;
-  const status = sandboxWorkspaceStatus.value;
-  if (status === "running" || status === "starting" || status === "error") return;
-  const key = `${conversationId.value}::${sandboxBackend.value}`;
-  if (autoWarmedConversationKey === key) return;
-  autoWarmedConversationKey = key;
-  try {
-    const response = await axios.post(
-      `${sandboxWorkspaceBaseEndpoint.value}/ensure`,
-      { conversation_id: conversationId.value, auto_warm: true },
-      { headers: embedAuthHeaders() },
-    );
-    const data = response.data?.data ?? response.data;
-    if (data?.auto_warm_disabled) {
-      // 后端已因 sandbox_auto_warm=false 跳过创建；不置 starting、不轮询，静默返回。
-      sandboxWorkspaceStatus.value = "idle";
-      return;
-    }
-    const mapped = mapSandboxStatus(String(data?.status || "idle"));
-    sandboxWorkspaceStatus.value = mapped;
-    sandboxWorkspaceInstanceId.value = instanceIdFromData(data);
-    sandboxWorkspaceStartedAt.value = data?.started_at || null;
-    sandboxWorkspaceUptimeSeconds.value = typeof data?.uptime_seconds === "number"
-      ? data.uptime_seconds
-      : null;
-    if (mapped === "running") {
-      showToast("沙箱环境已预热就绪", "success");
-    } else {
-      showToast("正在预热沙箱运行环境…", "info");
-      void pollSandboxWorkspaceUntilRunning(String(conversationId.value), {
-        readyToast: true,
-        readyMessage: "沙箱环境已预热就绪",
-      });
-    }
-  } catch {
-    // 自动预热失败静默：用户可手动「启动」，或发送消息时按既有降级逻辑处理
-  }
-};
-
-const ensureSandboxWorkspace = async () => {
-  if (!isSandboxWorkspacePolicy.value || !conversationId.value) return;
-  if (sandboxWorkspaceStatus.value === "starting") return;
-  const requestedConversationId = conversationId.value;
-  sandboxWorkspaceStatus.value = "starting";
-  sandboxWorkspaceError.value = "";
-  try {
-    const response = await axios.post(
-      `${sandboxWorkspaceBaseEndpoint.value}/ensure`,
-      { conversation_id: requestedConversationId },
-      { headers: embedAuthHeaders() },
-    );
-    if (conversationId.value !== requestedConversationId) return;
-    const data = response.data?.data ?? response.data;
-    const mapped = mapSandboxStatus(String(data?.status || "idle"));
-    if (mapped === "error") {
-      throw new Error("沙箱未返回运行中状态");
-    }
-    sandboxWorkspaceInstanceId.value = instanceIdFromData(data);
-    sandboxWorkspaceStartedAt.value = data?.started_at || null;
-    sandboxWorkspaceUptimeSeconds.value = typeof data?.uptime_seconds === "number" ? data.uptime_seconds : 0;
-    sandboxWorkspaceStatus.value = mapped;
-    showToast(mapped === "starting" ? "沙箱启动中..." : "沙箱已启动", mapped === "starting" ? "info" : "success");
-    // 非 running（如刚创建、Pending）时自动轮询直到就绪，无需用户手动刷新。
-    if (mapped !== "running") {
-      void pollSandboxWorkspaceUntilRunning(requestedConversationId);
-    }
-  } catch (error: any) {
-    if (conversationId.value !== requestedConversationId) return;
-    const detail = error?.response?.data?.detail;
-    sandboxWorkspaceError.value = typeof detail === "string"
-      ? detail
-      : String(detail?.message || error?.message || "沙箱启动失败");
-    sandboxWorkspaceStatus.value = "error";
-    showToast(sandboxWorkspaceError.value, "error");
-  }
-};
-
-const showDockerTerminal = ref(false);
-const showK8sTerminal = ref(false);
-
-const openDockerTerminal = () => {
-  if (sandboxWorkspaceStatus.value !== "running") {
-    showToast("沙箱未在运行中，请先启动", "warning");
-    return;
-  }
-  if (sandboxBackend.value === "k8s") {
-    showK8sTerminal.value = true;
-    return;
-  }
-  if (sandboxBackend.value === "docker") {
-    showDockerTerminal.value = true;
-    return;
-  }
-  showToast("当前沙箱不支持终端", "warning");
-};
-
-const confirmStopSandboxWorkspace = async () => {
-  showSandboxStopConfirm.value = false;
-  await stopSandboxWorkspace();
-};
-
-const handleStopSandboxWorkspaceRequest = () => {
-  if (sandboxBackend.value === "k8s") {
-    showSandboxStopConfirm.value = true;
-  } else {
-    void stopSandboxWorkspace();
-  }
-};
-
-const stopSandboxWorkspace = async () => {
-  if (!isSandboxWorkspacePolicy.value || !conversationId.value) return;
-  if (sandboxWorkspaceStatus.value === "stopping" || sandboxWorkspaceStatus.value === "starting") return;
-  const requestedConversationId = conversationId.value;
-  sandboxWorkspaceStatus.value = "stopping";
-  sandboxWorkspaceError.value = "";
-  try {
-    await axios.post(
-      `${sandboxWorkspaceBaseEndpoint.value}/stop`,
-      { conversation_id: requestedConversationId },
-      { headers: embedAuthHeaders() },
-    );
-    if (conversationId.value !== requestedConversationId) return;
-    sandboxWorkspaceStatus.value = "idle";
-    sandboxWorkspaceInstanceId.value = null;
-    sandboxWorkspaceStartedAt.value = null;
-    sandboxWorkspaceUptimeSeconds.value = null;
-    sandboxWorkspaceError.value = "";
-    showToast(sandboxBackend.value === "k8s" ? "Kubernetes 沙箱 Pod 已停止" : "Docker 沙箱容器已关机停止", "info");
-  } catch (error: any) {
-    if (conversationId.value !== requestedConversationId) return;
-    const detail = error?.response?.data?.detail;
-    const msg = typeof detail === "string"
-      ? detail
-      : String(detail?.message || error?.message || "停止沙箱失败");
-    sandboxWorkspaceStatus.value = "running";
-    showToast(msg, "error");
-  }
-};
-
-const restartSandboxWorkspace = async () => {
-  if (!isSandboxWorkspacePolicy.value || !conversationId.value) return;
-  if (sandboxWorkspaceStatus.value === "starting") return;
-  const requestedConversationId = conversationId.value;
-  sandboxWorkspaceStatus.value = "starting";
-  sandboxWorkspaceError.value = "";
-  try {
-    const response = await axios.post(
-      `${sandboxWorkspaceBaseEndpoint.value}/restart`,
-      { conversation_id: requestedConversationId },
-      { headers: embedAuthHeaders() },
-    );
-    if (conversationId.value !== requestedConversationId) return;
-    const data = response.data?.data ?? response.data;
-    const mapped = mapSandboxStatus(String(data?.status || "idle"));
-    sandboxWorkspaceInstanceId.value = instanceIdFromData(data);
-    sandboxWorkspaceStartedAt.value = data?.started_at || null;
-    sandboxWorkspaceUptimeSeconds.value = typeof data?.uptime_seconds === "number" ? data.uptime_seconds : 0;
-    sandboxWorkspaceStatus.value = mapped;
-    const shortId = (sandboxWorkspaceInstanceId.value || "").slice(0, 12);
-    const restartMsg = sandboxBackend.value === "k8s"
-      ? (shortId ? `Kubernetes 沙箱 Pod 已重启 (${shortId})` : "Kubernetes 沙箱 Pod 已重启")
-      : (shortId ? `Docker 沙箱已重启 (${shortId})` : "Docker 沙箱已重启");
-    showToast(restartMsg, "success");
-  } catch (error: any) {
-    if (conversationId.value !== requestedConversationId) return;
-    const detail = error?.response?.data?.detail;
-    sandboxWorkspaceError.value = typeof detail === "string"
-      ? detail
-      : String(detail?.message || error?.message || "沙箱重启失败");
-    sandboxWorkspaceStatus.value = "error";
-    showToast(sandboxWorkspaceError.value, "error");
-  }
-};
-
-watch(
-  [conversationId, effectiveSandboxPolicy],
-  async ([conversation, policy], previous) => {
-    const previousConversation = String(previous?.[0] || "");
-    const previousPolicy = String(previous?.[1] || "");
-    if (
-      !isSandboxWorkspacePolicy.value
-      || !conversation
-      || conversation !== previousConversation
-      || policy !== previousPolicy
-    ) {
-      resetSandboxWorkspaceState();
-      if (isSandboxWorkspacePolicy.value && conversation) {
-        await refreshSandboxWorkspaceStatus();
-        // 打开/新建会话后自动预热沙箱（默认开启，每个会话一次、静默）
-        void maybeAutoWarmSandbox();
-      }
-    }
-  },
-  { immediate: true },
-);
 const {
   contextCompactions,
   contextCompactionCount,
@@ -5108,6 +4919,86 @@ const confirmDeleteGroup = async () => {
     groupToDelete.value = null;
   }
 };
+
+const handleNewChatFromSidebar = () => {
+  resetSession();
+  if (isMobile.value) {
+    showHistorySidebar.value = false;
+  }
+};
+
+const handleDeleteSingleHistory = async (item: any) => {
+  const targetConvId = item.conversation_id;
+  if (!targetConvId) {
+    if (item.trace_id) {
+      await handleDeleteHistory(item.trace_id);
+    }
+    return;
+  }
+  try {
+    const headers: any = {};
+    if (config.token) {
+      headers["Authorization"] = `Bearer ${config.token}`;
+      headers["X-API-Key"] = config.token;
+    }
+    await axios.post(
+      "/api/v1/chat/history/batch-delete",
+      { conversation_ids: [targetConvId] },
+      { headers }
+    );
+    historyList.value = historyList.value.filter(
+      (h) => h.conversation_id !== targetConvId
+    );
+    showToast("会话已删除", "success");
+    if (conversationId.value === targetConvId) {
+      resetSession();
+    }
+  } catch (e) {
+    console.error("Failed to delete conversation", e);
+    showToast("删除会话失败", "error");
+  }
+};
+
+const handleExportChatFromSidebar = async (item: any) => {
+  const targetConvId = item.conversation_id;
+  if (!targetConvId) return;
+  try {
+    showToast("正在导出对话记录...", "info");
+    const headers: any = {};
+    if (config.token) {
+      headers["Authorization"] = `Bearer ${config.token}`;
+      headers["X-API-Key"] = config.token;
+    }
+    const res = await axios.get(`/api/v1/chat/conversation/${targetConvId}/history`, { headers });
+    const historyMsgs = res.data?.data?.messages || [];
+    let md = `# 会话导出记录\n\n- **会话 ID**: \`${targetConvId}\`\n- **导出时间**: ${new Date().toLocaleString()}\n\n---\n\n`;
+    if (historyMsgs.length === 0 && targetConvId === conversationId.value && messages.value.length > 0) {
+      messages.value.forEach((m: any) => {
+        const role = m.role === "user" ? "👤 **用户**" : "🤖 **AI 助手**";
+        md += `### ${role}\n\n${m.content || ""}\n\n---\n\n`;
+      });
+    } else {
+      historyMsgs.forEach((msg: any) => {
+        const role = msg.role === "user" ? "👤 **用户**" : "🤖 **AI 助手**";
+        md += `### ${role}\n\n${msg.content || ""}\n\n---\n\n`;
+      });
+    }
+    const filename = `chat_session_${targetConvId.slice(0, 8)}_${Date.now()}.md`;
+    downloadMarkdownFile(filename, md);
+    showToast("导出成功", "success");
+  } catch (e) {
+    console.error("Export conversation failed", e);
+    showToast("导出对话失败", "error");
+  }
+};
+
+const handleGlobalKeydown = (e: KeyboardEvent) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "h") {
+    e.preventDefault();
+    showHistorySidebar.value = !showHistorySidebar.value;
+  }
+};
+
 // Delete Confirmation
 const showDeleteModal = ref(false);
 const traceToDelete = ref<string | null>(null);
@@ -8629,6 +8520,7 @@ onMounted(() => {
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   window.addEventListener("fullscreenchange", updateFullScreenStatus);
+  window.addEventListener("keydown", handleGlobalKeydown);
   // Load Routing Settings
   const savedMulti = localStorage.getItem("yovole_enable_multi_agent");
   if (savedMulti !== null) config.enableMultiAgent = savedMulti === "1";
@@ -8826,6 +8718,7 @@ onUnmounted(() => {
   cancelPendingUrlTokenInitialization();
   window.removeEventListener("resize", updateWidth);
   window.removeEventListener("fullscreenchange", updateFullScreenStatus);
+  window.removeEventListener("keydown", handleGlobalKeydown);
   const handlers = (onUnmountHandlers as any).value;
   if (handlers?.onMessage) window.removeEventListener("message", handlers.onMessage);
   if (handlers?.onOnline) window.removeEventListener("online", handlers.onOnline);

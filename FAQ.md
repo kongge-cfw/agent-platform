@@ -2606,21 +2606,27 @@ curl -X POST "http://127.0.0.1:8001/api/v1/admin/sandbox/docker/prebuild?force=t
 在需要网络代理才能拉取 Docker 镜像或安装 pip 依赖的受限网络环境中，您可直接在宿主机或进入平台 Docker 容器内部运行预构建运维脚本：
 
 ```bash
-# 1. 带 HTTP/HTTPS 代理执行预构建（实时流式查看 Docker build 进度）
-./prebuild-sandbox.sh --proxy http://10.0.0.1:7890
+# 1. 演练模式（仅生成 Dockerfile 与上下文，不触发构建）
+./sandbox/docker/build-docker-sandbox-image.sh --dry-run
 
-# 2. 或在环境中预设代理环境变量后直接运行（自动识别）
+# 2. 探测本地所有已构建的沙箱镜像清单
+./sandbox/docker/build-docker-sandbox-image.sh --list
+
+# 3. 带 HTTP/HTTPS 代理执行预构建（实时流式查看 Docker build 进度）
+./sandbox/docker/build-docker-sandbox-image.sh --proxy http://10.0.0.1:7890
+
+# 4. 或在环境中预设代理环境变量后直接运行（自动识别，支持 -y 免交互）
 export HTTP_PROXY=http://10.0.0.1:7890 HTTPS_PROXY=http://10.0.0.1:7890
-./prebuild-sandbox.sh
+./sandbox/docker/build-docker-sandbox-image.sh -y
 
-# 3. 仅检查预构建状态与确定性 Tag
-./prebuild-sandbox.sh --status
+# 5. 仅检查预构建状态与确定性 Tag
+./sandbox/docker/build-docker-sandbox-image.sh --status
 
-# 4. 指定特定基础镜像或强制重建
-./prebuild-sandbox.sh --base-image python:3.11-slim --force --proxy http://10.0.0.1:7890
+# 6. 指定特定基础镜像或强制重建
+./sandbox/docker/build-docker-sandbox-image.sh --base-image python:3.11-slim --force --proxy http://10.0.0.1:7890
 ```
 
-> 💡 **提示**：通过 `./prebuild-sandbox.sh` 直接构建属于服务器本地/容器内部运维操作，**无需传递 API Key**。构建成功后会自动将预构建完成标记写入数据库与 Redis，回到前端管理页面刷新即可看到已就绪状态。
+> 💡 **提示**：通过 `./sandbox/docker/build-docker-sandbox-image.sh` 直接构建属于服务器本地/容器内部运维操作，**无需传递 API Key**。构建成功后会自动将预构建完成标记写入数据库与 Redis，回到前端管理页面刷新即可看到已就绪状态。
 
 ---
 
@@ -2691,7 +2697,7 @@ sequenceDiagram
 - **原因**：部分公有云加速地址（如阿里云未登录状态）会拦截匿名拉取报 access denied，或直接访问 Docker Hub / PyPI 发生网络阻塞。
 - **解决方案**：
   1. 在【系统配置】->【安全沙箱】中确保选用官方标准 **`python:3.11-slim`**，并在本地 Docker daemon 配置合法镜像加速器/代理；或选择「自定义镜像地址…」填入企业私有 Harbor 镜像地址后点击预构建；
-  2. 若当前机器需要 HTTP/HTTPS 代理才能访问外部网络，可直接在宿主机或进入容器终端运行 `./prebuild-sandbox.sh --proxy http://<代理IP>:<端口>` 进行构建，可实时流式观察下载与编译日志并自动落库。
+  2. 若当前机器需要 HTTP/HTTPS 代理才能访问外部网络，可直接在宿主机或进入容器终端运行 `./sandbox/docker/build-docker-sandbox-image.sh --proxy http://<代理IP>:<端口>` 进行构建，可实时流式观察下载与编译日志并自动落库。
 
 ##### Q4: 普通用户提示 `403 Forbidden` 无法启动沙箱
 
@@ -2719,15 +2725,18 @@ sequenceDiagram
 
 ##### 2. 工作区与共享持久卷（PVC）挂载设计
 很多运维人员关心：*智能体在 Pod 沙箱中生成的数据分析图表与文件，平台和用户如何实时获取？*
-- **推荐方案（复用共享 PVC）**：
-  - 在【系统配置】中配置 `sandbox_k8s_existing_pvc` 指向 NanZi 平台挂载的数据卷（如 `nanzi-ai-agent-data`）；
-  - 平台通过 Kubernetes `subPath` 机制，自动将用户工作区目录 `agent_workspaces/{user_key}/sandbox` 挂载至沙箱 Pod 内的 `/workspace`，同时以只读方式挂载 `docs` 文档目录；
+- **推荐方案（复用共享 PVC，零配置）**：
+  - `sandbox_k8s_existing_pvc` **留空即可**：平台自动读取自身 Pod 的存储配置，探测出自身数据目录（`/app/data`）背后的 PVC 并共享之——无需手工填写 PVC 名称，也兼容自定义 PVC 名的部署（不依赖硬编码卷名）；
+  - **前提：沙箱命名空间必须与平台同命名空间**。Kubernetes 的 PVC 是命名空间级资源，Pod 只能引用自身命名空间内的 PVC，因此 `sandbox_k8s_namespace` 默认已与平台对齐为 `nanzi-ai-agent`（留空表示自动跟随平台命名空间）；若指定为其它命名空间，沙箱 Pod 会因找不到该 PVC 而长期 `Pending`；
+  - 平台通过 Kubernetes `subPath` 机制，自动将用户工作区根目录 `agent_workspaces/{user_key}` 挂载至沙箱 Pod 内的 `/workspace`（与 Docker 沙箱一致，可在沙箱内直接查看并操作用户完整工作区），同时以只读方式挂载 `docs` 文档目录；
+  - 也可显式填写共享 PVC 名（指向该共享卷），或填 `none` 强制使用独立空卷；
   - 智能体在沙箱内写入的文件在宿主机及平台主容器中毫秒级可见并提供下载链接，体验与 Docker 挂载 100% 对齐；
   - **防误删保护**：NanZi 定制生命周期适配器在沙箱 Pod 结束或超时清理时，绝对不会误删任何共享持久卷；
-- **动态独立 PVC 方案**：若留空 `sandbox_k8s_existing_pvc`，平台将为每个用户动态申请专属独立 PVC（通过 `sandbox_k8s_storage_class` 与 `sandbox_k8s_storage_size` 控制），并可通过 `sandbox_k8s_delete_pvc_on_close` 开关配置沙箱关闭时是否连带销毁 PVC。
+- **动态独立 PVC 方案（强隔离，需显式声明）**：把 `sandbox_k8s_existing_pvc` 填为 `none`（或 `disabled`/`off`/`false`/`-`），平台将为每个工作区动态申请专属独立 PVC（通过 `sandbox_k8s_storage_class` 与 `sandbox_k8s_storage_size` 控制），并可通过 `sandbox_k8s_delete_pvc_on_close` 开关配置沙箱关闭时是否连带销毁 PVC。**此模式下沙箱内 `/workspace` 是一块全新空卷，看不到用户工作区**（属管理员有意选择，平台不再告警）。
+  - 若留空但**自动探测失败**（平台未运行在 K8s、数据目录非 PVC 等），平台会安全回退到该独立空卷模式，并在日志与 RBAC 自检结果中给出提醒。
 
 ##### 3. 所需权限与 RBAC 配置
-NanZi 平台 Pod 仅需在沙箱命名空间拥有管理 Pod 与 PVC 的最小权限：
+NanZi 平台 Pod 仅需在沙箱命名空间（默认与平台同命名空间 `nanzi-ai-agent`）拥有管理 Pod 与 PVC 的最小权限：
 ```bash
 # 应用最小权限 RBAC 模板
 kubectl apply -f k8s_deploy/sandbox-rbac.example.yaml

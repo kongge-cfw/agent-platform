@@ -110,7 +110,7 @@
 | 文件 | 用途 / 作用 |
 | --- | --- |
 | `secret.example.yaml` | Secret 模板（数据库/Redis/API Key 等敏感值）；复制后改名并填真实值，不要直接提交真实凭据 |
-| `sandbox-rbac.example.yaml` | `sandbox_policy = k8s` 时沙箱所需的最小 RBAC：让平台 ServiceAccount 能在 `agent-sandboxes` 命名空间创建/管理 Pod、PVC 等 |
+| `sandbox-rbac.example.yaml` | `sandbox_policy = k8s` 时沙箱所需的最小 RBAC：让平台 ServiceAccount 能在沙箱命名空间（默认与平台同命名空间 `nanzi-ai-agent`）创建/管理 Pod、PVC 等 |
 | `data-init-job.example.yaml` | 可选的一次性公共文档初始化 Job（把镜像内 `data/docs` 同步到 PVC）；不在默认 Kustomize 资源中 |
 | `ingress.example.yaml` | ingress-nginx 可选示例，含 SSE 超时与会话粘性配置 |
 
@@ -139,9 +139,9 @@ K8s 沙箱（`sandbox_policy = k8s`）的网关环境放在 Pod 内的 `/root/.a
 
 ![build_sand_box](./images/build_sand_box.png)
 
-可以通过**手动构建一次“网关预置镜像”**，把网关 venv 与 gateway 脚本直接打进镜像；
+可以通过**手动构建一次“网关预置镜像”**，把网关 venv、gateway 脚本以及常用排障与开发工具（`tree`、`telnet`、`netstat`/`net-tools`、`ping`、`dig`、`ps`、`git`、`jq` 等）直接打进镜像；
 配置 `sandbox_k8s_image` 指向它之后，新 Pod 起来**直接跳过整个 bootstrap**，冷启动从数十秒
-降到秒级。
+降到秒级，且在沙箱内可直接执行丰富的网络连通性与目录诊断命令。
 
 ### 一、前置条件
 
@@ -154,13 +154,19 @@ K8s 沙箱（`sandbox_policy = k8s`）的网关环境放在 Pod 内的 `/root/.a
 ```bash
 cd k8s_deploy
 
-# 1) （可选）先预览将要执行的 Dockerfile 与命令，不实际构建
+# 0) 探测本地 Docker 与 K8s 节点是否已有沙箱镜像
+./build-k8s-sandbox-image.sh --list
+
+# 1) （可选）先预览将要执行的 Dockerfile 与命令，不实际构建（演练模式）
 ./build-k8s-sandbox-image.sh --dry-run
 
-# 2) 正式构建：docker build → save 出 tar → 自动导入节点 containerd（ctr -n k8s.io / k3s ctr）
+# 2) 正式构建（推荐指定版本）：docker build → save 出 tar → 自动导入节点 containerd（ctr -n k8s.io / k3s ctr）
 ./build-k8s-sandbox-image.sh --version 1.0.0
 
-# 3) 若脚本未自动导入成功（例如在非节点机器上构建），把 tar 拷到节点后导入：
+# 3) 快速默认构建（无参数时会展示帮助并交互询问 [y/N]；免交互可加 -y）：
+./build-k8s-sandbox-image.sh -y
+
+# 4) 若脚本未自动导入成功（例如在非节点机器上构建），把 tar 拷到节点后导入：
 #    ./install.sh import nanzi-sandbox-k8s_1.0.0.tar
 ```
 
@@ -172,7 +178,7 @@ cd k8s_deploy
 > [+] Building 84.9s (7/9)                                                                    docker:default
 >  => [internal] load metadata for docker.io/library/python:3.11-slim                              0.0s
 >  => CACHED [1/5] FROM docker.io/library/python:3.11-slim                                         0.0s
->  => [2/5] RUN apt-get update -qq && apt-get install -y curl ca-certificates ripgrep ...         54.7s
+>  => [2/5] RUN apt-get update -qq && apt-get install -y curl ca-certificates ripgrep tree telnet net-tools ... 54.7s
 >  => [3/5] RUN curl -LsSf https://astral.sh/uv/install.sh | ... uv ...                            8.3s
 >  => [4/5] RUN uv venv /root/.agentscope/.venv && uv pip install ... "mcp<2.0.0" ...             20.7s
 >  => naming to docker.io/library/nanzi-sandbox-k8s:1.0.0                                          0.2s
@@ -183,11 +189,26 @@ cd k8s_deploy
 > unpacking docker.io/library/nanzi-sandbox-k8s:1.0.0 (sha256:...)...done
 > ✔  已导入节点容器运行时：nanzi-sandbox-k8s:1.0.0
 >
-> ✅ 构建完成。将系统配置 sandbox_k8s_image 设为 nanzi-sandbox-k8s:1.0.0，
->    之后新建/重启的沙箱 Pod 将直接使用预置网关环境。
+> ────────────────────────────────────────────────────────────────────
+> ✅ 镜像构建与导入完成！请前往 NanZi 平台 Web 端配置生效：
+> 
+> 1. 确认节点容器运行时已导入该镜像：
+>    ./install.sh check-sandbox-image nanzi-sandbox-k8s:1.0.0
+> 
+> 2. 登录平台 Web 控制台配置生效：
+>    👉 打开页面：【系统设置】→【参数配置】
+>    👉 展开分组：【沙箱配置】
+>    👉 找到配置项：sandbox_k8s_image（k8s 策略沙箱容器运行的基础镜像）
+>    👉 填写镜像名：nanzi-sandbox-k8s:1.0.0
+>    👉 点击右上角：【保存变更 (⌘S)】保存生效
+> 
+> 3. 生效说明：
+>    配置保存后，之后所有新建或重启的沙箱 Pod 将直接复用预置网关与排障环境，
+>    彻底跳过 Pod 冷启动下载安装依赖的过程，冷启动从数十秒降至秒级！
+> ────────────────────────────────────────────────────────────────────
 > ```
 
-常用参数：`--base-image python:3.11-slim`、`--image-name nanzi-sandbox-k8s`、
+常用参数：`-l`/`--list` 查验已有镜像、`-y`/`--yes` 免确认、`--base-image python:3.11-slim`、`--image-name nanzi-sandbox-k8s`、
 `--version <标签>`、`--proxy http://<代理>`、`--agentscope-version <版本>`（默认跟随平台
 venv 的 agentscope 版本，建议保持平台一致）、`--dry-run` 演练、`--no-import`。
 
@@ -195,14 +216,15 @@ venv 的 agentscope 版本，建议保持平台一致）、`--dry-run` 演练、
 
 ```bash
 ./install.sh check-sandbox-image nanzi-sandbox-k8s:1.0.0     # 或
-crictl images | grep nanzi-sandbox-k8s
+./install.sh images nanzi-sandbox-k8s                        # 或 crictl images | grep nanzi-sandbox-k8s
 ```
 
 ### 四、让沙箱使用该镜像
 
-1. 打开平台「系统配置 → 沙箱 → `sandbox_k8s_image`」，填 `nanzi-sandbox-k8s:1.0.0`
-   （页面该项下方有操作提示卡片）；
-2. 之后**新建/重启**的沙箱 Pod 将使用预置网关环境，冷启动显著加速（已运行 Pod 需重建才生效）。
+1. 打开平台 Web 端 **「系统设置」→「参数配置」→ 展开「沙箱配置」**；
+2. 找到 **`sandbox_k8s_image`**（k8s 策略沙箱容器运行的基础镜像），填入 `nanzi-sandbox-k8s:1.0.0`（页面该项下方有提示卡片与快捷填入按钮）；
+3. 点击页面右上角 **【保存变更 (⌘S)】** 确认保存；
+4. 之后**新建/重启**的沙箱 Pod 将直接使用预置网关与排障环境，冷启动显著加速（已运行 Pod 需重建才生效）。
 
 ### 五、注意事项
 
@@ -387,8 +409,8 @@ cd k8s_deploy
 * **幂等执行**：支持随时中断并安全重入，已存在的 PVC 和 Secret 会受到安全保护。
 
 日常运维管理可配合使用 [nanzi-k8s.sh](./nanzi-k8s.sh)：
-* `./nanzi-k8s.sh status`：一览本机 K3s 服务（K3s 节点）、集群节点、主平台及 `agent-sandboxes` 沙箱 Pod 与 PVC 状态；
-* `./nanzi-k8s.sh sandboxes`：专门监控沙箱命名空间下的活跃 Pod 与动态持久卷；
+* `./nanzi-k8s.sh status`：一览本机 K3s 服务（K3s 节点）、集群节点、主平台及沙箱命名空间（默认与平台同命名空间）的沙箱 Pod 与 PVC 状态；
+* `./nanzi-k8s.sh sandboxes`：监控沙箱 Pod、沙箱独立 PVC，以及沙箱通过 subPath 复用的平台共享数据卷（平台 Deployment Pod 不会混入）；
 * `./nanzi-k8s.sh restart-pod`：平滑滚动重启 NanZi Pod 并等待就绪；
 * `./nanzi-k8s.sh restart-pod-force`：**强制滚动重启以加载节点上最新同名镜像**（适合“先手动 build + 导入覆盖 `nanzi-ai-agent:latest`，再让 Pod 换到新镜像”的场景）；重启前会探测本机容器运行时确认镜像已导入，未导入会告警并可中止；
 * `./nanzi-k8s.sh restart-k3s`：重启 K3s 服务并等待 API Server 自动恢复（**仅 K3s 环境**）；
@@ -398,18 +420,19 @@ cd k8s_deploy
 
 #### K8s 沙箱“网关预置镜像”（可选加速）
 
-K8s 沙箱（`sandbox_policy = k8s`）每次冷启动都会初始化 AgentScope 网关环境（在 Pod 内装 venv/依赖），较慢。可选用 [build-k8s-sandbox-image.sh](./build-k8s-sandbox-image.sh) 手动构建一个“网关预置镜像”（把网关环境与 gateway 脚本打进镜像），构建/导入后把系统配置 `sandbox_k8s_image` 填为 `nanzi-sandbox-k8s:<版本>`，新沙箱 Pod 冷启动将直接复用、从数十秒降到秒级。
+K8s 沙箱（`sandbox_policy = k8s`）每次冷启动都会初始化 AgentScope 网关环境（在 Pod 内装 venv/依赖），较慢。可选用 [build-k8s-sandbox-image.sh](./build-k8s-sandbox-image.sh) 构建一个内置网关环境与常用排障工具（`tree`/`telnet`/`netstat` 等）的“网关预置镜像”。构建/导入后在平台「系统设置 → 参数配置 → 沙箱配置」把 `sandbox_k8s_image` 填为 `nanzi-sandbox-k8s:<版本>` 并保存，新沙箱 Pod 冷启动将直接复用、从数十秒降到秒级。
 
 ```bash
 # 在可访问 Docker 的构建机（本目录）执行：构建 + 导出 + 自动导入节点 containerd
-./build-k8s-sandbox-image.sh --version 1.0.0
+./build-k8s-sandbox-image.sh --version 1.0.0      # 指定版本构建
+./build-k8s-sandbox-image.sh -y                   # 免交互默认构建
 ./build-k8s-sandbox-image.sh --dry-run            # 只预览 Dockerfile 与命令
 # 复核节点是否已导入：
 ./install.sh check-sandbox-image nanzi-sandbox-k8s:1.0.0
 ```
 
 * 不构建预置镜像也能正常使用：默认 `python:3.11-slim` 由集群直接拉取，AgentScope 会在 Pod 内自动初始化网关环境。
-* 详细说明（构建内容/依赖版本/升级后重建时机）见 [upgrade.md](./upgrade.md) 顶部“可选加速”章节；系统配置页 `sandbox_k8s_image` 下方也有操作提示。
+* 详细说明（构建内容/排障工具/依赖版本/升级后重建时机）见上方「可选加速：K8s 沙箱网关预置镜像」章节；系统配置页 `sandbox_k8s_image` 下方也有操作提示。
 
 ---
 
@@ -1022,13 +1045,18 @@ NanZi 平台提供了**云原生 Pod 安全沙箱策略（`sandbox_policy = "k8s
 ### 1. 核心架构与原理
 - **免 Docker Socket**：智能体执行环境完全解耦宿主机 Docker daemon，原生适配 containerd、CRI-O 等所有标准 Kubernetes 运行时与多节点集群调度；
 - **MCP 协议通信**：Pod 内部以后台子进程运行 FastMCP Gateway 服务，上层智能体通过标准 MCP 协议调用 `sandbox::bash`、`sandbox::read` 等工具；
-- **共享持久卷 subPath 挂载（体验与 Docker 100% 对齐）**：
-  - 配置 `sandbox_k8s_existing_pvc` 指向平台的主 PVC（如 `nanzi-ai-agent-data`）；
-  - 自动通过 `subPath: agent_workspaces/{user_key}/sandbox` 挂载用户隔离私有目录，并以只读方式挂载 `docs` 文档库；
+- **共享持久卷 subPath 挂载（体验与 Docker 100% 对齐，零配置）**：
+  - `sandbox_k8s_existing_pvc` **留空即可**：平台自动读取自身 Pod 的存储配置，探测出自身数据目录（`/app/data`）背后的 PVC 并共享之，无需手工填写 PVC 名称，也兼容自定义 PVC 名的部署；
+  - 也可显式指定共享 PVC（填具体 PVC 名），或填 `none` 强制使用每工作区独立空卷（强隔离，沙箱内看不到用户工作区）；
+  - 自动通过 `subPath: agent_workspaces/{user_key}` 挂载用户隔离的私有工作区（与 Docker 沙箱一致，沙箱内 `/workspace` 可见并可操作该用户完整工作区），并以只读方式挂载 `docs` 文档库；
   - 智能体在沙箱内生成的图表、CSV 数据和文件工件，平台主服务毫秒级直读并生成下载链接；
+  - 自动探测失败时（平台未运行在 K8s、数据目录非 PVC 等）安全回退为独立空卷，并在日志与 RBAC 自检结果中给出提醒；
 - **生命周期保护**：
   - 会话结束或 30 分钟无交互超时后，自动销毁沙箱 Pod，释放集群 CPU / 内存资源；
-  - 平台定制适配器（NanZiK8sAdapter）保证在 Pod 销毁时**绝不误删共享 PVC**；若未指定已有 PVC 采用独立动态 PVC，可通过配置控制是否随 Pod 连带清理。
+  - 平台定制适配器（NanZiK8sAdapter）保证在 Pod 销毁时**绝不误删共享 PVC**；独立动态 PVC 可通过配置控制是否随 Pod 连带清理。
+- **命名空间与隔离方式**：
+  - **同命名空间（默认，推荐）**：`sandbox_k8s_namespace` 留空或设为平台命名空间（`nanzi-ai-agent`），沙箱即可共享平台数据卷，沙箱内 `/workspace` 与 Docker 沙箱一致；
+  - **独立命名空间（强隔离，不共享工作区）**：显式把 `sandbox_k8s_namespace` 设为独立命名空间（如历史默认值 `agent-sandboxes`），并把 `sandbox-rbac.example.yaml` 中 Role/RoleBinding 的 `namespace` 改过去；同时把 `sandbox_k8s_existing_pvc` 设为 `none`（或任意独立命名空间下的卷名），沙箱使用每工作区独立空卷、内看不到用户工作区。
 
 ### 2. 配置与开启步骤
 
@@ -1052,9 +1080,9 @@ spec:
 1. 找到【安全沙箱】分组；
 2. 将 **沙箱策略（`sandbox_policy`）** 切换为 **`k8s`（Kubernetes Pod 沙箱）**；
 3. 根据集群环境调整参数：
-   - `sandbox_k8s_namespace`：沙箱 Pod 运行的命名空间（默认 `nanzi-ai-agent`）；
+   - `sandbox_k8s_namespace`：沙箱 Pod 运行的命名空间（默认与平台同命名空间 `nanzi-ai-agent`；留空表示自动跟随平台命名空间）。⚠️ Kubernetes 的 PVC 是命名空间级资源，**只有与平台同命名空间**才能共享平台主 PVC 的用户工作区；填成其它命名空间会导致沙箱 Pod 因找不到 PVC 而长期 `Pending`；
    - `sandbox_k8s_image`：沙箱基础镜像（默认 `python:3.11-slim`，或企业已安装数据科学包的镜像）；
-   - `sandbox_k8s_existing_pvc`：推荐填写平台主 PVC 名称（例如 `nanzi-ai-agent-data`）；
+   - `sandbox_k8s_existing_pvc`：共享数据卷。**留空即推荐用法**——平台自动探测自身数据目录背后的 PVC 并共享用户工作区（零配置、兼容自定义 PVC 名）；填 `none` 表示强制使用每工作区独立空卷（强隔离，沙箱内看不到用户工作区）；填具体 PVC 名则显式指向该共享卷（须与平台同命名空间）；
    - `sandbox_k8s_cpu_limit` / `sandbox_k8s_memory_limit`：单 Pod 资源配额限制（如 `1` / `1Gi`）；
    - `sandbox_k8s_delete_pvc_on_close`：关闭沙箱时是否清理独立 PVC（使用已有 PVC 时不受此影响）；
 4. 保存配置即可生效，无需重启 NanZi 主服务。
@@ -1090,7 +1118,7 @@ NanZi AI Agent Platform - K8s / K3s 快捷运维工具
 
 常用运维指令：
   status        查看集群节点、NanZi 资源与沙箱 Pod/PVC 状态（K3s 节点另含本机服务状态）
-  sandboxes     专门监控 agent-sandboxes 命名空间下的沙箱 Pod 与 PVC
+  sandboxes     监控沙箱 Pod、沙箱独立 PVC 与共享的平台数据卷（不混入平台自身 Deployment Pod）
   restart-pod   通过 Deployment 平滑滚动重启 NanZi 业务 Pod
   restart-pod-force  强制滚动重启，使新 Pod 换到节点容器运行时中最新导入的同名镜像并等待就绪
   restart-k3s   重启底层 K3s 服务并等待 API Server 自动恢复（仅 K3s 环境）
@@ -1123,21 +1151,32 @@ root@yunshu-test2:/app/k8s/k8s_deploy# sh nanzi-k8s.sh status
 NAME           STATUS   ROLES   AGE   VERSION        INTERNAL-IP   EXTERNAL-IP   OS-IMAGE ...
 yunshu-test2   Ready    control-plane   13h   v1.36.4+k3s1   10.90.10.64   <none>   Ubuntu 20.04.1 LTS ...
 
-🚀 3. NanZi 平台应用资源 (Namespace: nanzi-ai-agent)
+🚀 3. NanZi 平台应用资源 (Namespace: nanzi-ai-agent, 不含沙箱)
 ────────────────────────────────────────────────────────────────────
 pod/nanzi-ai-agent-5788bb4549-z9stx   1/1   Running   0   6m3s   10.42.0.139   yunshu-test2   ...
 service/nanzi-ai-agent   ClusterIP   10.43.67.129   <none>   80/TCP   12h   ...
 ingress.networking.k8s.io/nanzi-ai-agent   traefik   *   10.90.10.64   80   11h
 
-📦 4. 沙箱工作区资源 (Namespace: agent-sandboxes)
+📦 4. 沙箱工作区资源 (Namespace: nanzi-ai-agent, 仅 AgentScope 托管资源)
 ────────────────────────────────────────────────────────────────────
-（当前无运行中的沙箱 Pod 或活跃 PVC）
+（当前无运行中的沙箱 Pod 或沙箱独立 PVC；共享模式下沙箱通过 subPath 复用平台数据卷，故无沙箱独立 PVC 属正常）
+共享数据卷：nanzi-ai-agent-data   Bound   pvc-16cbf742-...   20Gi   RWO   local-path   4d23h
+（平台 Pod 挂载于 /app/data；沙箱通过 subPath: agent_workspaces/{user_key} 复用该卷，故共享模式下没有沙箱独立 PVC）
 
 ✔ 状态检查完毕
 ```
 
 > 提示：`restart-pod` / `restart-k3s` / `restart-all` 会先弹 y/N 二次确认；沙箱与平台滚动
 > 重启、镜像滚动发布等详细操作见 `upgrade.md`。
+
+> 说明（沙箱与平台同命名空间时的输出划分）：沙箱默认与平台同命名空间（共享平台 PVC 的前提），
+> 因此运维输出已按标签区分两侧视角，互不混淆：
+> - **平台视角**（`status` 第 3 节、`health` 第 3 节、`restart-*` 后的 Pod 列表）用正向标签
+>   `app.kubernetes.io/name=nanzi-ai-agent` 只列平台自身的 Pod/Service/Ingress，天然排除沙箱 Pod；
+> - **沙箱视角**（`status` 第 4 节、`sandboxes`、`health` 第 5 节）用
+>   `app.kubernetes.io/managed-by=agentscope` 只列 AgentScope 托管资源，并额外展示沙箱复用的
+>   平台共享数据卷（共享模式下沙箱没有独立 PVC，属正常）；
+> - `events` 在同命名空间下合并为「命名空间事件」一个视图（事件不支持按标签过滤）。
 
 不要执行 `kubectl delete pvc nanzi-ai-agent-data` 作为普通排障操作；删除 PVC 可能导致
 上传文件、用户工作区和生成文件丢失。
@@ -1164,7 +1203,7 @@ ingress.networking.k8s.io/nanzi-ai-agent   traefik   *   10.90.10.64   80   11h
 | `Pending` 或 PVC 挂载失败 | 集群没有默认 StorageClass、容量不足或 RWO 卷仍被旧 Pod 占用 | 检查 `kubectl -n nanzi-ai-agent describe pvc nanzi-ai-agent-data`；不要为了排障删除 PVC |
 | Pod 正常但公共文档/上传文件消失 | PVC 挂载 `/app/data` 后遮住了镜像内同路径内容，或 PVC 没有初始化 | 按“初始化 `/app/data`”章节把必要的 `data/` 内容同步到 PVC |
 | `CrashLoopBackOff` | 应用启动阶段连接数据库/Redis失败、必填环境变量缺失或镜像启动异常 | 先看 `kubectl -n nanzi-ai-agent logs deployment/nanzi-ai-agent --previous`，再核对 ConfigMap、Secret、DNS、端口和网络策略 |
-| 沙箱 Bash/exec 报 `HTTP 500: No module named 'xxx'`（如 `docstring_parser`/`jinja2`） | 网关预置镜像内的 agentscope 缺少工具链核心依赖（官方 `_GATEWAY_BASE_REQUIREMENTS` 清单遗漏，Bash/MCP 工具加载 `agentscope.tool` 时触发；缺 `docstring_parser` 最常见，补上后可能继续缺 `jinja2` 等） | 用新版 `build-k8s-sandbox-image.sh` 重建并重新导入预置镜像（`BASE_REQS` 已补齐并经 smoke import 验证）；已运行 Pod 可临时 `kubectl exec` 补装：`kubectl exec -it -n agent-sandboxes <pod> -- /root/.agentscope/.venv/bin/pip install docstring_parser jinja2 aiofiles tree_sitter tree_sitter_bash python-frontmatter` |
+| 沙箱 Bash/exec 报 `HTTP 500: No module named 'xxx'`（如 `docstring_parser`/`jinja2`） | 网关预置镜像内的 agentscope 缺少工具链核心依赖（官方 `_GATEWAY_BASE_REQUIREMENTS` 清单遗漏，Bash/MCP 工具加载 `agentscope.tool` 时触发；缺 `docstring_parser` 最常见，补上后可能继续缺 `jinja2` 等） | 用新版 `build-k8s-sandbox-image.sh` 重建并重新导入预置镜像（`BASE_REQS` 已补齐并经 smoke import 验证）；已运行 Pod 可临时 `kubectl exec` 补装：`kubectl exec -it -n nanzi-ai-agent <pod> -- /root/.agentscope/.venv/bin/pip install docstring_parser jinja2 aiofiles tree_sitter tree_sitter_bash python-frontmatter` |
 | 数据库连接失败或表不存在 | 地址、端口、账号、数据库类型错误，或迁移没有完成 | 确认 `DATABASE_TYPE` 与实际数据库一致；MySQL 和 PostgreSQL 迁移分别执行一次，不要混用 |
 | Redis 连接成功但向量/知识库功能异常 | Redis 不是 Redis Stack/RediSearch、密码错误或 `REDIS_DB` 不为 0 | 检查 Redis 版本、认证和 `REDIS_DB=0`；所有副本必须连接同一个 Redis |
 | Ingress 返回 404/502/504 | Ingress Class、域名、TLS、Service 端口或后端 Pod 不匹配 | 先绕过 Ingress 用 `port-forward` 验证 Service，再检查 Ingress 事件和 Controller 日志 |

@@ -2,6 +2,9 @@
 
 Adapts AgentScope's K8sWorkspace to support:
 1. Shared cluster PVC with subPath (matching Docker's user workspace & public docs behavior).
+   The sandbox workdir ``/workspace`` binds the whole per-user workspace
+   ``agent_workspaces/{user_key}`` via subPath, so Bash inside the sandbox sees
+   and operates the exact same files as the host file tools (Docker-aligned).
 2. Local pre-creation of subPath directories to prevent Kubernetes MountVolume failures.
 3. Identity guard: Prohibit unauthenticated users from mounting shared PVC root.
 4. Non-privileged namespace creation graceful fallback (handling 403 Forbidden).
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import time
 import uuid
 from typing import Any
@@ -20,6 +24,283 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_K8S_CPU_REQUEST = "100m"
 DEFAULT_K8S_MEMORY_REQUEST = "128Mi"
+
+#: Namespace the platform itself is deployed in (matches ``k8s_deploy/namespace.yaml``).
+#: Kubernetes PVCs are namespace-scoped, so sharing the platform data volume with
+#: sandbox Pods REQUIRES the sandbox namespace to equal this one.
+DEFAULT_PLATFORM_NAMESPACE = "nanzi-ai-agent"
+
+#: Legacy seeded default for ``sandbox_k8s_namespace``. It predates the shared-PVC
+#: alignment and is treated as "unset" so existing installs follow the platform
+#: namespace instead of silently mounting an isolated empty volume.
+LEGACY_DEFAULT_K8S_NAMESPACE = "agent-sandboxes"
+
+#: Env overrides, in priority order, for the platform's own namespace.
+_PLATFORM_NAMESPACE_ENV_KEYS = ("NANZI_PLATFORM_NAMESPACE", "POD_NAMESPACE", "K8S_NAMESPACE")
+
+#: In-cluster file every Pod gets; the authoritative way to know our namespace.
+_SERVICEACCOUNT_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+#: ``sandbox_k8s_existing_pvc`` values that explicitly request the isolated
+#: per-workspace empty PVC instead of sharing the platform data volume.
+ISOLATED_PVC_SENTINELS = frozenset({"none", "disabled", "off", "false", "-"})
+
+#: How long a platform-PVC auto-detection result stays cached (seconds).
+_PLATFORM_PVC_CACHE_TTL_SECONDS = 300
+
+
+def resolve_platform_namespace() -> str:
+    """Return the Kubernetes namespace the platform itself runs in.
+
+    Resolution order: explicit env override -> in-cluster ServiceAccount
+    namespace file -> :data:`DEFAULT_PLATFORM_NAMESPACE`.
+    """
+    for key in _PLATFORM_NAMESPACE_ENV_KEYS:
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+    try:
+        with open(_SERVICEACCOUNT_NAMESPACE_FILE, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+            if value:
+                return value
+    except OSError:
+        pass
+    return DEFAULT_PLATFORM_NAMESPACE
+
+
+def resolve_sandbox_namespace(configured: str | None) -> str:
+    """Normalise ``sandbox_k8s_namespace`` into the effective sandbox namespace.
+
+    An empty value *or* the legacy seeded default (``agent-sandboxes``) means
+    "follow the platform namespace", which is what makes the shared-PVC workspace
+    mount work out of the box (matching Docker sandbox behaviour). Any other value
+    is treated as an explicit admin override.
+    """
+    value = (configured or "").strip()
+    if not value or value == LEGACY_DEFAULT_K8S_NAMESPACE:
+        return resolve_platform_namespace()
+    return value
+
+
+def _platform_pod_name() -> str:
+    """Best-effort Pod name of the platform process itself.
+
+    Inside Kubernetes a Pod's hostname defaults to its Pod name, so
+    ``socket.gethostname()`` works without configuring a downward-API env var;
+    ``POD_NAME``/``HOSTNAME`` are honoured first when present.
+    """
+    for key in ("POD_NAME", "HOSTNAME"):
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+    try:
+        return socket.gethostname().strip()
+    except OSError:
+        return ""
+
+
+def _claim_name_for_data_mount(pod: Any, data_dir: str) -> str | None:
+    """Return the PVC claim name backing ``data_dir`` in a Pod spec, if any.
+
+    Pure helper (no I/O) so the mapping stays unit-testable: locate the container
+    volumeMount whose ``mount_path`` equals the platform data dir, resolve it to
+    the Pod volume of the same name, and return that volume's
+    ``persistent_volume_claim.claim_name``. Returns ``None`` when the mount is
+    absent or is not backed by a PVC (emptyDir / hostPath / no data volume).
+    """
+    spec = getattr(pod, "spec", None)
+    if spec is None:
+        return None
+
+    target = os.path.normpath(data_dir) if data_dir else ""
+    if not target:
+        return None
+
+    try:
+        volumes = getattr(spec, "volumes", None) or []
+        for container in getattr(spec, "containers", None) or []:
+            for mount in getattr(container, "volume_mounts", None) or []:
+                mount_path = getattr(mount, "mount_path", None)
+                if not mount_path or os.path.normpath(mount_path) != target:
+                    continue
+                volume_name = getattr(mount, "name", None)
+                for volume in volumes:
+                    if getattr(volume, "name", None) != volume_name:
+                        continue
+                    claim = getattr(volume, "persistent_volume_claim", None)
+                    claim_name = getattr(claim, "claim_name", None) if claim else None
+                    return (str(claim_name).strip() or None) if claim_name else None
+    except (TypeError, AttributeError, ValueError):
+        # Defensive: the helper is best-effort and must never break sandbox startup.
+        return None
+    return None
+
+
+#: data_dir -> (monotonic timestamp, detected claim name or None)
+_platform_pvc_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def reset_platform_pvc_cache() -> None:
+    """Clear the cached platform-PVC detection (used by tests and after upgrades)."""
+    _platform_pvc_cache.clear()
+
+
+async def detect_platform_data_pvc() -> str | None:
+    """Best-effort: PVC claim name backing the platform's own data directory.
+
+    Reads the platform Pod's own spec and returns the claim mounted at the
+    platform data dir (``/app/data`` in the standard deployment). The claim name
+    is deployment-specific, so auto-detection is used instead of hardcoding it —
+    that keeps custom PVC names working without extra configuration.
+
+    Returns ``None`` when the platform does not run in Kubernetes with a
+    PVC-backed data directory, when permissions are missing, or on any API error.
+    Never raises: callers fall back to the isolated per-workspace PVC.
+    """
+    try:
+        from app.utils.fs_paths import get_data_base_dir
+
+        data_dir = get_data_base_dir()
+    except Exception:  # noqa: BLE001 - fall back to the standard in-container path
+        data_dir = "/app/data"
+
+    now = time.monotonic()
+    cached = _platform_pvc_cache.get(data_dir)
+    if cached is not None and (now - cached[0]) < _PLATFORM_PVC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        claim_name = await _read_own_pvc_claim(data_dir)
+    except Exception as exc:  # noqa: BLE001 - detection is best-effort, never fatal
+        logger.warning("[k8s_workspace] Platform data PVC auto-detection failed: %s", exc)
+        claim_name = None
+    _platform_pvc_cache[data_dir] = (now, claim_name)
+    return claim_name
+
+
+async def _read_own_pvc_claim(data_dir: str) -> str | None:
+    """Read the platform's own Pod spec and extract the claim backing ``data_dir``."""
+    pod_name = _platform_pod_name()
+    if not pod_name:
+        return None
+
+    try:
+        from kubernetes_asyncio import client as k8s_client
+        from kubernetes_asyncio import config as k8s_async_config
+    except ImportError:
+        logger.info(
+            "[k8s_workspace] kubernetes-asyncio not installed; skip platform PVC auto-detection"
+        )
+        return None
+
+    namespace = resolve_platform_namespace()
+    try:
+        k8s_async_config.load_incluster_config()
+    except Exception:
+        try:
+            await k8s_async_config.load_kube_config()
+        except Exception as exc:  # noqa: BLE001 - detection is best-effort
+            logger.info(
+                "[k8s_workspace] No cluster credentials; skip platform PVC auto-detection: %s",
+                exc,
+            )
+            return None
+
+    try:
+        async with k8s_client.ApiClient() as api_client:
+            core_v1 = k8s_client.CoreV1Api(api_client)
+            pod = await core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+    except Exception as exc:  # noqa: BLE001 - detection is best-effort
+        logger.warning(
+            "[k8s_workspace] Failed to auto-detect platform data PVC from pod %s/%s: %s",
+            namespace,
+            pod_name,
+            exc,
+        )
+        return None
+
+    claim_name = _claim_name_for_data_mount(pod, data_dir)
+    if claim_name:
+        logger.info(
+            "[k8s_workspace] Auto-detected platform data PVC %r (mount %s) for sandbox sharing",
+            claim_name,
+            data_dir,
+        )
+    return claim_name
+
+def parse_existing_pvc_config(configured: str | None) -> tuple[str | None, bool]:
+    """Split ``sandbox_k8s_existing_pvc`` into ``(explicit_claim, isolation_requested)``.
+
+    - blank                -> ``(None, False)``  : auto-detect the platform PVC;
+    - ``none``/``disabled``-> ``(None, True)``   : force the isolated empty PVC;
+    - any other value      -> ``(value, False)`` : use that shared PVC.
+    """
+    value = (configured or "").strip()
+    if not value:
+        return None, False
+    if value.lower() in ISOLATED_PVC_SENTINELS:
+        return None, True
+    return value, False
+
+
+async def resolve_shared_pvc(configured: str | None) -> dict[str, Any]:
+    """Resolve the effective shared PVC for the sandbox workspace mount.
+
+    ``source`` is one of:
+
+    - ``configured``  : admin explicitly named a shared PVC;
+    - ``auto``        : blank config, platform data PVC auto-detected;
+    - ``isolated``    : admin explicitly requested the isolated empty PVC;
+    - ``unavailable`` : blank config and auto-detection found no platform PVC.
+    """
+    explicit, isolation_requested = parse_existing_pvc_config(configured)
+    if explicit:
+        return {"pvc": explicit, "source": "configured"}
+    if isolation_requested:
+        return {"pvc": None, "source": "isolated"}
+
+    detected = await detect_platform_data_pvc()
+    if detected:
+        return {"pvc": detected, "source": "auto"}
+    return {"pvc": None, "source": "unavailable"}
+
+
+def evaluate_k8s_workspace_mount_config(
+    *,
+    namespace: str | None,
+    pvc: str | None,
+    pvc_source: str = "unavailable",
+    platform_namespace: str | None = None,
+) -> list[str]:
+    """Return admin-facing warnings about the K8s sandbox workspace mount config.
+
+    These describe configurations that silently break the "sandbox sees the user
+    workspace, like Docker" contract, so they are surfaced both in logs and in the
+    RBAC self-check API response.
+    """
+    warnings: list[str] = []
+    platform_ns = (platform_namespace or resolve_platform_namespace()).strip()
+    effective_ns = resolve_sandbox_namespace(namespace)
+
+    if not pvc:
+        # ``isolated`` is an explicit admin choice, so it is not a warning.
+        if pvc_source != "isolated":
+            warnings.append(
+                "未能确定共享数据卷（sandbox_k8s_existing_pvc 留空且无法自动探测平台数据 PVC，"
+                "或平台未以 PVC 方式运行）：K8s 沙箱将使用每个工作区独立创建的空 PVC，"
+                "沙箱内 /workspace 看不到用户工作区（与 Docker 沙箱行为不一致）。"
+                "如需对齐 Docker，请把 sandbox_k8s_existing_pvc 显式设为平台主 PVC 名称，"
+                f"并保持 sandbox_k8s_namespace 与平台命名空间（{platform_ns}）一致。"
+            )
+    elif effective_ns != platform_ns:
+        warnings.append(
+            f"sandbox_k8s_namespace（{effective_ns}）与平台命名空间（{platform_ns}）不一致，"
+            "但已配置共享 PVC。Kubernetes PVC 是命名空间级的，"
+            "沙箱 Pod 无法引用其他命名空间的 PVC，Pod 会因找不到该 PVC 而一直 Pending。"
+            f"请将 sandbox_k8s_namespace 设为 {platform_ns}，或留空以自动跟随平台命名空间。"
+        )
+    return warnings
 
 
 class K8sSandboxUnavailableError(RuntimeError):
@@ -78,10 +359,10 @@ def _ensure_local_subpath_dirs(
             if not os.path.isdir(abs_cand):
                 continue
             if user_key:
-                user_sandbox_dir = os.path.join(
-                    abs_cand, "agent_workspaces", user_key, "sandbox"
+                user_workdir = os.path.join(
+                    abs_cand, "agent_workspaces", user_key
                 )
-                os.makedirs(user_sandbox_dir, exist_ok=True)
+                os.makedirs(user_workdir, exist_ok=True)
             docs_dir = os.path.join(abs_cand, "docs")
             os.makedirs(docs_dir, exist_ok=True)
             logger.debug(
@@ -247,7 +528,11 @@ def build_k8s_workspace_with_nanzi_adapter(
                 for k, v in merged_env.items()
             ] if merged_env else None
 
-            user_subpath = f"agent_workspaces/{self._nanzi_sandbox_user_key}/sandbox"
+            # 挂载整个用户工作区根（agent_workspaces/{user_key}），与 Docker 沙箱
+            # bind 用户工作区的行为对齐：沙箱 Bash/read/write 能直接看到并操作
+            # 用户在平台上工作区的全部内容（sessions/docs/历史落盘文件等），
+            # 而非之前只挂工作区下的 sandbox 子目录。
+            user_subpath = f"agent_workspaces/{self._nanzi_sandbox_user_key}"
 
             volume_mounts = [
                 k8s_client.V1VolumeMount(
@@ -366,17 +651,8 @@ def build_k8s_workspace_with_nanzi_adapter(
     )
 
 
-async def check_k8s_rbac_status(
-    namespace: str | None = None,
-) -> dict[str, Any]:
-    """Check Kubernetes cluster connectivity and RBAC permissions for the sandbox namespace."""
-    from app.services.config_service import ConfigService
-
-    target_namespace = (
-        namespace
-        or (await ConfigService.get("sandbox_k8s_namespace", "agent-sandboxes"))
-    ).strip() or "agent-sandboxes"
-
+async def _probe_k8s_rbac_status(target_namespace: str) -> dict[str, Any]:
+    """Probe cluster connectivity and RBAC permissions for ``target_namespace``."""
     try:
         from kubernetes_asyncio import client as k8s_client, config as k8s_async_config
     except ImportError:
@@ -462,6 +738,55 @@ async def check_k8s_rbac_status(
             "message": f"连接 Kubernetes API Server 发生异常：{exc}",
             "remedy": "请检查集群网络连通性、API Server 地址及网络策略（NetworkPolicy）。",
         }
+
+
+async def check_k8s_rbac_status(
+    namespace: str | None = None,
+) -> dict[str, Any]:
+    """Check cluster connectivity, RBAC permissions and workspace mount config.
+
+    Besides the RBAC probe, the response carries a ``warnings`` list and the
+    resolved workspace volume (``workspace_mount``) describing what the sandbox
+    will actually mount — e.g. a blank ``sandbox_k8s_existing_pvc`` that could not
+    be auto-detected, or a sandbox namespace that cannot reach the platform PVC
+    because PVCs are namespace-scoped.
+    """
+    from app.services.config_service import ConfigService
+
+    configured_namespace = ""
+    explicit_namespace = (namespace or "").strip()
+    if not explicit_namespace:
+        try:
+            configured_namespace = (
+                await ConfigService.get("sandbox_k8s_namespace", "")
+            ) or ""
+        except Exception as exc:  # noqa: BLE001 - config read must never break the probe
+            logger.warning("[k8s_workspace] Failed to read sandbox_k8s_namespace: %s", exc)
+
+    target_namespace = explicit_namespace or resolve_sandbox_namespace(configured_namespace)
+
+    configured_pvc = ""
+    try:
+        configured_pvc = await ConfigService.get("sandbox_k8s_existing_pvc", "") or ""
+    except Exception as exc:  # noqa: BLE001 - config read must never break the probe
+        logger.warning("[k8s_workspace] Failed to read sandbox_k8s_existing_pvc: %s", exc)
+
+    resolution = await resolve_shared_pvc(configured_pvc)
+    warnings = evaluate_k8s_workspace_mount_config(
+        namespace=configured_namespace or target_namespace,
+        pvc=resolution["pvc"],
+        pvc_source=resolution["source"],
+    )
+
+    result = await _probe_k8s_rbac_status(target_namespace)
+    result["warnings"] = warnings
+    result["workspace_mount"] = {
+        "claim_name": resolution["pvc"],
+        "source": resolution["source"],
+    }
+    for warning in warnings:
+        logger.warning("[k8s_workspace] K8s sandbox mount config: %s", warning)
+    return result
 
 
 async def read_k8s_sandbox_pod(

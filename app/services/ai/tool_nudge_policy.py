@@ -86,6 +86,43 @@ _OFFICE_EXPLANATION_TERMS = (
     "功能", "作用", "说明", "介绍", "怎么用",
 )
 
+# read_image 是「必须指认图片实体」的证据型视觉工具：它需要真实的图片
+# path 才能执行，不像 read_file/search_text/web_search_x 那样可由问题字面
+# 直接派生输入。因此它不能用「问题与描述字面重叠」的通用相关度去陈拓触发，
+# 否则普通文字问题（如“感觉模型速度很快啊”）会因描述里的“查看/分析/图片”
+# 等泛化词被误判为相关并被强制首调用，随后幻觉不存在的路径。
+# 这里仅当问题明确提到图片实体（图片/截图/图表/照片/视觉/OCR 等）且带读取
+# 动作时，才确定性触发 read_image；其余一律不触发，交由模型自主判断。
+_IMAGE_TOOL_NAME = "read_image"
+_IMAGE_CHINESE_ENTITY_TERMS = (
+    "图片", "图像", "截图", "截屏", "照片", "图表",
+    "柱状图", "折线图", "饼图", "散点图", "热力图", "流程图", "示意图", "架构图",
+    "图纸", "缩略图", "动图", "配图",
+)
+_IMAGE_ASCII_ENTITY_TERMS = (
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "chart", "ocr",
+)
+_IMAGE_ENTITY_TERMS = _IMAGE_CHINESE_ENTITY_TERMS + _IMAGE_ASCII_ENTITY_TERMS
+_IMAGE_READ_TERMS = (
+    "读取", "查看", "看看", "打开", "解析", "识别", "分析", "检查",
+    "提取", "描述", "看下", "看图", "看一下", "读一下", "识别文字",
+    "ocr", "读图", "看图说话",
+)
+_IMAGE_EXPLANATION_TERMS = (
+    "是什么", "什么工具", "有什么区别", "区别", "支持", "能做什么",
+    "功能", "作用", "说明", "介绍", "怎么用", "怎么使用", "如何使用",
+    "怎么调用", "如何调用", "怎么操作", "如何操作",
+)
+# 用户明确否定时，即便问题提到图片也不触发，避免反向喊停还被推进。
+# 否定标记比 Office 的“xx调用”更宽：图片意图的否定常是“不用看”“别解析”等。
+_IMAGE_NEGATION_TERMS = (
+    "不要调用", "别调用", "不用调用", "不调用", "无需调用", "请勿调用",
+    "不必调用", "不需要调用", "禁止调用",
+    "不用看", "别解析", "请勿解析", "不要解析", "无需解析", "不用解析",
+    "不要使用", "请勿使用", "不必使用", "不需要使用", "无需使用",
+    "不用识图", "别识图",
+)
+
 # 用户明确要求进入“你问我答/逐步引导”流程时，不应再等待模型自行判断
 # 当前任务是否已经阻塞。该信号只负责提升 ask_user_question，否定表达优先排除。
 _EXPLICIT_USER_QUESTION_REQUEST_TERMS = (
@@ -157,6 +194,60 @@ _NON_INTERACTIVE_CONTEXT_MARKERS = (
     "定时任务",
     "订阅任务",
     "taskcenter自动任务",
+)
+
+# 用户表达「需要做决定 / 在多个选项间犹豫 / 把选择权交给 AI」的半显式决策请求。
+# 与 _EXPLICIT_USER_QUESTION_REQUEST_TERMS 不同，这类请求没有直接点名「提问」，
+# 但明确存在多个同等合理的分支需要用户抉择（对应系统提示的「决策收集模式」）。
+# 触发后仅注入一条弱提示（不强 force），让模型结合上下文自主决定是否调用 ask_user_question。
+_DECISION_REQUEST_TERMS = (
+    "你帮我选",
+    "帮我选一个",
+    "你推荐哪个",
+    "你推荐一下",
+    "你推荐一个",
+    "有推荐吗",
+    "听你的",
+    "你看着办",
+    "你决定吧",
+    "你来决定",
+    "你来定",
+    "你定吧",
+    "你定就行",
+    "你帮我拿",
+    "帮我拿个主意",
+    "帮我拿主意",
+    "哪个都行",
+    "都可以你定",
+    "随便你定",
+    "纠结",
+    "选哪个好",
+    "我该选",
+    "选择困难",
+    "不好决定",
+    "youdecide",
+    "youpick",
+    "yourrecommendation",
+    "whichoneshouldi",
+    "cantdecide",
+)
+# 出现「选择/决定」相关但本质是否定或无需问答的排除词。
+_DECISION_REQUEST_NEGATIONS = (
+    "不用选",
+    "别选",
+    "不用决定",
+    "不用你定",
+    "不需要你决定",
+    "不要问我",
+    "不用问我",
+    "别问我",
+    "不要提问",
+    "不用提问",
+    "无需提问",
+    "不需要提问",
+    "直接回答",
+    "随便聊聊",
+    "随便看看",
 )
 
 # 计算相关度时剔除的高频泛化片段（出现在问题里但无区分度）。
@@ -234,6 +325,62 @@ def looks_like_explicit_user_question_request(user_query: str) -> bool:
         "提问" in query
         and _contains_any(query, ("我", "用户"))
         and _contains_any(query, ("先", "逐个", "一步", "引导", "通过"))
+    )
+
+
+def looks_like_decision_request(user_query: str) -> bool:
+    """识别用户表达「需要做决定 / 在多个分支间犹豫 / 把选择权交给 AI」的半显式请求。
+
+    它不点名「提问」，但明确存在多个同等合理的分支需要用户抉择，对应系统提示的
+    「决策收集模式」。因子集较精确，仅用于产生一条弱提示（不强 force），
+    由模型结合上下文自主决定是否调用 ask_user_question。
+    """
+    query = _normalize(user_query)
+    if not query or "【用户回答】" in query:
+        return False
+    if _contains_any(query, _NON_INTERACTIVE_CONTEXT_MARKERS):
+        return False
+    if _contains_any(query, _DECISION_REQUEST_NEGATIONS):
+        return False
+    return _contains_any(query, _DECISION_REQUEST_TERMS)
+
+
+def _resolve_decision_request_nudge(
+    query: str,
+    tools: List[Any],
+    exclude_tools: Optional[Set[str]] = None,
+) -> Optional[ToolNudge]:
+    """为用户明确表达「需要帮忙做决定」的半显式请求生成一条弱提示。
+
+    仅在 ask_user_question 已绑定、且用户确实展示出抉择需求时返回；返回的 nudge
+    不设 force_first_call，避免把“你帮我选”这类尚可由模型直接给建议的场景
+    强行提升为必须弹卡。真正要用户做抉择时，模型会依据系统提示的「决策收集模式」
+    调用 ask_user_question。
+    """
+    if not looks_like_decision_request(query):
+        return None
+    if exclude_tools and "ask_user_question" in {str(name) for name in exclude_tools}:
+        return None
+    question_tool = next(
+        (
+            tool
+            for tool in (tools or [])
+            if str(getattr(tool, "name", "") or "").strip() == "ask_user_question"
+        ),
+        None,
+    )
+    if question_tool is None:
+        return None
+    return ToolNudge(
+        tool_name="ask_user_question",
+        score=0.25,
+        message=(
+            "【决策收集】用户明确表达了需要做选择/在多分支间犹豫的需求。"
+            "若确实存在多个同等合理的业务分支，可调用 ask_user_question 让用户抉择；"
+            "若你能依据上下文给出明确推荐，也可直接回答。不要把选项作为普通文字罗列而不给结论。"
+        ),
+        force_first_call=False,
+        metadata=resolve_tool_metadata(question_tool),
     )
 
 
@@ -485,6 +632,82 @@ def _has_office_reference(normalized_query: str) -> bool:
     )
 
 
+def _contains_image_entity(normalized_query: str) -> bool:
+    for term in _IMAGE_CHINESE_ENTITY_TERMS:
+        if term in normalized_query:
+            return True
+    for term in _IMAGE_ASCII_ENTITY_TERMS:
+        if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", normalized_query):
+            return True
+    return False
+
+
+def _resolve_image_tool_nudge(
+    query: str,
+    tools: List[Any],
+    *,
+    metadata_by_name: Optional[Mapping[str, ToolMetadata]] = None,
+) -> Optional[ToolNudge]:
+    """确定性解析「明确指认图片实体」的读取意图，触发 read_image。
+
+    与 Office 专用解析器同理：read_image 必须依赖一个真实存在的图片文件
+    才能执行，无法像 read_file/web_search 那样从问题字面直接派生输入。因此
+    这里仅当问题同时满足「出现图片实体词」和「带查看/解析动作」时才触发，
+    避免通用相关度用描述里的“查看/分析/图片”等泛化词陈拓普通文字问题。
+    命中后锁定具体工具并强制首调用（证据型只读取证）。
+    """
+    normalized = _normalize(query)
+    if not normalized:
+        return None
+    tool = next(
+        (
+            t
+            for t in tools or []
+            if str(getattr(t, "name", "") or "").strip() == _IMAGE_TOOL_NAME
+        ),
+        None,
+    )
+    if tool is None:
+        return None
+    if _contains_any(normalized, _IMAGE_NEGATION_TERMS):
+        return None
+    if _contains_any(normalized, _IMAGE_EXPLANATION_TERMS):
+        return None
+    # 显式点名 read_image 且带调用意图，视为明确要求。
+    if _IMAGE_TOOL_NAME in normalized and _contains_any(
+        normalized,
+        ("调用", "使用", "执行", "运行", "触发"),
+    ):
+        return _build_image_tool_nudge(tool, normalized, score=1.0, metadata_by_name=metadata_by_name)
+    has_entity = _contains_image_entity(normalized)
+    has_read = _contains_any(normalized, _IMAGE_READ_TERMS)
+    if not has_entity or not has_read:
+        return None
+    return _build_image_tool_nudge(tool, normalized, score=1.0, metadata_by_name=metadata_by_name)
+
+
+def _build_image_tool_nudge(
+    tool: Any,
+    _normalized_query: str,
+    *,
+    score: float,
+    metadata_by_name: Optional[Mapping[str, ToolMetadata]] = None,
+) -> ToolNudge:
+    metadata = resolve_tool_metadata(tool, metadata_by_name=metadata_by_name)
+    return ToolNudge(
+        tool_name=_IMAGE_TOOL_NAME,
+        score=score,
+        message=(
+            f"【图片解析】本轮问题明确涉及图片/截图/图表等视觉实体。"
+            f"必须优先调用已绑定工具「{_IMAGE_TOOL_NAME}」读取该图片并做视觉解析或 OCR；"
+            f"若问题里没有给出图片文件，先结合实际工作区/上传产物找对应的图片路径，"
+            f"找不到时如实说明，不要编造图片路径或凭记忆描述图片内容。"
+        ),
+        force_first_call=True,
+        metadata=metadata,
+    )
+
+
 def _resolve_office_tool_nudge(
     query: str,
     tools: List[Any],
@@ -627,6 +850,53 @@ def _find_platform_doc_tool(tools: List[Any]) -> Any:
     return None
 
 
+_EXPLICIT_DOCS_QUERY_BLOCKERS = (
+    "现在是什么模型", "当前是什么模型", "用的是什么模型", "当前模型", "本轮模型",
+    "现在的模型", "这个模型", "使用的模型", "哪个模型", "模型速度", "模型名称", "模型id",
+    "系统状态", "运行状态", "会话状态", "会话信息", "上下文容量", "系统负载",
+    "cpu", "内存", "磁盘", "进程", "端口",
+    "我的信息", "个人信息", "当前用户", "我的角色", "我的权限", "用户信息",
+    "你好", "您好", "在吗", "早安", "晚安", "测试一下", "写一段", "帮我写",
+)
+
+_EXPLICIT_PLATFORM_DOCS_STRONG_KEYWORDS = (
+    # 手册/文档
+    "平台使用手册", "平台手册", "用户手册", "使用手册", "操作手册", "开发手册",
+    "运维手册", "使用说明书", "平台文档", "系统文档", "官方手册", "官方文档",
+    "部署文档", "部署手册", "部署指南", "安装指南", "安装手册", "安装教程",
+    "faq.md", "readme.md",
+    # 部署/安装运维
+    "怎么部署", "如何部署", "平台部署", "docker部署", "k8s部署", "kubernetes部署",
+    "怎么安装平台", "如何安装平台", "平台安装", "部署步骤", "部署流程",
+    # 报错排查/故障排查
+    "报错排查", "故障排查", "异常排查", "错误排查", "启动失败排查", "排查指南",
+    "服务启动失败", "部署报错",
+)
+
+
+def looks_like_explicit_platform_docs_query(user_question: str) -> bool:
+    """仅在用户明确询问“平台使用手册/怎么部署/报错排查”等文档或运维部署问题时返回 True。
+
+    普通闲聊、模型身份与运行时状态询问绝不触发公共文档检索。
+    """
+    q = (user_question or "").strip().lower()
+    if not q:
+        return False
+    if any(blocker in q for blocker in _EXPLICIT_DOCS_QUERY_BLOCKERS):
+        return False
+    if any(keyword in q for keyword in _EXPLICIT_PLATFORM_DOCS_STRONG_KEYWORDS):
+        return True
+    has_subject = any(s in q for s in ("平台", "系统", "nanzi"))
+    has_action = any(
+        a in q
+        for a in (
+            "使用手册", "操作手册", "说明文档", "开发文档",
+            "怎么部署", "如何部署", "部署步骤", "报错排查", "故障排查", "faq", "readme",
+        )
+    )
+    return has_subject and has_action
+
+
 def _resolve_platform_docs_nudge(tools: List[Any]) -> Optional[ToolNudge]:
     tool = _find_platform_doc_tool(tools)
     if tool is None:
@@ -637,7 +907,7 @@ def _resolve_platform_docs_nudge(tools: List[Any]) -> Optional[ToolNudge]:
         tool_name=tool_name,
         score=0.95,
         message=(
-            "【平台公共文档优先】本轮问题涉及智能体平台自身的功能、配置或开关说明。"
+            "【平台使用手册与部署排查优先】本轮问题明确涉及平台使用手册、部署安装配置或报错排查说明。"
             "平台公共文档 data/docs/ 仅宿主侧可读，沙箱 Bash 不可见；请优先通过宿主侧文件工具检索公共 docs/*.md（先用 Grep/Glob 定位，"
             "再用 Read 读取命中文档）后回答；严禁通过 Bash 访问或臆造 /workspace/docs、/app/data/docs 等路径。"
             "公共 docs 没有命中时，再按目录清单使用宿主工具读取服务根目录一级 /app/*.md（本地开发为项目根 *.md）帮助文档；"
@@ -1014,6 +1284,13 @@ def resolve_tool_nudge(
     if not should_consider_tool_nudge(query):
         return None
 
+    # 决策收集：用户在多个同等合理的分支间需要抉择。放在元问题/问候门禁之后，
+    # 仅在真实的办事诉求上生效；优先于具体工具 nudge，让模型先确认分支再执行。
+    if allow_explicit_question:
+        decision_nudge = _resolve_decision_request_nudge(query, tools, exclude_tools=exclude_tools)
+        if decision_nudge is not None:
+            return decision_nudge
+
     if request_decision is None and turn_decision is not None:
         request_decision = turn_decision.to_request_decision()
     if request_decision is None:
@@ -1076,11 +1353,9 @@ def resolve_tool_nudge(
     if current_user_profile_nudge is not None:
         return _attach_tool_metadata(current_user_profile_nudge, tools, tool_metadata)
 
-    from app.services.ai.intent_service import looks_like_current_model_query
-
     if (
         request_decision.source == RequestSource.PLATFORM_SELF_HELP
-        and not looks_like_current_model_query(query)
+        and looks_like_explicit_platform_docs_query(query)
     ):
         platform_docs_nudge = _resolve_platform_docs_nudge(tools)
         if platform_docs_nudge is not None:
@@ -1194,6 +1469,12 @@ def resolve_tool_nudge(
     if catalog_nudge is not None:
         return _attach_tool_metadata(catalog_nudge, tools, tool_metadata)
 
+    # read_image 专用确定性解析器：仅在问题明确指认图片实体时触发，
+    # 先于通用相关度，避免描述里的泛化词陈拓普通文字问题。
+    image_nudge = _resolve_image_tool_nudge(query, tools, metadata_by_name=tool_metadata)
+    if image_nudge is not None:
+        return image_nudge
+
     office_nudge = _resolve_office_tool_nudge(
         query,
         tools,
@@ -1210,6 +1491,9 @@ def resolve_tool_nudge(
     excluded = set(_NUDGE_EXCLUDED_TOOLS)
     excluded.add("sub_agent_call")
     excluded.add("sub_agent_batch_call")
+    # read_image 只在明确图片语境下由专用解析器触发，不参与通用字面相关度，
+    # 否则“查看/分析/图片”等泛化命中的短问题会被陈拓并强制首调用。
+    excluded.add(_IMAGE_TOOL_NAME)
     if exclude_tools:
         excluded |= {str(name) for name in exclude_tools}
 
@@ -1280,6 +1564,7 @@ def resolve_evidence_tool_fallback_nudge(
             not name
             or name in _NUDGE_EXCLUDED_TOOLS
             or name in {"sub_agent_call", "sub_agent_batch_call"}
+            or name == _IMAGE_TOOL_NAME  # read_image 经由专用解析器触发
             or permission_scope != "read"
             or not evidence_types
         ):

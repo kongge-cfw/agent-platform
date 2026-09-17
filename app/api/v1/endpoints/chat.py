@@ -165,7 +165,12 @@ async def _conversation_ids_for_user(
 
 
 @public_router.get("/generated-files/{artifact_id}")
-async def download_generated_file(artifact_id: str, token: str):
+async def download_generated_file(
+    artifact_id: str,
+    token: str,
+    download: bool = False,
+    disposition: Optional[str] = None,
+):
     from app.services.ai.tools.generated_file_service import resolve_for_download, resolve_workspace_artifact
 
     # DB 优先：工作区产物先经 ai_artifacts 校验归属（storage_path 在工作区内 + token 匹配）
@@ -175,10 +180,36 @@ async def download_generated_file(artifact_id: str, token: str):
         artifact = resolve_for_download(artifact_id, token)
     if artifact is None:
         raise HTTPException(status_code=404, detail="文件不存在或已过期")
+
+    # 确定 Content-Disposition 类型：
+    # 1. 显式传参 disposition 优先
+    # 2. 若传参 download=True，强制 attachment
+    # 3. 对适合浏览器直接在线预览的媒体类型（html, htm, svg, pdf, txt, 图片），默认 inline，避免弹窗下载
+    inline_mime_types = {
+        "text/html",
+        "text/plain",
+        "image/svg+xml",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "application/pdf",
+    }
+    is_html_ext = artifact.filename.lower().endswith((".html", ".htm"))
+    if disposition:
+        content_disposition_type = disposition
+    elif download:
+        content_disposition_type = "attachment"
+    elif is_html_ext or (artifact.mime_type and artifact.mime_type.lower() in inline_mime_types):
+        content_disposition_type = "inline"
+    else:
+        content_disposition_type = "attachment"
+
     return FileResponse(
         artifact.path,
         media_type=artifact.mime_type,
         filename=artifact.filename,
+        content_disposition_type=content_disposition_type,
     )
 
 
@@ -1231,9 +1262,13 @@ class ModelCallStatDetail(BaseModel):
     model_name: str = Field(..., description="使用的模型名称")
     input_message_count: int = Field(..., description="输入消息轮数")
     has_tools_bound: bool = Field(..., description="是否绑定了工具")
-    input_tokens: int = Field(..., description="输入 Token 数")
+    input_tokens: int = Field(..., description="输入 Token 数（含缓存命中的总输入)")
     output_tokens: int = Field(..., description="输出 Token 数")
     cache_input_tokens: int = Field(..., description="缓存命中输入 Token")
+    uncached_input_tokens: Optional[int] = Field(
+        None,
+        description="未缓存输入 Token（= input_tokens - cache_input_tokens；无缓存记录时为 None）",
+    )
     total_tokens: int = Field(..., description="总 Token")
     has_tool_calls: bool = Field(..., description="是否触发了工具调用")
     tool_names: List[str] = Field(..., description="调用的工具名称列表")

@@ -1552,32 +1552,35 @@ local（适用于同一平台可直连数据库）：平台使用本地已配置
 * ssh：在 SSH 远程主机上执行。平台所在主机通过 ssh 连接下方指定的远程主机，把远程目录作为沙箱工作区；支持密码（依赖 sshpass）与私钥两种认证。
 注意：不同策略有各自的配置项，仅在切换到对应策略时生效。`,
     'sandbox_k8s_existing_pvc': `【参数作用】
-用于决定 Kubernetes 沙箱 Pod 的工作目录是「复用已有的共享持久卷（Shared PVC）」还是「为每次会话动态申请全新独立临时卷（Dynamic PVC）」。
+用于决定 Kubernetes 沙箱 Pod 的 /workspace 是「共享平台数据卷中的用户工作区（推荐，与 Docker 沙箱一致）」还是「为每个工作区动态申请全新独立临时卷（相互隔离，但沙箱内看不到用户工作区）」。
 
 【可以为空吗？】
-可以为空（默认留空，也是推荐用法）。
+可以为空，且**留空是推荐用法**。
 
 【留空（默认处理）时的行为】
-* 模式：动态独立临时卷模式。
-* 行为：平台会自动通过 K8s API 在命名空间中为当前用户会话申请一块全新的独立专属 PVC（命名如 as-pvc-{workspace_id}，容量由 sandbox_k8s_storage_size 决定）。
-* 销毁回收：沙箱会话到期并超时关闭后，该独立 PVC 随 Pod 一同被物理删除（由 sandbox_k8s_delete_pvc_on_close 控制）。
-* 适用：各用户、各会话之间磁盘 100% 物理绝对隔离，阅后即焚、不留痕迹。
+* 模式：自动探测共享模式。
+* 行为：平台自动读取自身 Pod 的存储配置，探测出自身数据目录（/app/data）背后的 PVC，并共享该卷中的用户工作区，因此**无需手工填写任何 PVC 名称**，也兼容自定义 PVC 名的部署。
+* 探测失败时（例如平台未运行在 Kubernetes 中、数据目录不是 PVC）：安全回退为动态独立临时卷，并在日志与「校验 K8s 集群与 RBAC 权限」结果中给出提醒。
 
-【不留空时，填什么格式？】
-* 格式要求：填写 Kubernetes 集群目标命名空间（默认 agent-sandboxes）中【已存在的 PVC 资源名称】。
-* 填写示例：nanzi-app-data 或 agent-shared-pvc。
+【想强制使用独立临时卷（强隔离）？】
+* 填写 none（也支持 disabled/off/false/-）：平台为每个工作区动态申请独立 PVC，会话结束按 sandbox_k8s_delete_pvc_on_close 回收；此模式下沙箱内 /workspace 看不到用户工作区。
+
+【要显式指定某个共享 PVC？】
+* 格式要求：填写 Kubernetes 集群目标命名空间（默认与平台同命名空间 nanzi-ai-agent）中【已存在的 PVC 资源名称】。
+* 填写示例：nanzi-ai-agent-data（平台主 PVC）或 my-shared-pvc。
 * ⚠️ 注意：仅填写标准的 K8s 资源名（纯字母、数字、短横线），不要写成路径（例如不要加 / 或 /app/data）。
+* ⚠️ 注意：PVC 是命名空间级资源，沙箱命名空间必须与平台同命名空间才能引用该 PVC；否则沙箱 Pod 会因找不到 PVC 而长期 Pending。
 
 【最终会生成和挂载什么路径？】
 1. 沙箱容器内路径：固定挂载为沙箱 Pod 内部的 /workspace。
-2. 底层 PVC 物理子路径：平台通过 Kubernetes 原生 subPath 机制，自动将卷内的相对路径 agent_workspaces/{sandbox_user_key}/sandbox 映射挂入沙箱。
+2. 底层 PVC 物理子路径：平台通过 Kubernetes 原生 subPath 机制，自动将卷内的相对路径 agent_workspaces/{sandbox_user_key} 映射挂入沙箱，使沙箱内 /workspace 即为该用户完整工作区（与 Docker 沙箱一致）。
 3. 安全隔离防越权：沙箱只能读写该用户自己的专属子目录，绝不会访问整块共享 PVC 的根目录或其他用户的数据；若为未认证/匿名用户，平台会前置拦截禁止挂载共享卷。
-4. 公共文档只读共享：若平台配置了公共知识库文档，底层卷内的 docs 目录会自动以只读模式（readOnly: true）挂载至沙箱内的 /workspace/docs。`,
+4. 公共文档只读共享：若平台配置了公共知识库文档，底层卷内的 docs 目录会自动以只读模式（readOnly: true）挂载至沙箱内的 /workspace/public/docs。`,
     'sandbox_k8s_storage_class': `【参数作用】
 指定动态创建独立专属 PVC 时所使用的 Kubernetes 存储类（StorageClass）。
 
 【生效前提】
-⚠️ 仅在上方 sandbox_k8s_existing_pvc 留空时生效。如果已指定了已有共享 PVC，此配置项会被自动忽略。
+⚠️ 仅在沙箱回退为「动态独立卷」模式时生效：即上方 sandbox_k8s_existing_pvc 填了 none（强制独立临时卷），或留空但平台数据卷自动探测失败。若已共享平台/已有 PVC，则此配置项会被自动忽略。
 
 【可以为空吗？】
 可以为空（默认留空）。
@@ -1976,16 +1979,16 @@ const configShortDescriptions: Record<string, string> = {
   agent_context_llm_summary_enabled: '是否用当前会话模型对历史做语义摘要，失败或超时会自动降级为确定性摘录。',
   sandbox_policy: '安全沙箱执行策略。local 表示在宿主机扩展进程内直接执行（当前默认）；docker 表示在自动构建的 Docker 容器内执行；e2b 表示在 E2B 云端沙箱内执行；ssh 表示在 SSH 远程主机上执行。',
   sandbox_docker_base_image: 'docker 策略使用的容器基础镜像（留空默认使用官方标准镜像 python:3.11-slim）。',
-  sandbox_k8s_namespace: 'k8s 策略沙箱 Pod 运行的命名空间（默认 agent-sandboxes）。',
+  sandbox_k8s_namespace: 'k8s 策略沙箱 Pod 运行的命名空间（默认与平台同命名空间 nanzi-ai-agent；留空表示自动跟随平台命名空间）。注意：只有与平台同命名空间，沙箱才能通过 sandbox_k8s_existing_pvc 共享用户工作区（PVC 为命名空间级资源）。',
   sandbox_k8s_image: 'k8s 策略沙箱容器运行的基础镜像（默认 python:3.11-slim）。可填自动构建的“网关预置镜像” nanzi-sandbox-k8s:<版本> 加速冷启动（构建方式见下方提示）。',
-  sandbox_k8s_existing_pvc: 'k8s 策略可选已存在的共享 PVC 名称（留空表示动态独立临时卷；填写如 nanzi-app-data，通过 subPath 挂载到 /workspace）。',
+  sandbox_k8s_existing_pvc: 'k8s 策略的共享数据卷：留空则自动探测平台自身数据卷并共享用户工作区（推荐，零配置，与 Docker 沙箱一致）；填 none 强制使用每工作区独立空卷（沙箱内看不到用户工作区）；填具体 PVC 名则显式指向该共享卷（须与平台同命名空间）。',
   sandbox_k8s_storage_class: 'k8s 策略动态创建独立 PVC 时的存储类名称（StorageClass，留空表示使用集群默认 StorageClass）。',
   sandbox_k8s_storage_size: 'k8s 策略动态创建独立 PVC 时的申请容量（默认 1Gi）。',
   sandbox_k8s_cpu_request: 'k8s 策略沙箱 Pod CPU 请求保障（requests.cpu，默认 100m），留空表示不设 requests。',
   sandbox_k8s_cpu_limit: 'k8s 策略沙箱 Pod CPU 限制上限（limits.cpu，例如 1000m、2），留空表示不限。',
   sandbox_k8s_memory_request: 'k8s 策略沙箱 Pod 内存请求保障（requests.memory，默认 128Mi），留空表示不设 requests。',
   sandbox_k8s_memory_limit: 'k8s 策略沙箱 Pod 内存限制上限（limits.memory，例如 512Mi、1Gi），留空表示不限。',
-  sandbox_k8s_delete_pvc_on_close: 'k8s 策略沙箱到期关闭时是否同步删除动态创建的独立专属 PVC（默认 true）。',
+  sandbox_k8s_delete_pvc_on_close: 'k8s 策略沙箱到期关闭时是否同步删除动态创建的独立专属 PVC（默认 true）。仅对动态独立卷模式生效；共享的平台/已有 PVC 受保护，绝不删除。',
   sandbox_e2b_api_key: 'e2b 策略使用的 E2B API Key，留空则读取 E2B_API_KEY 环境变量。',
   sandbox_e2b_template: 'e2b 策略使用的沙箱模板名，留空使用默认模板 base。',
   sandbox_e2b_timeout_seconds: 'e2b 策略沙箱超时时间（秒），默认 300。',
@@ -3365,7 +3368,7 @@ onUnmounted(() => {
                                      <span>Kubernetes 集群沙箱配置与 RBAC 权限指引</span>
                                    </div>
                                    <p class="text-sky-700 text-[11px] leading-relaxed">
-                                     在 Kubernetes 生产集群中，平台需通过 API Server 在目标命名空间（默认 <code class="font-mono text-sky-800 bg-sky-100/80 px-1 py-0.5 rounded">agent-sandboxes</code>）动态创建和管理独立的沙箱 Pod / PVC。
+                                     在 Kubernetes 生产集群中，平台需通过 API Server 在目标命名空间（默认与平台同命名空间 <code class="font-mono text-sky-800 bg-sky-100/80 px-1 py-0.5 rounded">nanzi-ai-agent</code>）动态创建和管理独立的沙箱 Pod / PVC。同命名空间是共享用户工作区 PVC 的前置条件。
                                    </p>
                                  </div>
 
@@ -3656,7 +3659,7 @@ onUnmounted(() => {
                                 type="text"
                                 v-model="item.value"
                                 :disabled="isConfigItemDisabled(String(category), item)"
-                                :placeholder="item.key === 'sandbox_k8s_existing_pvc' ? '例如 nanzi-app-data（可选，留空为独立临时卷）' : (item.key === 'sandbox_k8s_storage_class' ? '例如 local-path、gp3（可选，留空使用默认存储类）' : '')"
+                                :placeholder="item.key === 'sandbox_k8s_existing_pvc' ? '留空自动共享平台数据卷；填 none 强制独立临时卷；也可填具体 PVC 名' : (item.key === 'sandbox_k8s_storage_class' ? '例如 local-path、gp3（可选，留空使用默认存储类）' : '')"
                                 class="shadow-sm focus:ring-primary focus:border-primary block w-full sm:text-sm border-gray-300 rounded-md bg-gray-100 disabled:opacity-70 disabled:cursor-not-allowed"
                               />
                                    <button
@@ -4371,7 +4374,7 @@ onUnmounted(() => {
                                   title="沙箱镜像需先在节点构建并导入；点击查看构建/导入/查看指引"
                                   @click="showK8sImageGuide = true"
                                 >
-                                  构建镜像
+                                  如何构建镜像？
                                 </button>
                               </div>
                               <p class="mt-1 text-[11px] text-gray-500">
@@ -4382,13 +4385,13 @@ onUnmounted(() => {
                             <!-- 可选加速：K8s 沙箱网关预置镜像构建提示 -->
                             <div class="mt-2 space-y-1.5 rounded-xl border border-sky-200 bg-sky-50/70 p-3 text-[11px] leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-950/40 dark:text-sky-100">
                               <div class="font-semibold text-sky-800 dark:text-sky-100">🚀 可选加速：K8s 沙箱“网关预置镜像”</div>
-                              <div>沙箱每次冷启动都会初始化 AgentScope 网关环境（装 venv/依赖），较慢。可先手动构建一个预置镜像（把网关环境直接打进镜像），把本项填为该镜像后，新沙箱 Pod 冷启动会直接复用、从几十秒降到秒级。</div>
+                              <div>沙箱每次冷启动都会初始化 AgentScope 网关环境（装 venv/依赖），较慢。可先手动构建一个预置镜像（把网关环境与常用排障工具 <span class="font-mono">tree</span>、<span class="font-mono">telnet</span>、<span class="font-mono">netstat</span> 等直接打进镜像），把本项填为该镜像后，新沙箱 Pod 冷启动会直接复用、从数十秒降到秒级。</div>
                               <div>在可访问 Docker 的构建机（k8s_deploy 目录）执行构建与导入：
                                 <code class="mt-1 block rounded bg-white/70 px-1.5 py-0.5 font-mono text-sky-800 dark:bg-gray-900/60 dark:text-sky-100">./build-k8s-sandbox-image.sh --version 1.0.0</code>
-                                <span class="block">脚本会自动 docker build → save → 导入节点 containerd（ctr -n k8s.io / k3s ctr）。</span>
+                                <span class="block">脚本会自动 docker build → save → 导入节点 containerd（ctr -n k8s.io / k3s ctr）；也支持无参数交互引导或免交互默认构建 <code class="font-mono">./build-k8s-sandbox-image.sh -y</code>。</span>
                               </div>
-                              <div>本项填写格式：<span class="font-mono">nanzi-sandbox-k8s:&lt;版本&gt;</span>（可选用上方预置列表或“自定义镜像地址”）。未使用预置镜像时留空/保持默认 <span class="font-mono">python:3.11-slim</span>，由集群直接拉取即可，无需预置。</div>
-                              <div>想先确认节点已导入该镜像（含版本号核对）：<span class="font-mono">./install.sh check-sandbox-image nanzi-sandbox-k8s:&lt;版本&gt;</span> 或 <span class="font-mono">./install.sh images nanzi-sandbox-k8s</span></div>
+                              <div>本项填写格式：<span class="font-mono">nanzi-sandbox-k8s:&lt;版本&gt;</span>（可选用上方预置列表或“自定义镜像地址”）。填入后请点击页面右上角<b>【保存变更 (⌘S)】</b>保存生效。未使用预置镜像时留空/保持默认 <span class="font-mono">python:3.11-slim</span> 即可。</div>
+                              <div>想先确认节点已导入该镜像（含版本号核对）：<span class="font-mono">./build-k8s-sandbox-image.sh --list</span> 或 <span class="font-mono">./install.sh check-sandbox-image nanzi-sandbox-k8s:&lt;版本&gt;</span></div>
                             </div>
                           </div>
                           <div v-else>
@@ -4426,13 +4429,14 @@ onUnmounted(() => {
                                </p>
                              </div>
                               <div v-else-if="item.key === 'sandbox_k8s_existing_pvc'" class="mt-2 text-xs text-sky-800 bg-sky-50/70 p-3 rounded-xl border border-sky-100/80 leading-relaxed space-y-1.5">
-                                <div>💡 <strong>参数作用与是否必填：</strong>可选参数（<strong>建议留空</strong>）。用于决定沙箱 Pod 是共享已有 PVC 还是每次会话创建全新独立卷。</div>
-                                <div>📂 <strong>留空（默认处理）：</strong>走<strong>独立临时 PVC 模式</strong>。平台会自动在集群中申请一张独立的专属 PVC（按下方 storage_size 大小），会话结束且超时后随 Pod 自动删除，用户/会话间数据物理隔离。</div>
-                                <div>🔗 <strong>填写的格式：</strong>填写 Kubernetes 集群当前命名空间中<strong>已存在的 PVC 资源名称</strong>（例如 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">nanzi-app-data</code> 或 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">agent-shared-pvc</code>，纯名称，不带路径）。</div>
-                                <div>🎯 <strong>最终映射路径：</strong>挂载至沙箱容器内部的 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/workspace</code>。底层通过 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">subPath: agent_workspaces/{user_key}/sandbox</code> 精准隔离，沙箱内只能读写该用户自身目录，无法越权访问整卷根目录；若平台挂载了公共文档，则自动只读挂载至 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/workspace/docs</code>。</div>
+                                <div>💡 <strong>参数作用与是否必填：</strong>可选参数（<strong>建议留空</strong>）。用于决定沙箱 Pod 的 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/workspace</code> 是「共享平台数据卷中的用户工作区（与 Docker 沙箱一致）」还是「每个工作区独立的全新临时卷（强隔离）」。<strong>留空即可满足绝大多数场景，无需手工填写卷名。</strong></div>
+                                <div>📂 <strong>留空（默认处理）：</strong>走<strong>自动探测共享模式</strong>。平台自动读取自身 Pod 的存储配置，探测出自身数据目录（<code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/app/data</code>）背后的 PVC 并共享之，因此兼容自定义 PVC 名的部署；若探测失败（平台未运行在 Kubernetes 中、数据目录不是 PVC 等），则安全回退为独立临时卷，并在日志与「⚡ 校验 K8s 集群与 RBAC 权限」结果中给出提醒。</div>
+                                <div>🧱 <strong>想强制独立临时卷（强隔离）：</strong>填写 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">none</code>（也支持 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">disabled</code> / <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">off</code> / <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">false</code> / <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">-</code>）。平台为每个工作区动态申请独立 PVC（按下方 storage_size 大小），会话结束且超时后随 Pod 自动删除，用户/会话间数据物理隔离——此模式下沙箱内看不到用户工作区（属有意选择，平台不再告警）。</div>
+                                <div>🔗 <strong>要显式指定某个共享 PVC 时：</strong>填写当前命名空间中<strong>已存在的 PVC 资源名称</strong>（例如 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">nanzi-ai-agent-data</code>（平台主 PVC）或 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">my-shared-pvc</code>，纯名称，不带路径）。⚠️ PVC 为命名空间级资源，沙箱命名空间必须与平台同命名空间才能引用该 PVC，否则沙箱 Pod 会因找不到 PVC 而长期 Pending。</div>
+                                <div>🎯 <strong>最终映射路径：</strong>共享模式下挂载至沙箱容器内部的 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/workspace</code>。底层通过 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">subPath: agent_workspaces/{user_key}</code> 挂载该用户<strong>完整工作区</strong>（与 Docker 沙箱一致，可读写其 sessions/docs 等全部内容），且无法访问整卷根目录或其他用户数据；若平台挂载了公共文档，则自动只读挂载至 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">/workspace/public/docs</code>。</div>
                               </div>
                               <div v-else-if="item.key === 'sandbox_k8s_storage_class'" class="mt-2 text-xs text-sky-800 bg-sky-50/70 p-3 rounded-xl border border-sky-100/80 leading-relaxed space-y-1.5">
-                                <div>💡 <strong>参数作用与生效前提：</strong>可选参数（<strong>默认留空</strong>）。<strong>仅在上方 sandbox_k8s_existing_pvc 留空（即动态创建独立卷模式）时生效</strong>；若指定了已有 PVC，则此配置项自动被忽略。</div>
+                                <div>💡 <strong>参数作用与生效前提：</strong>可选参数（<strong>默认留空</strong>）。<strong>仅在沙箱回退为动态独立卷模式时生效</strong>（即上方 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">sandbox_k8s_existing_pvc</code> 填了 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">none</code>，或留空但平台数据卷自动探测失败）；若已共享平台/已有 PVC，则此配置项自动被忽略。</div>
                                 <div>⚙️ <strong>留空（默认处理）：</strong>创建 PVC 时不指定 StorageClass，Kubernetes 会自动使用集群管理员标记为 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">(default)</code> 的默认存储类进行自动分配。</div>
                                 <div>📝 <strong>填写的格式：</strong>填写集群支持的存储类标识名称（可通过运维终端命令 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">kubectl get sc</code> 查询，例如 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">local-path</code>、<code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">nfs-client</code> 或云厂商提供的 <code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">gp3</code>、<code class="font-mono text-sky-900 bg-white/80 px-1 py-0.5 rounded border border-sky-200">alicloud-disk-topology</code>）。</div>
                               </div>
@@ -4535,7 +4539,7 @@ onUnmounted(() => {
       <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-gray-100 dark:border-gray-700 flex flex-col text-[13px]">
         <div class="px-5 py-3.5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-sky-50/50 dark:bg-sky-950/30">
           <div>
-            <h3 class="text-md font-bold text-gray-900 dark:text-gray-100">构建 / 导入 K8s 沙箱镜像</h3>
+            <h3 class="text-md font-bold text-gray-900 dark:text-gray-100">如何构建与导入 K8s 沙箱镜像</h3>
             <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">平台（Pod 内）无法直接读取节点镜像列表，请按以下指引在<b>节点/构建机</b>完成构建与导入</p>
           </div>
           <button type="button" class="rounded-lg p-1.5 text-gray-400 hover:bg-gray-200/60 hover:text-gray-600 dark:hover:bg-gray-700" aria-label="关闭" @click="showK8sImageGuide = false">
@@ -4591,7 +4595,7 @@ onUnmounted(() => {
           <div class="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-2">
             <div class="font-medium text-gray-700 dark:text-gray-200">③ 构建网关预置镜像（在可访问 Docker 的构建机，k8s_deploy 目录）：</div>
             <code class="block rounded-lg bg-gray-900 text-emerald-300 px-3 py-2 text-xs font-mono select-all">cd k8s_deploy &amp;&amp; ./build-k8s-sandbox-image.sh --version 1.0.0</code>
-            <p class="text-[11px] text-gray-500 dark:text-gray-400">脚本自动 docker build → save 出 tar → 导入节点运行时；先看一遍可加 <code class="font-mono">--dry-run</code>。</p>
+            <p class="text-[11px] text-gray-500 dark:text-gray-400">预置网关与常用排障工具（tree、telnet、netstat 等）；免交互默认构建可加 <code class="font-mono">-y</code>，仅预览可加 <code class="font-mono">--dry-run</code>。</p>
           </div>
 
           <div class="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-2">
@@ -4601,8 +4605,8 @@ onUnmounted(() => {
           </div>
 
           <div class="border-t border-gray-100 dark:border-gray-700 pt-3">
-            <div class="font-medium text-gray-700 dark:text-gray-200">⑤ 填回本配置：</div>
-            <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">把本项填为 <code class="font-mono">nanzi-sandbox-k8s:1.0.0</code>（或 registry 完整路径），保存后新建/重启沙箱 Pod 生效。</p>
+            <div class="font-medium text-gray-700 dark:text-gray-200">⑤ 填回本配置并保存：</div>
+            <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">把本项填为 <code class="font-mono">nanzi-sandbox-k8s:1.0.0</code>（或 registry 完整路径），并点击页面右上角<b>【保存变更 (⌘S)】</b>保存生效。新建/重启沙箱 Pod 即可秒级启动。</p>
           </div>
         </div>
 

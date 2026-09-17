@@ -10,6 +10,7 @@ from app.services.ai.tool_nudge_policy import (
     is_automatic_delivery_context,
     is_tool_meta_query,
     looks_like_explicit_user_question_request,
+    looks_like_decision_request,
     resolve_tool_nudge,
     resolve_evidence_tool_fallback_nudge,
     resolve_tool_nudge_plan,
@@ -217,6 +218,91 @@ def test_existing_file_download_request_does_not_force_office_write():
         "请给我这个已有 Word 文件的下载地址",
         _office_tools("word_document_write"),
     ) is None
+
+
+def _image_tool():
+    return SimpleNamespace(
+        name="read_image",
+        description=(
+            "read_image 读取并解析本地安全沙箱或工作区中的图片文件"
+            "（PNG/JPEG/WEBP/GIF/BMP 等）。当用户或智能体需要查看、检查、"
+            "识别本地图片、提取图中文字/表格、分析图表曲线、查看代码生成的"
+            "图片产物或进行视觉问答时，应触发本工具。"
+        ),
+        permission_scope="read",
+        source_type="generic_api",
+        evidence_types=frozenset({EvidenceType.USER_FILE}),
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # 非图片普通文字问题：不得因描述里的“查看/分析/图片”等泛化词被陈拓。
+        "感觉模型速度很快啊",
+        "你觉得模型速度怎么样",
+        "这个模型速度很快吧",
+        "帮我看一下系统负载",
+        "请帮我润色一下这段话",
+        # 英文子串防误触：不得将 gift/charter 等非图片单词误判为 gif/chart 实体。
+        "帮我分析一下这个 gift 卡的使用规则",
+        "帮我查看一下 charter 计划的内容",
+        # 抽象概念防误触：避免视觉、图谱等抽象技术/数据概念被误推 read_image。
+        "帮我分析一下计算机视觉的技术路线",
+        "帮我查看一下知识图谱的关系",
+        # 工具用法解释与问答防误触：询问使用说明时不应强制首调用。
+        "请问怎么使用 read_image 工具？",
+        "read_image 是什么工具，能做什么",
+        "read_image 工具如何调用",
+    ],
+)
+def test_read_image_is_not_nudged_by_generic_text_questions(query):
+    assert resolve_tool_nudge(query, [_image_tool()]) is None
+    assert resolve_evidence_tool_fallback_nudge(query, [_image_tool()]) is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "帮我分析一下这个图表",
+        "看看这个折线图有什么问题",
+        "识别这个截图里的文字",
+        "读取图片文件并做 OCR",
+        "读取并分析 data/uploads/chart.png",
+        "请调用 read_image 解析这张图片",
+        "请帮我查看一下这个 gif 动图",
+        "读取并分析 reports/data_chart.jpg",
+    ],
+)
+def test_read_image_is_nudged_when_query_points_to_an_image_entity(query):
+    nudge = resolve_tool_nudge(query, [_image_tool()])
+    assert nudge is not None
+    assert nudge.tool_name == "read_image"
+    assert nudge.should_force_first_call is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "不要调用 read_image",
+        "不用看这个图片",
+        "请勿解析任何图片",
+    ],
+)
+def test_negated_image_request_does_not_force_read_image(query):
+    assert resolve_tool_nudge(query, [_image_tool()]) is None
+
+
+def test_read_image_not_selected_when_unrelated_tool_matches_and_no_image_entity():
+    # 无图片实体；即使有其他泛工具命中，read_image 也不该被通用相关度推出。
+    tools = [
+        _image_tool(),
+        _tool("exec_command", "在服务器上执行 shell 命令，查看系统负载、CPU 和内存占用"),
+    ]
+    nudge = resolve_tool_nudge("帮我看一下系统负载", tools)
+    assert nudge is not None
+    assert nudge.tool_name == "exec_command"
+    assert nudge.tool_name != "read_image"
 
 
 def test_office_type_ambiguity_does_not_force_a_tool():
@@ -515,6 +601,77 @@ def test_automatic_delivery_flags_disable_explicit_question_nudge():
 
 def test_explicit_interactive_request_does_not_nudge_without_question_tool():
     assert resolve_tool_nudge("随便问我几个问题", [_tool("Bash", "执行命令")]) is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "有两家供应商，你帮我选一家",
+        "这几个方案我听你的",
+        "你推荐哪个，我拿不定主意",
+        "A 和 B 都行，你定吧",
+        "选择困难，帮我拿个主意",
+        "without在多个选项里纠结，帮我选",
+        "you decide between these two",
+    ],
+)
+def test_decision_request_is_detected(query):
+    assert looks_like_decision_request(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "随便问问天气怎么样",
+        "随便聊聊今天怎么样",
+        "【用户回答】\ninteraction_type: question\nquestion_id: uq_1",
+        "直接回答我，不用选",
+        "列出几个方案就行，不用决定",
+        "我不用你定，我自己来",
+    ],
+)
+def test_non_decision_requests_are_not_detected(query):
+    assert looks_like_decision_request(query) is False
+
+
+def test_decision_request_produces_weak_nudge_when_tool_available():
+    nudge = resolve_tool_nudge(
+        "有两家供应商，你帮我选一家",
+        [_tool("ask_user_question", "向用户展示选项提问并等待回答")],
+    )
+    assert nudge is not None
+    assert nudge.tool_name == "ask_user_question"
+    # 半显式决策请求只作弱提示，不强 force，避免把“你帮我选”激进的提升为必须弹卡
+    assert nudge.should_force_first_call is False
+    assert "决策收集" in nudge.message
+
+
+def test_decision_request_does_not_nudge_without_question_tool():
+    assert resolve_tool_nudge("你帮我选一家", [_tool("Bash", "执行命令")]) is None
+
+
+def test_decision_request_respects_disabled_explicit_question_context():
+    assert (
+        resolve_tool_nudge(
+            "你帮我选一家",
+            [_tool("ask_user_question", "向用户展示选项提问并等待回答")],
+            exclude_tools={"ask_user_question"},
+        )
+        is None
+    )
+
+
+def test_decision_request_does_not_fire_on_plain_chat_or_meta():
+    # 普通闲聊/能力询问不应触发决策 nudge
+    assert resolve_tool_nudge("帮我润色这段话", [_tool("ask_user_question", "向用户展示选项提问并等待回答")]) is None
+    assert (
+        resolve_tool_nudge(
+            "支持哪些筛选条件",
+            [_tool("ask_user_question", "向用户展示选项提问并等待回答")],
+        )
+        is None
+    )
 
 
 def test_sub_agent_call_nudge_for_data_query():
@@ -1349,3 +1506,30 @@ def test_todo_and_task_list_does_not_nudge_data_sub_agent():
         )
 
         assert nudge is None
+
+
+def test_explicit_platform_docs_query_nudges_grep():
+    """明确询问平台使用手册/部署/报错排查时，强推 Grep 公共文档。"""
+    tools = [
+        _tool("Grep", "按关键词搜索文本"),
+        _tool("Read", "读取文件内容"),
+    ]
+    for q in ("请问平台使用手册在哪里", "平台怎么部署", "服务启动报错排查指南"):
+        nudge = resolve_tool_nudge(q, tools)
+        assert nudge is not None
+        assert nudge.tool_name == "Grep"
+        assert nudge.should_force_first_call is True
+
+
+def test_runtime_model_and_chit_chat_do_not_nudge_platform_docs():
+    """运行时状态询问、模型身份与普通闲聊绝不触发公共文档强推。"""
+    tools = [
+        _tool("Grep", "按关键词搜索文本"),
+        _tool("Read", "读取文件内容"),
+        _tool("get_current_model", "查询当前模型"),
+    ]
+    for q in ("现在是什么模型", "当前是什么模型", "测试你现在的这个模型速度呢", "你好", "会话状态"):
+        nudge = resolve_tool_nudge(q, tools)
+        if nudge is not None:
+            assert nudge.tool_name not in ("Grep", "Read")
+

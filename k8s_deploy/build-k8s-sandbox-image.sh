@@ -64,28 +64,235 @@ DO_IMPORT=true
 DRY_RUN=false
 SYNC_TEMPLATE=false
 AGENTSCOPE_VERSION=""
+AUTO_CONFIRM=false
+LIST_MODE=false
+
+# ---- 探测节点容器运行时命令（支持 K3s / 标准 containerd / crictl）----
+resolve_node_container_tool() {
+  local sudo_cmd=""
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    sudo_cmd="sudo"
+  fi
+
+  NODE_CTR_CMD=""
+  NODE_RUNTIME_TYPE=""
+
+  if command -v k3s >/dev/null 2>&1; then
+    NODE_CTR_CMD="${sudo_cmd:+$sudo_cmd }k3s ctr"
+    NODE_RUNTIME_TYPE="K3s containerd"
+  elif [ -S "/run/k3s/containerd/containerd.sock" ]; then
+    NODE_CTR_CMD="${sudo_cmd:+$sudo_cmd }ctr -a /run/k3s/containerd/containerd.sock -n k8s.io"
+    NODE_RUNTIME_TYPE="K3s containerd (socket)"
+  elif command -v ctr >/dev/null 2>&1; then
+    NODE_CTR_CMD="${sudo_cmd:+$sudo_cmd }ctr -n k8s.io"
+    NODE_RUNTIME_TYPE="标准 containerd (k8s.io)"
+  elif command -v crictl >/dev/null 2>&1; then
+    NODE_CTR_CMD="${sudo_cmd:+$sudo_cmd }crictl"
+    NODE_RUNTIME_TYPE="CRI (crictl)"
+  fi
+}
+
+# ---- Docker 运行环境前置预检与场景化引导 ----
+check_docker_environment_k8s() {
+  # 若处于演练模式、查看帮助/列表或仅同步模板，无需依赖本地 Docker
+  if [ "$DRY_RUN" = "true" ] || [ "$LIST_MODE" = "true" ] || [ "$SYNC_TEMPLATE" = "true" ]; then
+    return 0
+  fi
+
+  # 1. 检查是否在容器内部或 K8s Pod 内部误执行
+  if [ -f "/.dockerenv" ] || [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+    printf "\n"
+    log_error "检测到当前环境可能是容器 / K8s Pod 内部（存在 /.dockerenv 或 KUBERNETES_SERVICE_HOST）！"
+    log_warn "本脚本需要在【能访问 Docker 引擎的宿主机/构建机】执行，不能在 NanZi 平台 Pod 内构建。"
+    printf "────────────────────────────────────────────────────────────────────\n"
+    printf "%b👉 解决方案：%b\n" "${C_BOLD}" "${C_RESET}"
+    printf "  请在任意拥有 Docker 的外部宿主机/开发机上执行本脚本得到 tar 包，再拷贝至 K8s 节点导入。\n"
+    printf "────────────────────────────────────────────────────────────────────\n\n"
+    exit 1
+  fi
+
+  # 2. 检查 docker CLI 是否已安装
+  if ! command -v docker >/dev/null 2>&1; then
+    printf "\n"
+    log_error "未检测到 Docker 命令行工具 (docker: command not found)"
+    log_warn "K8s 沙箱网关镜像构建 (docker build) 与导出 (docker save) 依赖本地 Docker 引擎。"
+    printf "────────────────────────────────────────────────────────────────────\n"
+    printf "%b👉 操作与排障方案建议：%b\n" "${C_BOLD}" "${C_RESET}"
+    printf "  %b【方案 A：当前机器作为构建机】%b 安装并启动 Docker：\n" "${C_YELLOW}" "${C_RESET}"
+    printf "    • Linux 一键安装:   %bcurl -fsSL https://get.docker.com | bash%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "    • Ubuntu/Debian:    %bsudo apt-get update && sudo apt-get install -y docker.io%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "    • CentOS/RHEL:      %bsudo yum install -y docker && sudo systemctl enable --now docker%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "    • macOS / Windows:  请前往官网安装 Docker Desktop: https://www.docker.com/products/docker-desktop\n"
+    printf "\n"
+    printf "  %b【方案 B：当前机器是纯 containerd 的 K8s 生产节点（无需在本机装 Docker）】%b\n" "${C_YELLOW}" "${C_RESET}"
+    printf "    1. 在任意有 Docker 的开发机/CI 构建机上运行本脚本打包（带 --no-import 参数）：\n"
+    printf "       %b./build-k8s-sandbox-image.sh --no-import%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "    2. 将生成的产物包 %bnanzi-sandbox-k8s_%s.tar%b 拷贝至本 K8s 节点。\n" "${C_BOLD}" "$IMAGE_TAG" "${C_RESET}"
+    printf "    3. 在本节点直接执行导入（仅需 containerd/K3s，无需 Docker）：\n"
+    printf "       %bk3s ctr images import nanzi-sandbox-k8s_%s.tar%b           # K3s 集群\n" "${C_CYAN}" "$IMAGE_TAG" "${C_RESET}"
+    printf "       %bctr -n k8s.io images import nanzi-sandbox-k8s_%s.tar%b    # 标准 containerd\n" "${C_CYAN}" "$IMAGE_TAG" "${C_RESET}"
+    printf "\n"
+    printf "  %b【演练模式】%b 仅预览 Dockerfile 与执行命令清单（无需 Docker 环境）：\n" "${C_YELLOW}" "${C_RESET}"
+    printf "    %b./build-k8s-sandbox-image.sh --dry-run%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "────────────────────────────────────────────────────────────────────\n\n"
+    exit 1
+  fi
+
+  # 提取 Docker Client 基础信息
+  local cli_ver docker_ctx docker_endpoint
+  cli_ver="$(docker version --format '{{.Client.Version}}' 2>/dev/null || echo "未知版本")"
+  docker_ctx="$(docker context show 2>/dev/null || echo "default")"
+  docker_endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || echo "${DOCKER_HOST:-/var/run/docker.sock}")"
+
+  # 3. 检查 Docker Daemon 守护进程是否处于运行状态与当前用户权限
+  local docker_info_raw
+  if ! docker_info_raw="$(docker info --format '{{.ServerVersion}}|{{.OperatingSystem}}|{{.Architecture}}|{{.NCPU}}|{{.MemTotal}}|{{.ContainersRunning}}|{{.Images}}' 2>&1)"; then
+    printf "\n"
+    log_error "本地 Docker Daemon 守护进程未启动或当前用户权限不足！"
+    printf "======================================================================\n"
+    printf "%b🐳 Docker 客户端环境检测信息：%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "   • 客户端版本 (CLI):     %b%s%b\n" "${C_BOLD}" "$cli_ver" "${C_RESET}"
+    printf "   • 当前上下文 (Context): %b%s%b\n" "${C_BOLD}" "$docker_ctx" "${C_RESET}"
+    printf "   • 目标端点 (Endpoint):  %b%s%b\n" "${C_BOLD}" "$docker_endpoint" "${C_RESET}"
+    printf "   • 服务端状态 (Server):  %b🔴 未运行 / 无法连接%b\n" "${C_RED}" "${C_RESET}"
+    printf "======================================================================\n"
+    printf "%b👉 排障与解决引导：%b\n" "${C_BOLD}" "${C_RESET}"
+    if [[ "$docker_info_raw" =~ [Pp]ermission\ denied ]]; then
+      printf "  %b【原因：权限不足】%b 当前用户没有访问 Docker Socket 的权限：\n" "${C_YELLOW}" "${C_RESET}"
+      printf "    1. 将当前用户加入 docker 组: %bsudo usermod -aG docker \$USER%b\n" "${C_CYAN}" "${C_RESET}"
+      printf "    2. 刷新当前 Shell 组或重新登录:  %bnewgrp docker%b\n" "${C_CYAN}" "${C_RESET}"
+      printf "    3. 或临时使用 sudo 运行此脚本:    %bsudo ./build-k8s-sandbox-image.sh [选项]%b\n" "${C_CYAN}" "${C_RESET}"
+    elif [[ "$docker_ctx" == "colima" ]] || [[ "$docker_endpoint" =~ colima ]]; then
+      printf "  %b【原因：Colima 虚拟机未启动】%b 检测到当前 Docker Context 使用的是 Colima：\n" "${C_YELLOW}" "${C_RESET}"
+      printf "    👉 请在终端执行以下命令启动 Colima 虚拟机：\n"
+      printf "       %bcolima start%b\n" "${C_CYAN}" "${C_RESET}"
+    elif [[ "$docker_ctx" =~ (desktop|desktop-linux) ]] || [[ "$docker_endpoint" =~ docker\.desktop ]]; then
+      printf "  %b【原因：Docker Desktop 未启动】%b 检测到当前使用的是 Docker Desktop：\n" "${C_YELLOW}" "${C_RESET}"
+      printf "    👉 请启动 Docker Desktop 应用程序并等待就绪（状态图标变为绿色）。\n"
+    else
+      printf "  %b【原因：服务未运行】%b Docker 守护进程未启动：\n" "${C_YELLOW}" "${C_RESET}"
+      printf "    • Linux 系统启动服务:      %bsudo systemctl start docker && sudo systemctl enable docker%b\n" "${C_CYAN}" "${C_RESET}"
+      printf "    • macOS / Windows 系统:   请启动 Docker 运行时（Docker Desktop 或 Colima）。\n"
+    fi
+    printf "  • 演练预览生成的 Dockerfile（无需 Docker 环境）：\n"
+    printf "    %b./build-k8s-sandbox-image.sh --dry-run%b\n" "${C_CYAN}" "${C_RESET}"
+    printf "────────────────────────────────────────────────────────────────────\n\n"
+    exit 1
+  fi
+
+  # 4. 格式化解析并打印 Docker 运行环境明细
+  local server_ver server_os server_arch server_ncpu server_mem server_running server_images
+  IFS='|' read -r server_ver server_os server_arch server_ncpu server_mem server_running server_images <<< "$docker_info_raw"
+  local mem_formatted="未知"
+  if [ -n "$server_mem" ] && [ "$server_mem" -gt 0 ] 2>/dev/null; then
+    mem_formatted="$(awk "BEGIN {printf \"%.2f GiB\", $server_mem/1024/1024/1024}" 2>/dev/null || echo "$((server_mem / 1073741824)) GiB")"
+  fi
+
+  printf "\n======================================================================\n"
+  printf "%b🐳 [Docker 运行环境预检通过] 检测到可用 Docker 引擎：%b\n" "${C_GREEN}" "${C_RESET}"
+  printf "   • 客户端版本 (CLI):     %b%s%b\n" "${C_BOLD}" "$cli_ver" "${C_RESET}"
+  printf "   • 服务端版本 (Server):  %b%s%b (%s, %s)\n" "${C_BOLD}" "$server_ver" "${C_RESET}" "$server_os" "$server_arch"
+  printf "   • 当前上下文 (Context): %b%s%b\n" "${C_BOLD}" "$docker_ctx" "${C_RESET}"
+  printf "   • 守护进程端点 (Host):   %b%s%b\n" "${C_BOLD}" "$docker_endpoint" "${C_RESET}"
+  printf "   • 宿主分配规格 (Specs):  %b%s 核 CPU / %s 内存%b\n" "${C_BOLD}" "$server_ncpu" "$mem_formatted" "${C_RESET}"
+  printf "   • 容器/镜像状态:        运行中容器: %s / 本地镜像数: %s\n" "$server_running" "$server_images"
+  printf "======================================================================\n\n"
+}
+
+run_list_sandbox_images() {
+  printf "\n"
+  log_info "🔍 正在检索本地 Docker 与 K8s 节点的沙箱镜像..."
+  printf "\n"
+
+  local found_any=false
+
+  # 1. 检查本地 Docker daemon
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    printf "%b[1/2] 本地 Docker 镜像库 (docker images):%b\n" "${C_BOLD}" "${C_RESET}"
+    local docker_matches
+    docker_matches="$(docker images --filter "reference=*${IMAGE_NAME}*" --format "table {{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}" 2>/dev/null || true)"
+    if [ -n "$docker_matches" ] && [ "$(printf "%s\n" "$docker_matches" | wc -l)" -gt 1 ]; then
+      printf "%s\n\n" "$docker_matches"
+      found_any=true
+    else
+      printf "  %b未在本地 Docker 中检索到包含 %s 的镜像%b\n\n" "${C_YELLOW}" "$IMAGE_NAME" "${C_RESET}"
+    fi
+  else
+    printf "%b[1/2] 本地 Docker 镜像库:%b %b未检测到可用的 Docker daemon%b\n\n" "${C_BOLD}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}"
+  fi
+
+  # 2. 检查 K8s 节点容器运行时（containerd / K3s / crictl）
+  resolve_node_container_tool
+  if [ -n "$NODE_CTR_CMD" ]; then
+    printf "%b[2/2] K8s 节点容器运行时 (%s):%b\n" "${C_BOLD}" "$NODE_RUNTIME_TYPE" "${C_RESET}"
+    local node_matches=""
+    if [[ "$NODE_CTR_CMD" == *"crictl"* ]]; then
+      node_matches="$($NODE_CTR_CMD images 2>/dev/null | grep -E "${IMAGE_NAME}" || true)"
+    else
+      node_matches="$($NODE_CTR_CMD images list 2>/dev/null | grep -E "${IMAGE_NAME}" || true)"
+    fi
+
+    if [ -n "$node_matches" ]; then
+      printf "  %b✔ 节点已就绪沙箱镜像列表：%b\n" "${C_GREEN}" "${C_RESET}"
+      printf "%s\n\n" "$node_matches" | sed 's/^/  /'
+      found_any=true
+    else
+      printf "  %b⚠ 节点运行时中暂无包含 %s 的就绪镜像%b\n\n" "${C_YELLOW}" "$IMAGE_NAME" "${C_RESET}"
+    fi
+  else
+    printf "%b[2/2] K8s 节点容器运行时:%b %b当前主机未检测到 ctr / k3s / crictl 节点工具（若此机仅为构建机，可将 tar 拷贝至节点导入）%b\n\n" "${C_BOLD}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}"
+  fi
+
+  # 3. 汇总指引
+  printf "────────────────────────────────────────────────────────────────────\n"
+  if [ "$found_any" = "true" ]; then
+    log_success "沙箱镜像检索完成。"
+    printf "👉 如需使用上述镜像加速沙箱冷启动，请前往平台 Web 端：\n"
+    printf "   【系统设置】→【参数配置】→【沙箱配置】\n"
+    printf "   找到 %bsandbox_k8s_image%b 项，填入镜像名并点击右上角【保存变更 (⌘S)】\n" "${C_BOLD}" "${C_RESET}"
+  else
+    log_info "未检索到已就绪的沙箱镜像。"
+    printf "👉 如需构建并加速沙箱冷启动，请执行：\n"
+    printf "   %b./build-k8s-sandbox-image.sh%b          # 交互式构建\n" "${C_CYAN}" "${C_RESET}"
+    printf "   %b./build-k8s-sandbox-image.sh -y%b       # 免交互直接构建\n" "${C_CYAN}" "${C_RESET}"
+  fi
+  printf "────────────────────────────────────────────────────────────────────\n\n"
+  exit 0
+}
 
 usage() {
-  cat <<'EOF'
-用法: ./build-k8s-sandbox-image.sh [选项]
+  printf "\n%b用法:%b %b./build-k8s-sandbox-image.sh%b %b[选项]%b\n\n" "${C_BOLD}" "${C_RESET}" "${C_CYAN}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}"
+  printf "构建 K8s 沙箱“网关预置”镜像（把网关 venv 和 gateway 脚本预置到镜像内，跳过 AgentScope Pod bootstrap 冷启动）。\n"
+  printf "构建完成后，在平台 Web 端【%b系统设置%b】→【%b参数配置%b】→【%b沙箱配置%b】中配置给 %bsandbox_k8s_image%b 项生效。\n\n" "${C_CYAN}" "${C_RESET}" "${C_CYAN}" "${C_RESET}" "${C_CYAN}" "${C_RESET}" "${C_BOLD}" "${C_RESET}"
 
-构建 K8s 沙箱“网关预置”镜像（新 Pod 冷启动跳过 AgentScope bootstrap）。
+  printf "%b选项列表:%b\n" "${C_BOLD}" "${C_RESET}"
+  printf "  %b-l, --list%b              探测本地 Docker 与 K8s/K3s 节点已存在的沙箱镜像\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b-y, --yes%b               免确认直接按当前配置开始构建\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--build%b                 显式触发构建流程\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--base-image%b %b<img>%b      基础镜像，默认 %bpython:3.11-slim%b\n" "${C_CYAN}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}" "${C_BOLD}" "${C_RESET}"
+  printf "  %b--image-name%b %b<name>%b     产物镜像名，默认 %bnanzi-sandbox-k8s%b\n" "${C_CYAN}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}" "${C_BOLD}" "${C_RESET}"
+  printf "  %b--version%b %b<ver>%b         产物 Tag，默认 %blatest%b\n" "${C_CYAN}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}" "${C_BOLD}" "${C_RESET}"
+  printf "  %b--proxy%b %b<url>%b           构建网络代理，如 %bhttp://127.0.0.1:7890%b\n" "${C_CYAN}" "${C_RESET}" "${C_YELLOW}" "${C_RESET}" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--agentscope-version%b    覆盖安装的 agentscope 版本（默认跟随本机平台版本，无则最新）\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--no-import%b             构建+save 后不自动导入节点（导出 tar 包供手工拷贝）\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--dry-run%b               演练模式：仅生成 Dockerfile 与命令清单，不实际构建/导入\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b--sync-template%b         从本机 agentscope 刷新 sandbox-image/_mcp_gateway_app.py 模板\n" "${C_CYAN}" "${C_RESET}"
+  printf "  %b-h, --help%b              显示此帮助信息\n\n" "${C_CYAN}" "${C_RESET}"
 
-选项:
-  --base-image <img>      基础镜像，默认 python:3.11-slim
-  --image-name <name>     产物镜像名，默认 nanzi-sandbox-k8s
-  --version <ver>         产物 Tag，默认 latest
-  --proxy <url>           构建网络代理，如 http://127.0.0.1:7890
-  --agentscope-version    覆盖安装的 agentscope 版本（默认跟随本机平台 agentscope，无则最新）
-  --no-import             构建+save 后不自动导入节点（打印导入命令）
-  --dry-run               只生成 Dockerfile 与命令清单，不实际构建/导入
-  --sync-template         从本机 agentscope 刷新 sandbox-image/_mcp_gateway_app.py
-  -h, --help              帮助
-EOF
+  printf "%b常用操作速查示例:%b\n" "${C_BOLD}" "${C_RESET}"
+  printf "  • 探测本地/节点沙箱镜像:   %b./build-k8s-sandbox-image.sh --list%b\n" "${C_CYAN}" "${C_RESET}"
+  printf "  • 演练预览构建命令与文件: %b./build-k8s-sandbox-image.sh --dry-run%b\n" "${C_CYAN}" "${C_RESET}"
+  printf "  • 免交互直接按默认配置构建: %b./build-k8s-sandbox-image.sh -y%b\n" "${C_CYAN}" "${C_RESET}"
+  printf "  • 构建指定版本并导入节点: %b./build-k8s-sandbox-image.sh --version 1.0.0%b\n\n" "${C_CYAN}" "${C_RESET}"
 }
+
+ORIGINAL_ARGC=$#
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    -l|--list|list|--check) LIST_MODE=true; shift ;;
+    -y|--yes)     AUTO_CONFIRM=true; shift ;;
+    build|--build) shift ;;
     --base-image) BASE_IMAGE="$2"; shift 2 ;;
     --image-name) IMAGE_NAME="$2"; shift 2 ;;
     --version)    IMAGE_TAG="$2"; shift 2 ;;
@@ -98,6 +305,41 @@ while [ $# -gt 0 ]; do
     *) log_error "未知参数: $1（-h 查看帮助）"; exit 1 ;;
   esac
 done
+
+if [ "$LIST_MODE" = "true" ]; then
+  run_list_sandbox_images
+fi
+
+# 前置检查 Docker 运行环境（在用户交互确认与构建前提前发现问题并引导）
+check_docker_environment_k8s
+
+# 无参数直接执行时的安全引导与交互式确认
+if [ "$ORIGINAL_ARGC" -eq 0 ] && [ "$AUTO_CONFIRM" != "true" ]; then
+  usage
+  printf "\n"
+  log_info "当前构建目标与平台生效路径："
+  printf "  • 基础镜像:     %b%s%b\n" "${C_BOLD}" "$BASE_IMAGE" "${C_RESET}"
+  printf "  • 产物镜像:     %b%s:%s%b\n" "${C_BOLD}" "$IMAGE_NAME" "$IMAGE_TAG" "${C_RESET}"
+  printf "  • 自动导入节点: %b%s%b\n" "${C_BOLD}" "$DO_IMPORT" "${C_RESET}"
+  printf "  • 平台配置路径: %b系统设置 → 参数配置 → 沙箱配置 → sandbox_k8s_image%b\n" "${C_CYAN}" "${C_RESET}"
+  printf "\n"
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf "%b💡 未指定参数，是否以默认配置 [%s:%s] 立即开始构建？[y/N]: %b" "${C_YELLOW}" "$IMAGE_NAME" "$IMAGE_TAG" "${C_RESET}"
+    read -r confirm
+    case "$confirm" in
+      [yY]|[yY][eE][sS])
+        log_info "已确认，开始执行构建流程..."
+        ;;
+      *)
+        log_info "已取消构建。如需演练或指定参数，请参考上方帮助。"
+        exit 0
+        ;;
+    esac
+  else
+    log_warn "未指定参数且当前非交互终端，已安全退出。如需免交互构建请添加 -y/--yes 参数。"
+    exit 0
+  fi
+fi
 
 if [ "$SYNC_TEMPLATE" = "true" ]; then
   PY="${PYTHON:-}"
@@ -159,9 +401,12 @@ export AP
 cat > "$BUILD_DIR/Dockerfile" <<EOF
 FROM $BASE_IMAGE
 
-# 与 AgentScope K8s bootstrap 相同的系统依赖（curl/ca-certificates 供 uv 安装，ripgrep 供内置 Grep）
+# 系统依赖与常见排障/开发工具（包含 tree, telnet, net-tools, ping, dig, ps 等）
 RUN apt-get update -qq \\
- && apt-get install -y --no-install-recommends curl ca-certificates ripgrep \\
+ && apt-get install -y --no-install-recommends \\
+      curl ca-certificates ripgrep \\
+      tree telnet net-tools iputils-ping dnsutils iproute2 procps \\
+      git jq unzip wget less \\
  && rm -rf /var/lib/apt/lists/*
 
 # uv（放入 PATH）
@@ -192,6 +437,9 @@ if [ "$DRY_RUN" = "true" ]; then
     printf "  %bctr -n k8s.io images import nanzi-sandbox-k8s_%s.tar   # 非 K3s（普通 containerd）%s\n" "${C_CYAN}" "$IMAGE_TAG" "${C_RESET}"
     printf "  %bk3s ctr images import nanzi-sandbox-k8s_%s.tar          # K3s%s\n" "${C_CYAN}" "$IMAGE_TAG" "${C_RESET}"
   fi
+  log_info "构建完成后的平台配置路径："
+  printf "  👉 前往平台 Web 端：【系统设置】→【参数配置】→【沙箱配置】\n"
+  printf "  👉 找到 sandbox_k8s_image 项，填入 %b%s%b 并点击右上角【保存变更】\n" "${C_BOLD}" "$FULL_IMAGE" "${C_RESET}"
   log_success "演练完成，未实际构建/导入。"
   exit 0
 fi
@@ -220,22 +468,10 @@ log_success "已导出：$TAR_FILE"
 
 if [ "$DO_IMPORT" = "true" ]; then
   IMPORTED=false
-  # 运行时选择：K3s（命令或 socket）优先——K3s 自带 containerd 是 kubelet 读取的那套；
-  # 没有 K3s 时用系统 containerd（普通 K8s 节点）。
-  if command -v k3s >/dev/null 2>&1; then
-    log_info "正在导入 K3s containerd（k3s ctr）..."
-    if sudo -n k3s ctr images import "$TAR_FILE" 2>/dev/null || k3s ctr images import "$TAR_FILE" 2>/dev/null; then
-      IMPORTED=true
-    fi
-  elif [ -S "/run/k3s/containerd/containerd.sock" ]; then
-    log_info "正在导入 K3s containerd（ctr -a socket）..."
-    if sudo -n ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import "$TAR_FILE" 2>/dev/null \
-      || ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import "$TAR_FILE" 2>/dev/null; then
-      IMPORTED=true
-    fi
-  elif command -v ctr >/dev/null 2>&1; then
-    log_info "正在导入节点 containerd（ctr -n k8s.io）..."
-    if sudo -n ctr -n k8s.io images import "$TAR_FILE" 2>/dev/null || ctr -n k8s.io images import "$TAR_FILE" 2>/dev/null; then
+  resolve_node_container_tool
+  if [ -n "$NODE_CTR_CMD" ] && [[ "$NODE_CTR_CMD" != *"crictl"* ]]; then
+    log_info "正在导入节点容器运行时（$NODE_CTR_CMD images import）..."
+    if $NODE_CTR_CMD images import "$TAR_FILE" 2>/dev/null; then
       IMPORTED=true
     fi
   fi
@@ -252,17 +488,21 @@ else
   printf "  %bk3s ctr images import %s          # K3s%b\n" "${C_CYAN}" "$TAR_FILE" "${C_RESET}"
 fi
 
-cat <<EOF
+printf "\n%b══════════════════════════════════════════════════════════════════════%b\n" "${C_GREEN}" "${C_RESET}"
+printf "%b✅ 镜像构建与导入完成！请前往 NanZi 平台 Web 端配置生效：%b\n\n" "${C_BOLD}${C_GREEN}" "${C_RESET}"
 
-────────────────────────────────────────────────────────────────────
-✅ 构建完成。接下来让沙箱使用该预置镜像：
+printf "%b1. 确认节点容器运行时已就绪该镜像：%b\n" "${C_BOLD}${C_CYAN}" "${C_RESET}"
+printf "   %b./install.sh check-sandbox-image %s%b\n" "${C_CYAN}" "$FULL_IMAGE" "${C_RESET}"
+printf "   （或执行: %b./install.sh images %s%b）\n\n" "${C_CYAN}" "$IMAGE_NAME" "${C_RESET}"
 
-1. 在节点/管理端确认镜像已导入：
-   crictl images | grep nanzi-sandbox-k8s   （或 ./install.sh --images nanzi-sandbox-k8s）
+printf "%b2. 登录平台 Web 控制台配置生效：%b\n" "${C_BOLD}${C_CYAN}" "${C_RESET}"
+printf "   👉 打开页面：【%b系统设置%b】→【%b参数配置%b】\n" "${C_CYAN}" "${C_RESET}" "${C_CYAN}" "${C_RESET}"
+printf "   👉 展开分组：【%b沙箱配置%b】\n" "${C_CYAN}" "${C_RESET}"
+printf "   👉 找到配置项：%bsandbox_k8s_image%b（k8s 策略沙箱容器运行的基础镜像）\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
+printf "   👉 填写镜像名：%b%s%b\n" "${C_BOLD}${C_GREEN}" "$FULL_IMAGE" "${C_RESET}"
+printf "   👉 点击右上角：【%b保存变更 (⌘S)%b】保存生效\n\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
 
-2. 将系统配置 sandbox_k8s_image 设为: $FULL_IMAGE
-   （配置 -> 沙箱 -> sandbox_k8s_image）
-
-3. 之后新建/重启的沙箱 Pod 将直接使用预置网关环境，冷启动大幅加速。
-────────────────────────────────────────────────────────────────────
-EOF
+printf "%b3. 秒级拉起生效机制说明：%b\n" "${C_BOLD}${C_CYAN}" "${C_RESET}"
+printf "   配置保存后，之后所有新建或重启的沙箱 Pod 将直接复用预置网关与排障环境，\n"
+printf "   彻底跳过 Pod 冷启动下载安装依赖的过程，%b冷启动从数十秒降至秒级！%b\n" "${C_BOLD}${C_GREEN}" "${C_RESET}"
+printf "%b══════════════════════════════════════════════════════════════════════%b\n\n" "${C_GREEN}" "${C_RESET}"
