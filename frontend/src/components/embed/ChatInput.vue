@@ -1063,12 +1063,12 @@ const toggleModelDropdown = () => {
 };
 
 const activeApprovalMode = computed(
-  () => props.approvalMode || "ask",
+  () => props.approvalMode || "allow",
 );
 
 const activeApprovalLabel = computed(() => {
   const option = APPROVAL_MODE_OPTIONS.find((item) => item.value === activeApprovalMode.value);
-  return option?.label || "请求批准";
+  return option?.label || "自动批准";
 });
 
 const approvalTriggerToneClass = computed(() => {

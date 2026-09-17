@@ -42,16 +42,32 @@ def dump_json_list(value: Any) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
+def parse_optional_role_id(value: Any) -> Optional[int]:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("role_id 必须是整数") from exc
+    return parsed if parsed > 0 else None
+
+
+def parse_required_role_id(value: Any) -> int:
+    parsed = parse_optional_role_id(value)
+    if parsed is None:
+        raise ValueError("必须关联角色")
+    return parsed
+
+
 class SysEmbedAppBase(BaseModel):
     name: str
     description: Optional[str] = None
-    allowed_agent_ids: list[str] = Field(default_factory=list)
+    role_id: Optional[int] = None
+    lock_entry_agent: bool = False
     allowed_origins: list[str] = Field(default_factory=list)
     require_identity: bool = True
     claim_keys: list[str] = Field(default_factory=list)
-    create_shadow_user: bool = True
     data_permission_mode: str = "nanzi_sql_rewrite"
-    isolate_datasets_by_tenant: bool = False
     is_active: bool = True
 
     @field_validator("name")
@@ -62,6 +78,11 @@ class SysEmbedAppBase(BaseModel):
             raise ValueError("name 不能为空")
         return text[:128]
 
+    @field_validator("role_id", mode="before")
+    @classmethod
+    def _role_id(cls, value: Any) -> Optional[int]:
+        return parse_optional_role_id(value)
+
     @field_validator("data_permission_mode")
     @classmethod
     def _mode(cls, value: str) -> str:
@@ -70,7 +91,7 @@ class SysEmbedAppBase(BaseModel):
             raise ValueError("data_permission_mode 仅支持 nanzi_sql_rewrite 或 mcp_only")
         return text
 
-    @field_validator("allowed_agent_ids", "allowed_origins", "claim_keys", mode="before")
+    @field_validator("allowed_origins", "claim_keys", mode="before")
     @classmethod
     def _lists(cls, value: Any) -> list[str]:
         return [str(item).strip() for item in parse_json_list(value) if str(item).strip()]
@@ -94,10 +115,16 @@ class SysEmbedAppBase(BaseModel):
 
 
 class SysEmbedAppCreate(SysEmbedAppBase):
+    role_id: int
     app_key: Optional[str] = Field(
         default=None,
         description="可选。不传则由平台自动生成。",
     )
+
+    @field_validator("role_id", mode="before")
+    @classmethod
+    def _create_role_id(cls, value: Any) -> int:
+        return parse_required_role_id(value)
 
     @field_validator("app_key")
     @classmethod
@@ -113,13 +140,12 @@ class SysEmbedAppCreate(SysEmbedAppBase):
 class SysEmbedAppUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    allowed_agent_ids: Optional[list[str]] = None
+    role_id: Optional[int] = None
+    lock_entry_agent: Optional[bool] = None
     allowed_origins: Optional[list[str]] = None
     require_identity: Optional[bool] = None
     claim_keys: Optional[list[str]] = None
-    create_shadow_user: Optional[bool] = None
     data_permission_mode: Optional[str] = None
-    isolate_datasets_by_tenant: Optional[bool] = None
     is_active: Optional[bool] = None
 
     @field_validator("name")
@@ -132,6 +158,13 @@ class SysEmbedAppUpdate(BaseModel):
             raise ValueError("name 不能为空")
         return text[:128]
 
+    @field_validator("role_id", mode="before")
+    @classmethod
+    def _role_id(cls, value: Any) -> int:
+        if value is None:
+            raise ValueError("必须关联角色")
+        return parse_required_role_id(value)
+
     @field_validator("data_permission_mode")
     @classmethod
     def _mode(cls, value: Optional[str]) -> Optional[str]:
@@ -142,7 +175,7 @@ class SysEmbedAppUpdate(BaseModel):
             raise ValueError("data_permission_mode 仅支持 nanzi_sql_rewrite 或 mcp_only")
         return text
 
-    @field_validator("allowed_agent_ids", "allowed_origins", "claim_keys", mode="before")
+    @field_validator("allowed_origins", "claim_keys", mode="before")
     @classmethod
     def _lists(cls, value: Any) -> Any:
         if value is None:
@@ -153,6 +186,7 @@ class SysEmbedAppUpdate(BaseModel):
 class SysEmbedAppResponse(SysEmbedAppBase):
     id: str
     app_key: str
+    role_name: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
     created_at: datetime
@@ -160,7 +194,13 @@ class SysEmbedAppResponse(SysEmbedAppBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("allowed_agent_ids", "allowed_origins", "claim_keys", mode="before")
+    @field_validator("allowed_origins", "claim_keys", mode="before")
     @classmethod
     def _response_lists(cls, value: Any) -> list[str]:
         return [str(item).strip() for item in parse_json_list(value) if str(item).strip()]
+
+
+class EmbedRoleOption(BaseModel):
+    id: int
+    code: str
+    name: str

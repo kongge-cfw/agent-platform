@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { isEmbeddedInIframe } from '@/utils/embedHost'
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +37,8 @@ const isExpertMode = (routingMode?: string, expertAgentId?: string) =>
 
 const expertTab = ref<'system' | 'custom'>('system')
 const expertSearchQuery = ref('')
+/** 业务系统 iframe 只开放平台专家；自定义专家是个人资产，宿主用户不关心。 */
+const hideCustomExperts = isEmbeddedInIframe()
 
 const isMainAgent = (agent: any) => {
   if (!agent) return false
@@ -86,6 +89,10 @@ const shouldShowAutoCard = computed(() => {
 watch(
   () => [props.expertAgentId, props.routingMode],
   () => {
+    if (hideCustomExperts) {
+      expertTab.value = 'system'
+      return
+    }
     if (props.routingMode === 'expert' && props.expertAgentId) {
       const match = (props.allowedAgents || []).find((a) => a.id === props.expertAgentId)
       if (match) {
@@ -96,8 +103,17 @@ watch(
   { immediate: true },
 )
 
+const visibleAgentCount = computed(() => {
+  return hideCustomExperts ? systemAgents.value.length : (props.allowedAgents || []).length
+})
+
+const visibleFilteredCount = computed(() => {
+  return filteredSystemAgents.value.length + (hideCustomExperts ? 0 : filteredCustomAgents.value.length)
+})
+
 const currentTabTotalCount = computed(() => {
-  return expertTab.value === 'system' ? systemAgents.value.length : customAgents.value.length
+  if (hideCustomExperts || expertTab.value === 'system') return systemAgents.value.length
+  return customAgents.value.length
 })
 
 const showSearchInput = computed(() => {
@@ -139,7 +155,7 @@ const handleSelectExpert = (agentId: string) => {
       <div class="flex items-center gap-1.5 min-w-0">
         <span class="w-1 h-3.5 bg-primary rounded-full shrink-0" />
         <span class="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
-          专家中心({{ allowedAgents.length }})
+          专家中心({{ visibleAgentCount }})
         </span>
         <button
           type="button"
@@ -167,10 +183,13 @@ const handleSelectExpert = (agentId: string) => {
       </button>
     </div>
 
-    <!-- Tab 切换头与即时搜索框 -->
-    <div class="px-2.5 pt-2 pb-1.5 border-b border-gray-100 dark:border-gray-700/80 bg-gray-50/50 dark:bg-gray-800/80 shrink-0 space-y-1.5">
+    <!-- Tab 切换头与即时搜索框；iframe 不展示分类 Tab -->
+    <div
+      v-if="!hideCustomExperts || showSearchInput"
+      class="px-2.5 pt-2 pb-1.5 border-b border-gray-100 dark:border-gray-700/80 bg-gray-50/50 dark:bg-gray-800/80 shrink-0 space-y-1.5"
+    >
       <!-- 双 Tab 切换 -->
-      <div class="flex items-center gap-1 rounded-lg bg-gray-200/60 dark:bg-gray-700/60 p-1">
+      <div v-if="!hideCustomExperts" class="flex items-center gap-1 rounded-lg bg-gray-200/60 dark:bg-gray-700/60 p-1">
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs font-semibold transition-all"
@@ -362,7 +381,7 @@ const handleSelectExpert = (agentId: string) => {
       </template>
 
       <!-- 自定义专家 Tab 内容 -->
-      <template v-else-if="expertTab === 'custom'">
+      <template v-else-if="!hideCustomExperts && expertTab === 'custom'">
         <button
           v-for="agent in filteredCustomAgents"
           :key="agent.id"
@@ -423,10 +442,10 @@ const handleSelectExpert = (agentId: string) => {
     <div class="px-3 py-2 border-t border-gray-200 dark:border-gray-700 text-center shrink-0 bg-gray-50 dark:bg-gray-900/80">
       <span class="text-[11px] text-gray-500 dark:text-gray-400">
         <template v-if="expertSearchQuery">
-          筛选到 {{ filteredSystemAgents.length + filteredCustomAgents.length }} 个专家 (共 {{ allowedAgents.length }} 个)
+          筛选到 {{ visibleFilteredCount }} 个专家 (共 {{ visibleAgentCount }} 个)
         </template>
         <template v-else>
-          共 {{ allowedAgents.length }} 个专家
+          共 {{ visibleAgentCount }} 个专家
         </template>
       </span>
     </div>

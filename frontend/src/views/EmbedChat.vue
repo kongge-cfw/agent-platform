@@ -64,9 +64,8 @@
               </div>
             </div>
           </div>
-          <div class="flex flex-col min-w-0 overflow-hidden">
-                <div class="flex items-center space-x-1.5 leading-tight">
-                    <span class="text-[13px] font-semibold text-gray-800 dark:text-gray-100 truncate">
+          <div class="flex items-center gap-1.5 min-w-0 overflow-hidden">
+                    <span class="text-[13px] font-semibold leading-none text-gray-800 dark:text-gray-100 truncate min-w-0">
                         <template v-if="isProcessing">
                             {{ lastAgentMessage?.agentDisplayName || lastAgentMessage?.agentName || '智能体' }}
                         </template>
@@ -77,36 +76,28 @@
                             {{ branding.default_agent_name || 'NanZi · AI' }}
                         </template>
                     </span>
-                    <span v-if="isProcessing" class="flex h-1.5 w-1.5 relative">
+                    <span v-if="isProcessing" class="flex h-1.5 w-1.5 relative shrink-0">
                         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                         <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary"></span>
                     </span>
                     <span
                         v-else-if="headerExpertLabel"
-                        class="inline-flex items-center px-1.5 py-0.2 rounded-full bg-primary/10 text-primary text-[9px] font-semibold uppercase tracking-wider shrink-0"
+                        class="inline-flex items-center px-1.5 py-0.2 rounded-full bg-primary/10 text-primary text-[9px] font-semibold uppercase tracking-wider shrink-0 leading-none"
                     >
                         锁定
                     </span>
-                </div>
-                <div class="text-[11px] text-gray-400 dark:text-gray-500 truncate flex items-center gap-1.5 min-w-0 leading-tight mt-0.5">
-                    <template v-if="isProcessing">
-                        <span>正在处理您的请求...</span>
-                    </template>
-                    <template v-else-if="headerExpertLabel">
-                        <span class="normal-case tracking-normal">准备就绪</span>
-                        <button
-                            v-if="!isRoutingSettingsLocked"
-                            type="button"
-                            @click.stop="switchToAuto"
-                            class="text-gray-400 hover:text-red-500 normal-case tracking-normal font-medium transition-colors shrink-0"
-                        >
-                            退出
-                        </button>
-                    </template>
-                    <template v-else>
-                        <span>准备就绪</span>
-                    </template>
-                </div>
+                    <span class="inline-flex items-center text-[11px] leading-none text-gray-400 dark:text-gray-500 shrink-0">
+                        <template v-if="isProcessing">正在处理您的请求...</template>
+                        <template v-else>准备就绪</template>
+                    </span>
+                    <button
+                        v-if="headerExpertLabel && !isProcessing && !isRoutingSettingsLocked"
+                        type="button"
+                        @click.stop="switchToAuto"
+                        class="inline-flex items-center text-[11px] leading-none text-gray-400 hover:text-red-500 font-medium transition-colors shrink-0"
+                    >
+                        退出
+                    </button>
             </div>
         </div>
 
@@ -3040,7 +3031,7 @@ const config = reactive({
   theme: "light",
   welcomeMessage: "",
   overrideModel: "", // To override default model
-  approvalMode: "ask" as "ask" | "allow" | "deny",
+  approvalMode: "allow" as "ask" | "allow" | "deny",
   overrideAgentId: "", // To override agent via @mention
   userAvatar: "", // Custom user avatar URL
   routingMode: "auto", // 'auto' | 'expert'
@@ -3434,7 +3425,7 @@ const saveRoutingSettings = () => {
     localStorage.setItem("yovole_show_shortcuts", config.showShortcuts ? "1" : "0");
     localStorage.setItem("yovole_enable_sql_plan", config.enableSqlPlan ? "1" : "0");
     localStorage.setItem("yovole_override_model", config.overrideModel || "");
-    localStorage.setItem("yovole_approval_mode", config.approvalMode || "ask");
+    localStorage.setItem("yovole_approval_mode", config.approvalMode || "allow");
     localStorage.setItem("yovole_embed_theme", config.theme || "light");
     localStorage.setItem("yovole_expand_thoughts", config.expandThoughts ? "1" : "0");
     localStorage.setItem("yovole_grounding_block_mode", config.groundingBlockMode || "strict_buffer");
@@ -6020,7 +6011,12 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
           ...sessionData.user_info,
         };
       }
-      if (sessionData.agent_id) {
+      const lockEntryAgent =
+        sessionData.lock_entry_agent === true
+        || sessionData.lock_entry_agent === 1
+        || sessionData.lock_entry_agent === "1"
+        || (sessionData.lock_entry_agent == null && Boolean(sessionData.agent_id));
+      if (lockEntryAgent && sessionData.agent_id) {
         urlPinnedAgentKey.value = sessionData.agent_id;
         applyIntegrationAgentLock(sessionData.agent_id);
       }
@@ -8118,7 +8114,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
         resource_scope: resourceScope.value,
       },
       permission_options: {
-        approval_mode: config.approvalMode || "ask",
+        approval_mode: config.approvalMode || "allow",
       },
     };
     if (thinkingEnableOverride.value !== null) {

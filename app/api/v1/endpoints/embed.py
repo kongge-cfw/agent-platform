@@ -70,13 +70,13 @@ class CreateTicketRequest(BaseModel):
     )
     agent_id: Optional[str] = Field(
         None,
-        description="锁定的智能体 ID。提交 identity 或 app_key 时必填；嵌入会话不能再切换入口智能体。",
+        description="入口智能体 ID。未绑定嵌入应用、或应用开启了锁定入口时必填；锁定后 iframe 不能再切换。",
         json_schema_extra={"example": "sys-agent-chatbi"},
     )
     app_key: Optional[str] = Field(
         None,
         max_length=64,
-        description="嵌入应用标识。绑定后校验允许的智能体、域名、是否要求 identity、claims 白名单。",
+        description="嵌入应用标识。绑定后按关联角色授权智能体，并校验域名、是否要求 identity、claims 白名单。",
         json_schema_extra={"example": "crm_portal"},
     )
     allowed_origins: Optional[List[str]] = Field(

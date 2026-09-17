@@ -20,6 +20,14 @@ def test_expert_menu_has_desktop_close_control_and_parent_wires_it():
     assert chat_input.count('@close="showExpertSelector = false"') == 2
 
 
+def test_embed_chat_defaults_approval_mode_to_allow():
+    embed = (ROOT / "frontend/src/views/EmbedChat.vue").read_text(encoding="utf-8")
+    chat_input = CHAT_INPUT.read_text(encoding="utf-8")
+    assert 'approvalMode: "allow" as "ask" | "allow" | "deny"' in embed
+    assert 'approval_mode: config.approvalMode || "allow"' in embed
+    assert 'props.approvalMode || "allow"' in chat_input
+
+
 def test_approval_menu_has_visible_close_control():
     text = CHAT_INPUT.read_text(encoding="utf-8")
 

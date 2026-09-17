@@ -42,6 +42,17 @@ def test_expert_cascade_menu_dual_tabs_and_search_contract():
     assert "清空搜索条件" in content
 
 
+def test_expert_cascade_hides_custom_tab_when_embedded_in_iframe():
+    content = EXPERT_MENU.read_text(encoding="utf-8")
+    assert "isEmbeddedInIframe" in content
+    assert "hideCustomExperts" in content
+    assert 'v-if="!hideCustomExperts"' in content
+    assert 'v-else-if="!hideCustomExperts && expertTab === \'custom\'"' in content
+    assert "visibleAgentCount" in content
+    host = (ROOT / "frontend/src/utils/embedHost.ts").read_text(encoding="utf-8")
+    assert "window.self !== window.top" in host
+
+
 def test_task_center_agent_dropdown_search_contract():
     content = TASK_CENTER.read_text(encoding="utf-8")
 

@@ -86,8 +86,8 @@ sequenceDiagram
 | `identity.extra_data` | object    | 否   | -               | 业务属性（如 data_scope、region_codes）。禁止传 `role` / `is_admin` / `permissions`。 |
 | `username`        | string       | 否   | 当前调用者      | **兼容旧代客模式**：目标南孜用户名。与 `identity` 同时传时以 `identity` 为准。 |
 | `user_id`         | integer      | 否   | -               | 目标南孜用户 ID。提供 `identity` 时忽略。                                   |
-| `agent_id`        | string       | identity 或 app_key 时必填 | - | 锁定对话的智能体 ID。嵌入会话不能再切换入口智能体。                       |
-| `app_key`         | string       | 否   | -               | **嵌入应用**标识。管理端登记时自动生成，Ticket 带上后按应用校验智能体、域名、业务身份字段。 |
+| `agent_id`        | string       | 未绑定应用、或应用开启「锁定入口智能体」时必填 | - | 入口智能体 ID。应用锁定入口时写入会话并禁止 iframe 切换；未锁定时可选，iframe 可智能委派 / 切换角色授权范围内的智能体。 |
+| `app_key`         | string       | 否   | -               | **嵌入应用**标识。管理端登记时自动生成，Ticket 带上后按应用校验关联角色、域名、业务身份字段。 |
 | `allowed_origins` | list[string] | 否   | `[]` (不限制) | 限定允许嵌入该 Ticket 的前端域名。若绑定了应用，必须是应用域名白名单的子集。 |
 | `expires_in`      | integer      | 否   | `300`         | Ticket 兑换有效时长（秒），取值范围 60 ~ 1800 秒。                          |
 
@@ -100,13 +100,13 @@ sequenceDiagram
 | 应用配置 | 作用 |
 | --- | --- |
 | 应用 Key | 登记时自动生成，宿主 Ticket 传此值；创建后不可改 |
-| 允许的智能体 | Ticket `agent_id` 必须在列表中（空=签发人权限内均可） |
+| 关联角色 | **必选**。iframe 可切换的智能体以该角色在「角色管理」中的资产为准；签发 Ticket 的服务账号须属于该角色 |
+| 锁定入口智能体 | 开启后 Ticket 必须传 `agent_id`，iframe 不能切换/智能委派。工作台场景建议关闭 |
 | 允许的域名 | 兑换时 Origin 必须匹配；Ticket 不可扩大域名 |
 | 必须提交业务用户身份 | 打开后禁止旧 `username` 代客 |
-| 允许宿主声明的身份字段 | 勾选固定字段：`subject`（始终保留）、`display_name`、`dept_code`、`org_path`、`tenant_id`、`extra_data`。未勾选的字段会被丢弃 |
-| 在平台用户表写入映射账号 | 默认开启，仅兼容旧会话存储，业务用户不能登录管理端。关闭后不再写 `ai_agent_users`，会话按业务用户标识归属 |
-| 数据权限 | `nanzi_sql_rewrite`（默认，南孜按身份字段改写行级 SQL）或 `mcp_only`（南孜不改写 SQL，身份整包交给业务 MCP） |
-| 按租户隔离 | 打开后必须传 `identity.tenant_id`，数据集/知识库只看见该租户或未打租户标签的资源 |
+| 身份字段 | 管理端不再单独勾选。保存时固定接受 `subject`、`display_name`、`dept_code`、`org_path`、`tenant_id`、`extra_data` |
+| 会话归属 | 不再写入平台映射账号，会话按业务用户标识归属 |
+| 数据权限 | `nanzi_sql_rewrite`（默认，平台按身份字段改写行级 SQL）或 `mcp_only`（平台不改写 SQL，身份整包交给业务 MCP） |
 
 嵌入 session **不能**调用用户管理、MCP 注册、角色、系统配置等管理接口。宿主可用 `POST /api/v1/embed/sessions/revoke`（`app_key` + `subject`）作废该业务用户已兑换的会话。
 
@@ -582,8 +582,8 @@ frame.contentWindow.postMessage({
 
 ### Q3: 业务用户必须先在南孜建账号吗？
 
-- **解答**：推荐模式不需要。宿主后端提交 `identity.subject` 即可。默认会在平台用户表写入一条映射账号（不能登录管理端），仅作会话存储兼容；嵌入应用可关闭该项，会话按业务用户标识归属。
-- **解决方案**：生产嵌入请改用 `app_key` + `identity` + 服务账号 `X-API-Key`，并指定 `agent_id`。不要把业务 JWT 塞进 iframe 或 `UPDATE_CONTEXT`。
+- **解答**：推荐模式不需要。宿主后端提交 `identity.subject` 即可。绑定嵌入应用后不再往平台用户表写映射账号，会话按业务用户标识归属。
+- **解决方案**：生产嵌入请改用 `app_key` + `identity` + 服务账号 `X-API-Key`。未锁定入口时 `agent_id` 可省略。不要把业务 JWT 塞进 iframe 或 `UPDATE_CONTEXT`。
 
 ### Q4: 移动端 H5 嵌入时如何防止横向滚动？
 
@@ -599,7 +599,7 @@ frame.contentWindow.postMessage({
 - **解答**：不能。嵌入 session 只能走对话、资源挂载、工作区等运行面接口，用户管理 / MCP 注册 / 角色 / 系统配置一律 403。
 - **解决方案**：这些能力由宿主服务账号在内网调用，不要把管理 API 暴露给 iframe。
 
-### Q6: 业务中台已有权限引擎，还要南孜改写 SQL 吗？
+### Q6: 业务中台已有权限引擎，还要平台改写 SQL 吗？
 
-- **解答**：嵌入应用把「数据权限」设为「不下改写，交给业务 MCP」后，南孜只做表级 ACL（认签发人），行级条件不再改写；`identity` 整包进入 MCP `X-Nanzi-User-Context`。
+- **解答**：嵌入应用把「数据权限」设为「不下改写，交给业务 MCP」后，平台只做表级 ACL（认签发人），行级条件不再改写；`identity` 整包进入 MCP `X-Nanzi-User-Context`。
 - **解决方案**：数据集仍须打 `tenant_id`（若开启租户隔离），行级规则由业务 MCP 解释 `dept_code` / `extra_data`。

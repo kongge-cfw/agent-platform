@@ -23,9 +23,10 @@ def test_embed_chat_url_agent_lock_and_status_label():
     assert "embed-access" in text
     assert "headerExpertLabel" in text
     assert "准备就绪" in text
+    assert "flex items-center gap-1.5 min-w-0 overflow-hidden" in text
     assert "isUrlAgentPinned && pinnedAgentLabel" not in text or "headerExpertLabel" in text
     assert "{{ pinnedAgentLabel }} 准备就绪" not in text
-    assert 'v-if="!isRoutingSettingsLocked"' in text  # ExpertCapsule hidden for every integration lock
+    assert ':lock-expert-agent="isRoutingSettingsLocked"' in text
     assert "lock-expert-agent" in text
     assert "effectiveSlashCommands" in text
     assert "无权使用该智能体" in text

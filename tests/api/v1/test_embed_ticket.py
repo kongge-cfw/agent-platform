@@ -9,6 +9,7 @@ from app.services.embed_identity import (
     build_session_owner,
     build_shadow_extra_data,
     is_platform_admin,
+    locked_agent_id,
     normalize_embed_user_info,
     shadow_username,
     skip_sql_row_rewrite,
@@ -48,6 +49,9 @@ def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     assert embed_path_allowed("GET", "/api/portal/saved-reports") is True
     assert embed_path_allowed("GET", "/api/portal/models") is True
     assert embed_path_allowed("POST", "/api/portal/models") is False
+    assert locked_agent_id({"agent_id": "sys-agent-chat"}) == "sys-agent-chat"
+    assert locked_agent_id({"agent_id": "sys-agent-chat", "lock_entry_agent": "0"}) == ""
+    assert locked_agent_id({"agent_id": "sys-agent-chat", "lock_entry_agent": "1"}) == "sys-agent-chat"
     assert embed_path_allowed("DELETE", "/api/portal/saved-reports/abc") is False
     assert embed_path_allowed("POST", "/api/portal/chatbi-monitors") is True
     assert embed_path_allowed("POST", "/api/portal/chatbi-export/result") is True
@@ -354,6 +358,7 @@ async def test_embed_ticket_identity_jit_shadow_and_lock(client: AsyncClient, db
 @pytest.mark.asyncio
 async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncClient, db_session):
     from app.models.embed_app import SysEmbedApp
+    from app.models.permission import ResourcePermission, Role
 
     suffix = uuid.uuid4().hex[:8]
     admin_name = f"ticket_app_adm_{suffix}"
@@ -371,21 +376,53 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         capabilities=["data_query"],
         created_by="admin",
     )
-    db_session.add(agent)
+    other = AIAgent(
+        id=str(uuid.uuid4()),
+        name=f"embed-app-other-{suffix}",
+        display_name="未授权专家",
+        description="test",
+        is_system=True,
+        is_enabled=True,
+        engine_type="LOCAL",
+        capabilities=["data_query"],
+        created_by="admin",
+    )
+    role = Role(code=f"emb_{suffix}"[:50], name=f"嵌入角色{suffix}"[:50])
+    db_session.add_all([agent, other, role])
+    await db_session.flush()
+    db_session.add(
+        ResourcePermission(
+            role_id=role.id,
+            resource_type="agent",
+            resource_id=agent.id,
+            enabled=True,
+        )
+    )
     app = SysEmbedApp(
         id=str(uuid.uuid4()),
         app_key=f"crm_{suffix}"[:32],
         name="CRM",
-        allowed_agent_ids=json.dumps([agent.id]),
+        role_id=role.id,
+        lock_entry_agent=False,
         allowed_origins=json.dumps(["https://crm.example.com"]),
         require_identity=True,
         claim_keys=json.dumps(["subject", "display_name", "tenant_id", "extra_data.data_scope"]),
-        create_shadow_user=False,
         data_permission_mode="mcp_only",
-        isolate_datasets_by_tenant=True,
         is_active=True,
     )
-    db_session.add(app)
+    locked_app = SysEmbedApp(
+        id=str(uuid.uuid4()),
+        app_key=f"crml_{suffix}"[:32],
+        name="CRM锁定",
+        role_id=role.id,
+        lock_entry_agent=True,
+        allowed_origins=json.dumps(["https://crm.example.com"]),
+        require_identity=True,
+        claim_keys=json.dumps(["subject", "tenant_id"]),
+        data_permission_mode="mcp_only",
+        is_active=True,
+    )
+    db_session.add_all([app, locked_app])
     await db_session.commit()
 
     missing_identity = await client.post(
@@ -395,11 +432,21 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
     )
     assert missing_identity.status_code == 400
 
+    missing_locked_agent = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "app_key": locked_app.app_key,
+            "identity": {"subject": f"crm:lock_{suffix}", "tenant_id": "t_1"},
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert missing_locked_agent.status_code == 400
+
     other_agent = await client.post(
         "/api/v1/embed/tickets",
         json={
             "app_key": app.app_key,
-            "agent_id": "not-allowed-agent",
+            "agent_id": other.id,
             "identity": {"subject": f"crm:u_{suffix}", "tenant_id": "t_1"},
         },
         headers={"X-API-Key": admin_key},
@@ -410,7 +457,6 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         "/api/v1/embed/tickets",
         json={
             "app_key": app.app_key,
-            "agent_id": agent.id,
             "identity": {
                 "subject": f"crm:u_{suffix}",
                 "display_name": "用户",
@@ -433,7 +479,10 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         headers={"Origin": "https://crm.example.com"},
     )
     assert exchange_resp.status_code == 200
-    session_token = exchange_resp.json()["data"]["session_token"]
+    session = exchange_resp.json()["data"]
+    assert session.get("agent_id") in (None, "")
+    assert session.get("lock_entry_agent") is False
+    session_token = session["session_token"]
 
     blocked = await client.get(
         "/api/portal/management/users",

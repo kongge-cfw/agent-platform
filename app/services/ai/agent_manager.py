@@ -666,12 +666,24 @@ class AgentManagerService:
         """Whether the user may chat with this agent (same rules as list_allowed_agents)."""
         if not user or not agent:
             return False
-        from app.services.embed_identity import agent_matches_lock, is_embed_session, locked_agent_id
+        from app.services.embed_identity import (
+            agent_matches_lock,
+            embed_role_id,
+            is_embed_session,
+            locked_agent_id,
+        )
 
         if is_embed_session(user):
             locked = locked_agent_id(user)
             if locked and not agent_matches_lock(agent, locked):
                 return False
+            role_id = embed_role_id(user)
+            if role_id:
+                from app.services.embed_app_service import agent_allowed_by_role
+
+                agent_key = str(getattr(agent, "id", "") or getattr(agent, "name", "") or "").strip()
+                if not await agent_allowed_by_role(session, role_id, agent_key):
+                    return False
         is_admin, username, user_id = AgentManagerService._extract_user_identity(user)
         if is_admin:
             return True
@@ -721,7 +733,7 @@ class AgentManagerService:
         if not user:
             return []
 
-        from app.services.embed_identity import is_embed_session, locked_agent_id
+        from app.services.embed_identity import embed_role_id, is_embed_session, locked_agent_id
 
         if is_embed_session(user):
             locked = locked_agent_id(user)
@@ -775,7 +787,22 @@ class AgentManagerService:
         )
         stmt = stmt.order_by(main_first, AIAgent.sort_order.desc(), AIAgent.is_system.desc(), AIAgent.display_name)
 
-        return (await session.execute(stmt)).scalars().all()
+        agents = (await session.execute(stmt)).scalars().all()
+        if is_embed_session(user):
+            role_id = embed_role_id(user)
+            if role_id:
+                from app.services.embed_app_service import get_role_agent_ids
+
+                allowed = await get_role_agent_ids(session, role_id)
+                if not allowed:
+                    return []
+                agents = [
+                    agent
+                    for agent in agents
+                    if str(getattr(agent, "id", "") or "").strip() in allowed
+                    or str(getattr(agent, "name", "") or "").strip() in allowed
+                ]
+        return agents
 
     @staticmethod
     async def create_agent(session: AsyncSession, data: AIAgentBase, user: Any = None) -> AIAgent:

@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import get_redis
 from app.models.user import User
-from app.services.embed_app_service import dump_policy_session_fields, resolve_ticket_app_policy
+from app.services.embed_app_service import (
+    dump_policy_session_fields,
+    operator_has_embed_role,
+    resolve_ticket_app_policy,
+    _truthy,
+)
 from app.services.embed_identity import (
     EMBED_SESSION_TYPE,
     build_session_owner,
@@ -234,7 +239,7 @@ class EmbedService:
         - identity：业务方登录用户声明。不要求该用户事先存在于南孜；默认 JIT 影子账号。
         - 若未提供 identity 且未提供 target_username/target_user_id，默认代表当前调用者自己。
         - 无 identity 时目标用户必须存在且为启用状态 (status == 1)。
-        - app_key：绑定嵌入应用（智能体白名单、域名、claims 白名单、是否要求 identity）。
+        - app_key：绑定嵌入应用（角色授权、入口锁定、域名、claims 白名单、是否要求 identity）。
         """
         if db is None:
             raise RuntimeError("Database session is required")
@@ -255,13 +260,21 @@ class EmbedService:
         identity_payload = dict(policy["identity"]) if policy.get("identity") else (
             dict(identity) if identity else None
         )
-        create_shadow = bool(policy.get("create_shadow_user", True))
+        create_shadow = bool(policy.get("create_shadow_user"))
         session_fields = dump_policy_session_fields(policy)
+        role_id = policy.get("role_id")
+        if role_id and not await operator_has_embed_role(db, operator_user, int(role_id)):
+            raise PermissionError("服务账号未绑定该嵌入应用关联的角色")
         if identity_payload is not None:
             if not str(identity_payload.get("subject") or "").strip():
                 raise ValueError("identity.subject 不能为空")
             if not agent_key:
-                raise ValueError("使用业务身份签发嵌入凭证时必须指定 agent_id")
+                if policy.get("lock_entry_agent") or not policy.get("app"):
+                    raise ValueError(
+                        "该嵌入应用已锁定入口智能体，必须指定 agent_id"
+                        if policy.get("app")
+                        else "使用业务身份签发嵌入凭证时必须指定 agent_id"
+                    )
             if not await EmbedService._operator_can_impersonate(operator_user, db):
                 raise PermissionError(
                     "无权以业务用户身份签发 Ticket：仅管理员或具备「GET:/api/v1/users/profile（获取用户画像）」权限的服务账号允许提交 identity。"
@@ -453,6 +466,8 @@ class EmbedService:
             "create_shadow_user": ticket_data.get("create_shadow_user", "1"),
             "data_permission_mode": ticket_data.get("data_permission_mode", "nanzi_sql_rewrite"),
             "isolate_datasets_by_tenant": ticket_data.get("isolate_datasets_by_tenant", "0"),
+            "embed_role_id": ticket_data.get("embed_role_id", ""),
+            "lock_entry_agent": ticket_data.get("lock_entry_agent", ""),
         }
         await redis.hset(cache_key, mapping=user_session_data)
         await redis.expire(cache_key, SESSION_TOKEN_TTL_SECONDS)
@@ -481,11 +496,14 @@ class EmbedService:
         subject = str(ticket_data.get("external_subject") or "").strip()
         if subject:
             user_info["subject"] = subject
+        lock_flag = ticket_data.get("lock_entry_agent")
+        lock_entry = _truthy(lock_flag) if lock_flag not in (None, "") else bool(ticket_data.get("agent_id"))
         return {
             "session_token": session_token,
             "expires_in": SESSION_TOKEN_TTL_SECONDS,
             "user_info": user_info,
-            "agent_id": ticket_data.get("agent_id") or None,
+            "agent_id": (ticket_data.get("agent_id") or None) if lock_entry else None,
+            "lock_entry_agent": lock_entry,
         }
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""嵌入应用策略：Ticket 绑定、claims 白名单、智能体/域名约束。"""
+"""嵌入应用策略：Ticket 绑定、claims 白名单、角色授权与入口锁定。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.embed_app import SysEmbedApp
+from app.models.permission import Role, UserRoleRelation
 from app.schemas.embed_app import parse_json_list
 
 DATA_PERMISSION_SQL_REWRITE = "nanzi_sql_rewrite"
@@ -27,18 +28,24 @@ def _truthy(value: Any) -> bool:
 
 
 def parse_embed_app_row(app: SysEmbedApp) -> dict[str, Any]:
+    role_id = app.role_id
+    try:
+        parsed_role_id = int(role_id) if role_id not in (None, "") else None
+    except (TypeError, ValueError):
+        parsed_role_id = None
+    if parsed_role_id is not None and parsed_role_id <= 0:
+        parsed_role_id = None
     return {
         "id": app.id,
         "app_key": app.app_key,
         "name": app.name,
-        "allowed_agent_ids": [str(item).strip() for item in parse_json_list(app.allowed_agent_ids)],
+        "role_id": parsed_role_id,
+        "lock_entry_agent": bool(app.lock_entry_agent),
         "allowed_origins": [str(item).strip() for item in parse_json_list(app.allowed_origins)],
         "require_identity": bool(app.require_identity),
         "claim_keys": [str(item).strip() for item in parse_json_list(app.claim_keys)],
-        "create_shadow_user": bool(app.create_shadow_user),
         "data_permission_mode": str(app.data_permission_mode or DATA_PERMISSION_SQL_REWRITE).strip()
         or DATA_PERMISSION_SQL_REWRITE,
-        "isolate_datasets_by_tenant": bool(app.isolate_datasets_by_tenant),
         "is_active": bool(app.is_active),
     }
 
@@ -49,6 +56,62 @@ async def get_embed_app_by_key(db: AsyncSession, app_key: str) -> Optional[SysEm
         return None
     stmt = select(SysEmbedApp).where(SysEmbedApp.app_key == key)
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_role_agent_ids(db: AsyncSession, role_id: int) -> set[str]:
+    from app.services.permission_service import PermissionService
+
+    perms = await PermissionService(db).get_role_permissions(int(role_id))
+    return {str(item).strip() for item in (perms.permissions.agents or []) if str(item).strip()}
+
+
+async def agent_allowed_by_role(db: AsyncSession, role_id: int, agent_key: str) -> bool:
+    key = str(agent_key or "").strip()
+    if not key:
+        return True
+    allowed = await get_role_agent_ids(db, role_id)
+    if not allowed:
+        return False
+    if key in allowed:
+        return True
+    from app.models.agent import AIAgent
+
+    stmt = select(AIAgent).where(AIAgent.id == key)
+    agent = (await db.execute(stmt)).scalar_one_or_none()
+    if agent is None:
+        stmt = select(AIAgent).where(AIAgent.name == key)
+        agent = (await db.execute(stmt)).scalar_one_or_none()
+    if agent is None:
+        return False
+    return str(agent.id or "").strip() in allowed or str(agent.name or "").strip() in allowed
+
+
+async def operator_has_embed_role(
+    db: AsyncSession,
+    operator_user: Mapping[str, Any],
+    role_id: int,
+) -> bool:
+    if str(operator_user.get("role") or "").strip().lower() == "admin":
+        return True
+    try:
+        uid = int(operator_user.get("user_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if uid <= 0:
+        return False
+    stmt = select(UserRoleRelation.id).where(
+        UserRoleRelation.user_id == uid,
+        UserRoleRelation.role_id == int(role_id),
+    )
+    return (await db.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def ensure_embed_role_exists(db: AsyncSession, role_id: Optional[int]) -> None:
+    if role_id is None:
+        raise ValueError("必须关联角色")
+    role = await db.get(Role, int(role_id))
+    if role is None:
+        raise ValueError("关联角色不存在")
 
 
 def apply_claim_whitelist(
@@ -116,16 +179,6 @@ def intersect_origins(app_origins: list[str], ticket_origins: Optional[list[str]
     return filtered
 
 
-def agent_allowed_by_app(agent_id: str, allowed_agent_ids: list[str]) -> bool:
-    key = str(agent_id or "").strip()
-    if not key:
-        return not allowed_agent_ids
-    if not allowed_agent_ids:
-        return True
-    allowed = {str(item).strip() for item in allowed_agent_ids if str(item).strip()}
-    return key in allowed
-
-
 async def resolve_ticket_app_policy(
     db: AsyncSession,
     *,
@@ -144,7 +197,8 @@ async def resolve_ticket_app_policy(
             "allowed_origins": list(allowed_origins or []),
             "create_shadow_user": True,
             "data_permission_mode": DATA_PERMISSION_SQL_REWRITE,
-            "isolate_datasets_by_tenant": False,
+            "role_id": None,
+            "lock_entry_agent": False,
         }
 
     app = await get_embed_app_by_key(db, key)
@@ -159,16 +213,17 @@ async def resolve_ticket_app_policy(
         raise ValueError("该嵌入应用要求提交 identity（业务用户 claims）")
     if identity is None and policy["require_identity"]:
         raise ValueError("该嵌入应用要求提交 identity（业务用户 claims）")
-    if not agent_key:
-        raise ValueError("使用嵌入应用签发 Ticket 时必须指定 agent_id")
-    if not agent_allowed_by_app(agent_key, policy["allowed_agent_ids"]):
-        raise ValueError("该智能体不在嵌入应用允许列表中")
+    if policy["lock_entry_agent"] and not agent_key:
+        raise ValueError("该嵌入应用已锁定入口智能体，必须指定 agent_id")
+    role_id = policy.get("role_id")
+    if not role_id:
+        raise ValueError("嵌入应用未关联角色，请在管理端绑定角色后再签发")
+    if agent_key and not await agent_allowed_by_role(db, int(role_id), agent_key):
+        raise ValueError("该智能体不在嵌入应用关联角色的授权范围内")
 
     normalized_identity = None
     if identity:
         normalized_identity = apply_claim_whitelist(identity, policy["claim_keys"])
-        if policy["isolate_datasets_by_tenant"] and not str(normalized_identity.get("tenant_id") or "").strip():
-            raise ValueError("该嵌入应用已开启租户隔离，identity.tenant_id 不能为空")
 
     origins = intersect_origins(policy["allowed_origins"], allowed_origins)
     return {
@@ -176,34 +231,44 @@ async def resolve_ticket_app_policy(
         "identity": normalized_identity,
         "agent_id": agent_key,
         "allowed_origins": origins,
-        "create_shadow_user": policy["create_shadow_user"],
+        "create_shadow_user": False,
         "data_permission_mode": policy["data_permission_mode"],
-        "isolate_datasets_by_tenant": policy["isolate_datasets_by_tenant"],
+        "role_id": role_id,
+        "lock_entry_agent": bool(policy["lock_entry_agent"]),
     }
 
 
 def dump_policy_session_fields(policy: Mapping[str, Any]) -> dict[str, str]:
     app = policy.get("app") or {}
-    return {
+    fields = {
         "embed_app_id": str(app.get("id") or ""),
         "embed_app_key": str(app.get("app_key") or ""),
-        "create_shadow_user": "1" if policy.get("create_shadow_user", True) else "0",
+        "create_shadow_user": "1" if policy.get("create_shadow_user") else "0",
         "data_permission_mode": str(policy.get("data_permission_mode") or DATA_PERMISSION_SQL_REWRITE),
-        "isolate_datasets_by_tenant": "1" if policy.get("isolate_datasets_by_tenant") else "0",
     }
+    if app:
+        role_id = policy.get("role_id") if policy.get("role_id") is not None else app.get("role_id")
+        lock_entry = policy.get("lock_entry_agent")
+        if lock_entry is None:
+            lock_entry = bool(app.get("lock_entry_agent"))
+        fields["embed_role_id"] = str(role_id or "")
+        fields["lock_entry_agent"] = "1" if lock_entry else "0"
+    return fields
 
 
 def policy_from_user_info(user_info: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     if not isinstance(user_info, Mapping):
         return {
-            "create_shadow_user": True,
+            "create_shadow_user": False,
             "data_permission_mode": DATA_PERMISSION_SQL_REWRITE,
             "isolate_datasets_by_tenant": False,
             "embed_app_id": "",
             "embed_app_key": "",
+            "embed_role_id": "",
+            "lock_entry_agent": False,
         }
     return {
-        "create_shadow_user": _truthy(user_info.get("create_shadow_user", True)),
+        "create_shadow_user": _truthy(user_info.get("create_shadow_user")),
         "data_permission_mode": str(
             user_info.get("data_permission_mode") or DATA_PERMISSION_SQL_REWRITE
         ).strip()
@@ -211,4 +276,6 @@ def policy_from_user_info(user_info: Optional[Mapping[str, Any]]) -> dict[str, A
         "isolate_datasets_by_tenant": _truthy(user_info.get("isolate_datasets_by_tenant")),
         "embed_app_id": str(user_info.get("embed_app_id") or "").strip(),
         "embed_app_key": str(user_info.get("embed_app_key") or "").strip(),
+        "embed_role_id": str(user_info.get("embed_role_id") or "").strip(),
+        "lock_entry_agent": _truthy(user_info.get("lock_entry_agent")),
     }

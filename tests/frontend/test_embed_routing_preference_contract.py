@@ -120,6 +120,7 @@ def test_integration_agent_lock_covers_all_host_entry_points():
     assert "switchToExpert(agentId)" not in init_segment
 
     ticket_segment = source.split("const exchangeTicketAndApply", 1)[1].split("const postInitSuccess", 1)[0]
+    assert "lockEntryAgent" in ticket_segment
     assert "applyIntegrationAgentLock(sessionData.agent_id)" in ticket_segment
 
 
@@ -131,3 +132,28 @@ def test_locked_agent_does_not_persist_as_user_default():
     assert "config.expertAgentId = normalizedAgentId" in source
     lock_function = source.split("const applyIntegrationAgentLock", 1)[1].split("const pinnedAgentLabel", 1)[0]
     assert "saveRoutingSettings();" not in lock_function
+
+
+def test_embed_apps_binds_role_instead_of_agent_whitelist():
+    apps = ROOT / "frontend/src/views/EmbedApps.vue"
+    api = ROOT / "frontend/src/api/embedApp.ts"
+    view = apps.read_text(encoding="utf-8")
+    source = api.read_text(encoding="utf-8")
+    assert "allowed_agent_ids" not in view
+    assert "allowed_agent_ids" not in source
+    assert "lock_entry_agent" in view
+    assert "关联角色" in view
+    assert "请选择角色" in view
+    assert "请选择关联角色" in view
+    assert "不绑定" not in view
+    assert "签发人权限" not in view
+    assert "role-options" in source
+    assert "fetchAgents" not in view
+    assert "toggleAgent" not in view
+    assert "允许宿主声明的身份字段" not in view
+    assert "toggleClaim" not in view
+    assert "STANDARD_CLAIM_OPTIONS" not in view
+    assert "按业务租户隔离" not in view
+    assert "写入映射账号" not in view
+    assert "create_shadow_user" not in view
+    assert "isolate_datasets_by_tenant" not in view

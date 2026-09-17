@@ -50,10 +50,38 @@ def shadow_remark_for_operator(operator_user_id: Any) -> str:
     return f"{EMBED_SHADOW_REMARK_PREFIX}:{operator_user_id}"
 
 
+def _session_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def locked_agent_id(user_info: Optional[Mapping[str, Any]]) -> str:
     if not isinstance(user_info, Mapping):
         return ""
-    return str(user_info.get("agent_id") or "").strip()
+    agent_key = str(user_info.get("agent_id") or "").strip()
+    if not agent_key:
+        return ""
+    lock_flag = user_info.get("lock_entry_agent")
+    # 旧 Ticket 没有该字段：有 agent_id 即视为锁定入口。
+    if lock_flag in (None, ""):
+        return agent_key
+    if not _session_flag(lock_flag):
+        return ""
+    return agent_key
+
+
+def embed_role_id(user_info: Optional[Mapping[str, Any]]) -> Optional[int]:
+    if not isinstance(user_info, Mapping):
+        return None
+    raw = user_info.get("embed_role_id")
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def agent_matches_lock(agent: Any, locked_key: str) -> bool:

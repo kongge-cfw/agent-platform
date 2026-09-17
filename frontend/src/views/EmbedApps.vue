@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ClipboardDocumentIcon, PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { agentApi, type AIAgent } from '../api/agent'
-import { embedAppApi, type SysEmbedApp, type SysEmbedAppPayload } from '../api/embedApp'
+import { embedAppApi, type EmbedRoleOption, type SysEmbedApp, type SysEmbedAppPayload } from '../api/embedApp'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import { useToast } from '../composables/useToast'
 import { useUser } from '../composables/useUser'
@@ -14,19 +13,10 @@ const canCreate = hasPermission('element:embed_apps:create')
 const canEdit = hasPermission('element:embed_apps:edit')
 const canDelete = hasPermission('element:embed_apps:delete')
 
-const STANDARD_CLAIM_OPTIONS = [
-  { key: 'subject', label: '业务用户标识', hint: '宿主系统里的登录账号，签发 Ticket 时必传', locked: true },
-  { key: 'display_name', label: '展示名', hint: '对话界面显示的姓名' },
-  { key: 'dept_code', label: '部门代码', hint: '南孜按部门改写行级 SQL 时使用' },
-  { key: 'org_path', label: '组织路径', hint: '如 集团/上海/销售' },
-  { key: 'tenant_id', label: '业务租户', hint: '开启下方「按租户隔离」时必传' },
-  { key: 'extra_data', label: '业务扩展属性', hint: '如数据范围、区域等自定义字段，会传给业务 MCP' },
-] as const
-
-const ALL_CLAIM_KEYS = STANDARD_CLAIM_OPTIONS.map((item) => item.key)
+const ALL_CLAIM_KEYS = ['subject', 'display_name', 'dept_code', 'org_path', 'tenant_id', 'extra_data']
 
 const apps = ref<SysEmbedApp[]>([])
-const agents = ref<AIAgent[]>([])
+const roles = ref<EmbedRoleOption[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
@@ -36,18 +26,16 @@ const showDeleteConfirm = ref(false)
 const deletingApp = ref<SysEmbedApp | null>(null)
 const saving = ref(false)
 
-type AppForm = SysEmbedAppPayload & { id?: string; originsText: string }
+type AppForm = SysEmbedAppPayload & { id?: string; originsText: string; role_id: number | '' | null }
 
 const emptyForm = (): AppForm => ({
   name: '',
   description: '',
-  allowed_agent_ids: [],
+  role_id: '',
+  lock_entry_agent: false,
   allowed_origins: [],
   require_identity: true,
-  claim_keys: [...ALL_CLAIM_KEYS],
-  create_shadow_user: true,
   data_permission_mode: 'nanzi_sql_rewrite',
-  isolate_datasets_by_tenant: false,
   is_active: true,
   originsText: '',
 })
@@ -58,7 +46,7 @@ const filteredApps = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase()
   return apps.value.filter((app) => {
     const matchesKeyword = !keyword
-      || [app.app_key, app.name, app.description, ...(app.allowed_origins || [])]
+      || [app.app_key, app.name, app.description, app.role_name, ...(app.allowed_origins || [])]
         .some((value) => String(value || '').toLowerCase().includes(keyword))
     const matchesStatus = statusFilter.value === 'all'
       || (statusFilter.value === 'active' && app.is_active)
@@ -66,19 +54,6 @@ const filteredApps = computed(() => {
     return matchesKeyword && matchesStatus
   })
 })
-
-const selectedClaimSet = computed(() => new Set(form.value.claim_keys || []))
-
-const normalizeClaimKeys = (raw: string[] | undefined) => {
-  const keys = [...(raw || [])]
-  if (!keys.length) return [...ALL_CLAIM_KEYS]
-  const selected = new Set<string>(['subject'])
-  for (const key of keys) {
-    if (key === 'extra_data' || key.startsWith('extra_data.')) selected.add('extra_data')
-    else if (ALL_CLAIM_KEYS.includes(key as typeof ALL_CLAIM_KEYS[number])) selected.add(key)
-  }
-  return ALL_CLAIM_KEYS.filter((key) => selected.has(key))
-}
 
 const fetchApps = async () => {
   loading.value = true
@@ -92,12 +67,12 @@ const fetchApps = async () => {
   }
 }
 
-const fetchAgents = async () => {
+const fetchRoles = async () => {
   try {
-    const res = await agentApi.listAgents()
-    agents.value = Array.isArray(res.data) ? res.data : ((res.data as any)?.data || [])
+    const res = await embedAppApi.roleOptions()
+    roles.value = Array.isArray(res.data) ? res.data : ((res.data as any)?.data || [])
   } catch {
-    agents.value = []
+    roles.value = []
   }
 }
 
@@ -111,13 +86,11 @@ const openModal = (app?: SysEmbedApp) => {
       app_key: app.app_key,
       name: app.name,
       description: app.description || '',
-      allowed_agent_ids: [...(app.allowed_agent_ids || [])],
+      role_id: app.role_id ?? '',
+      lock_entry_agent: Boolean(app.lock_entry_agent),
       allowed_origins: [...(app.allowed_origins || [])],
       require_identity: app.require_identity !== false,
-      claim_keys: normalizeClaimKeys(app.claim_keys),
-      create_shadow_user: app.create_shadow_user !== false,
       data_permission_mode: app.data_permission_mode || 'nanzi_sql_rewrite',
-      isolate_datasets_by_tenant: Boolean(app.isolate_datasets_by_tenant),
       is_active: app.is_active !== false,
       originsText: (app.allowed_origins || []).join('\n'),
     }
@@ -126,22 +99,6 @@ const openModal = (app?: SysEmbedApp) => {
     form.value = emptyForm()
   }
   showModal.value = true
-}
-
-const toggleAgent = (agentId: string) => {
-  const current = new Set(form.value.allowed_agent_ids || [])
-  if (current.has(agentId)) current.delete(agentId)
-  else current.add(agentId)
-  form.value.allowed_agent_ids = [...current]
-}
-
-const toggleClaim = (key: string, locked?: boolean) => {
-  if (locked) return
-  const current = new Set(form.value.claim_keys || [])
-  if (current.has(key)) current.delete(key)
-  else current.add(key)
-  current.add('subject')
-  form.value.claim_keys = ALL_CLAIM_KEYS.filter((item) => current.has(item))
 }
 
 const copyAppKey = async (key?: string) => {
@@ -156,16 +113,21 @@ const saveApp = async () => {
     showToast('请填写名称', 'warning')
     return
   }
+  const rawRole = form.value.role_id as number | string | null | undefined
+  const parsedRole = rawRole === null || rawRole === undefined || rawRole === '' ? null : Number(rawRole)
+  if (!Number.isFinite(parsedRole) || Number(parsedRole) <= 0) {
+    showToast('请选择关联角色', 'warning')
+    return
+  }
   const payload: SysEmbedAppPayload = {
     name: form.value.name.trim(),
     description: form.value.description?.trim() || undefined,
-    allowed_agent_ids: form.value.allowed_agent_ids || [],
+    role_id: Number(parsedRole),
+    lock_entry_agent: Boolean(form.value.lock_entry_agent),
     allowed_origins: linesToList(form.value.originsText),
     require_identity: form.value.require_identity !== false,
-    claim_keys: normalizeClaimKeys(form.value.claim_keys),
-    create_shadow_user: form.value.create_shadow_user !== false,
+    claim_keys: [...ALL_CLAIM_KEYS],
     data_permission_mode: form.value.data_permission_mode || 'nanzi_sql_rewrite',
-    isolate_datasets_by_tenant: Boolean(form.value.isolate_datasets_by_tenant),
     is_active: form.value.is_active !== false,
   }
   saving.value = true
@@ -212,7 +174,7 @@ const confirmDelete = async () => {
 
 onMounted(() => {
   void fetchApps()
-  void fetchAgents()
+  void fetchRoles()
 })
 </script>
 
@@ -222,7 +184,7 @@ onMounted(() => {
       <div>
         <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">嵌入应用</h1>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          登记要嵌入对话组件的宿主系统。保存后自动生成应用 Key，宿主签发 Ticket 时带上即可。
+          登记要嵌入对话组件的宿主系统。智能体范围跟角色走，保存后自动生成应用 Key，宿主签发 Ticket 时带上即可。
         </p>
       </div>
       <button
@@ -274,15 +236,15 @@ onMounted(() => {
                 :class="app.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'"
               >{{ app.is_active ? '启用' : '停用' }}</span>
               <span class="rounded-full bg-slate-50 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                {{ app.data_permission_mode === 'mcp_only' ? '权限下沉 MCP' : '南孜 SQL 改写' }}
+                {{ app.data_permission_mode === 'mcp_only' ? '权限下沉 MCP' : '平台 SQL 改写' }}
               </span>
             </div>
             <p class="mt-1 text-sm text-gray-500">{{ app.description || '无描述' }}</p>
             <p class="mt-1 text-xs text-gray-400">
-              智能体 {{ app.allowed_agent_ids?.length || 0 }} · 域名 {{ app.allowed_origins?.length || 0 }}
+              {{ app.role_name || (app.role_id ? `角色 #${app.role_id}` : '未关联角色') }}
+              · {{ app.lock_entry_agent ? '锁定入口' : '可切换智能体' }}
+              · 域名 {{ app.allowed_origins?.length || 0 }}
               · {{ app.require_identity ? '必须提交业务身份' : '允许旧代客' }}
-              · {{ app.create_shadow_user ? '写入平台映射账号' : '不写平台用户表' }}
-              · {{ app.isolate_datasets_by_tenant ? '按租户隔离数据集' : '不按租户切数据集' }}
             </p>
           </div>
           <div class="flex shrink-0 gap-2">
@@ -322,12 +284,26 @@ onMounted(() => {
           </label>
           <label class="text-sm">数据权限
             <select v-model="form.data_permission_mode" class="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950">
-              <option value="nanzi_sql_rewrite">南孜改写 SQL 行级</option>
+              <option value="nanzi_sql_rewrite">平台改写 SQL 行级</option>
               <option value="mcp_only">不下改写，交给业务 MCP</option>
             </select>
           </label>
+          <label class="text-sm">关联角色
+            <select v-model="form.role_id" class="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950">
+              <option disabled value="">请选择角色</option>
+              <option v-for="role in roles" :key="role.id" :value="role.id">{{ role.name }}（{{ role.code }}）</option>
+            </select>
+            <span class="mt-1 block text-xs text-gray-400">必选。iframe 里能用的智能体，以该角色在「角色管理」中的智能体资产为准；签发 Ticket 的服务账号也需要属于这个角色。</span>
+          </label>
           <label class="flex items-center gap-2 pt-6 text-sm">
             <input v-model="form.is_active" type="checkbox" /> 启用
+          </label>
+          <label class="flex items-start gap-2 text-sm sm:col-span-2">
+            <input v-model="form.lock_entry_agent" type="checkbox" class="mt-0.5" />
+            <span>
+              锁定入口智能体
+              <span class="block text-xs font-normal text-gray-400">开启后 Ticket 必须传 agent_id，iframe 不能切换/智能委派。工作台场景请保持关闭。</span>
+            </span>
           </label>
           <label class="flex items-start gap-2 text-sm sm:col-span-2">
             <input v-model="form.require_identity" type="checkbox" class="mt-0.5" />
@@ -336,62 +312,9 @@ onMounted(() => {
               <span class="block text-xs font-normal text-gray-400">关闭后仍可用旧的南孜用户名代客，生产环境建议保持开启</span>
             </span>
           </label>
-          <label class="flex items-start gap-2 text-sm sm:col-span-2">
-            <input v-model="form.create_shadow_user" type="checkbox" class="mt-0.5" />
-            <span>
-              在平台用户表写入映射账号
-              <span class="block text-xs font-normal text-gray-400">仅用于兼容旧会话存储，业务用户不能登录管理端。新对接可关闭，会话按业务用户标识归属。</span>
-            </span>
-          </label>
-          <label class="flex items-start gap-2 text-sm sm:col-span-2">
-            <input v-model="form.isolate_datasets_by_tenant" type="checkbox" class="mt-0.5" />
-            <span>
-              按业务租户隔离数据集 / 知识库
-              <span class="block text-xs font-normal text-gray-400">开启后 Ticket 必须带租户，只能看见该租户或未打租户标签的资源</span>
-            </span>
-          </label>
           <label class="sm:col-span-2 text-sm">允许的宿主域名（每行一个，空则不限制）
             <textarea v-model="form.originsText" rows="3" class="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950" placeholder="https://crm.example.com" />
           </label>
-          <div class="sm:col-span-2 text-sm">
-            <p>允许宿主声明的身份字段</p>
-            <p class="mt-0.5 text-xs font-normal text-gray-400">这些是固定字段。未勾选的字段即使 Ticket 传了也会被丢弃；业务用户标识始终保留。</p>
-            <div class="mt-1 space-y-1 rounded-lg border p-2 dark:border-gray-700">
-              <label
-                v-for="option in STANDARD_CLAIM_OPTIONS"
-                :key="option.key"
-                class="flex items-start gap-2 rounded-md px-1 py-1"
-                :class="option.locked ? 'opacity-80' : 'hover:bg-gray-50 dark:hover:bg-gray-800'"
-              >
-                <input
-                  type="checkbox"
-                  class="mt-0.5"
-                  :checked="selectedClaimSet.has(option.key)"
-                  :disabled="option.locked"
-                  @change="toggleClaim(option.key, option.locked)"
-                />
-                <span>
-                  {{ option.label }}
-                  <code class="ml-1 text-xs text-gray-400">{{ option.key }}</code>
-                  <span class="block text-xs font-normal text-gray-400">{{ option.hint }}</span>
-                </span>
-              </label>
-            </div>
-          </div>
-          <div class="sm:col-span-2 text-sm">允许的智能体（空=签发人权限内均可）
-            <div class="mt-1 max-h-40 overflow-y-auto rounded-lg border p-2 dark:border-gray-700">
-              <label v-for="agent in agents" :key="agent.id" class="flex items-center gap-2 py-0.5">
-                <input
-                  type="checkbox"
-                  :checked="(form.allowed_agent_ids || []).includes(agent.id)"
-                  @change="toggleAgent(agent.id)"
-                />
-                <span>{{ agent.display_name || agent.name }}</span>
-                <code class="text-xs text-gray-400">{{ agent.id }}</code>
-              </label>
-              <p v-if="!agents.length" class="text-xs text-gray-400">暂无智能体</p>
-            </div>
-          </div>
         </div>
         <div class="mt-5 flex justify-end gap-2">
           <button type="button" class="rounded-md px-3 py-2 text-sm" @click="showModal = false">取消</button>

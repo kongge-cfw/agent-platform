@@ -1800,6 +1800,7 @@ class AgentService:
         if user_info:
             from app.services.embed_identity import (
                 agent_config_matches_lock,
+                embed_role_id,
                 is_embed_session,
                 locked_agent_id,
                 operator_is_admin,
@@ -1820,6 +1821,26 @@ class AgentService:
                     execution_time_ms=(asyncio.get_running_loop().time() - permission_started) * 1000,
                 )
                 return agent_config, route_details, route_elapsed_ms, err_msg
+
+            role_id = embed_role_id(user_info) if is_embed_session(user_info) else None
+            if role_id:
+                from app.services.embed_app_service import agent_allowed_by_role
+
+                async with AsyncSessionLocal() as session:
+                    role_allows = await agent_allowed_by_role(
+                        session, role_id, str(agent_config.agent_id)
+                    )
+                if not role_allows:
+                    err_msg = AgentServicePrompts.permission_denied(agent_config.agent_name)
+                    await emit_route_stage(
+                        route_progress,
+                        "target_permission",
+                        "校验入口专家权限",
+                        status="error",
+                        details="入口专家不在嵌入应用关联角色的授权范围内",
+                        execution_time_ms=(asyncio.get_running_loop().time() - permission_started) * 1000,
+                    )
+                    return agent_config, route_details, route_elapsed_ms, err_msg
 
             if not operator_is_admin(user_info):
                 from app.services.permission_service import PermissionService
