@@ -106,7 +106,10 @@ def cookie_path(request: Optional[Request] = None) -> str:
 
 def internal_request_path(request: Request) -> str:
     """Nginx 剥前缀之后的路由路径，供鉴权/白名单/审计使用。"""
-    path = str(request.scope.get("path") or "").split("?", 1)[0]
+    path = str(request.scope.get("path") or "").split("?", 1)[0] or "/"
+    root = configured_root_path() or inferred_root_path(path)
+    if root:
+        path = strip_root_from_path(path, root)
     return path or "/"
 
 

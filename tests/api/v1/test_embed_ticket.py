@@ -16,6 +16,36 @@ from app.services.embed_identity import (
 )
 from app.services.embed_app_service import apply_claim_whitelist
 from app.services.embed_api_guard import embed_path_allowed
+from app.services.embed_service import ticket_origin_allowed
+
+
+def test_ticket_origin_allows_iframe_on_subpath_without_sec_fetch_site():
+    allowed = ["https://crm.example.com"]
+    platform = {"http://203.33.158.210:6060"}
+
+    assert ticket_origin_allowed(
+        "http://203.33.158.210:6060",
+        allowed,
+        platform_origins=platform,
+    )
+    assert ticket_origin_allowed(
+        "http://203.33.158.210:6060",
+        allowed,
+        referer="http://203.33.158.210:6060/zhiyuan/embed/chat?ticket=x",
+    )
+    assert ticket_origin_allowed(
+        "http://203.33.158.210:6060/zhiyuan/embed/chat?ticket=x",
+        allowed,
+    )
+    assert ticket_origin_allowed("http://host/embed/chat", allowed)
+    assert ticket_origin_allowed("https://crm.example.com", allowed)
+    assert ticket_origin_allowed("https://evil.example.com", allowed, sec_fetch_site="same-origin")
+    assert not ticket_origin_allowed("https://evil.example.com", allowed)
+    assert not ticket_origin_allowed(
+        "https://evil.example.com",
+        allowed,
+        platform_origins=platform,
+    )
 
 
 def test_parse_shortcut_prompts_caps_and_requires_label_command():

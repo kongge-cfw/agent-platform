@@ -24,6 +24,7 @@ def test_internal_auth_and_audit_use_stripped_request_path():
     assert "def inferred_root_path(" in prefix
     assert "internal_request_path(request)" in guard
     assert "path = request.url.path" not in guard
+    assert "strip_root_from_path(path, root)" in prefix
     assert "internal_request_path(request).startswith(\"/api/\")" in middleware
     assert "endpoint=internal_request_path(request)" in middleware
     assert "url_path = internal_request_path(request)" in v1_access
@@ -81,7 +82,8 @@ def test_nginx_and_ingress_subdirectory_examples_are_complete():
     frontend = _read("frontend/src/utils/appBase.ts")
 
     assert 'proxy_set_header Connection "upgrade"' not in nginx
-    assert "X-Forwarded-Host $host" in nginx
+    assert "X-Forwarded-Host $http_host" in nginx
+    assert "Host $http_host" in nginx
     assert "set $nanzi_connection_upgrade" in nginx
     assert "proxy_read_timeout 3600s" in nginx
     assert "gzip off" in nginx
@@ -115,3 +117,9 @@ def test_nginx_and_ingress_subdirectory_examples_are_complete():
     assert 'RedirectResponse(url=f"{root}/"' in cookie
     assert 'scope["root_path"] = root' not in cookie
     assert "_request_prefix.set(root)" in cookie
+    embed = _read("app/services/embed_service.py")
+    embed_api = _read("app/api/v1/endpoints/embed.py")
+    assert "def _is_embed_document_url(" in embed
+    assert "startswith(\"/embed/\")" in embed
+    assert "platform_origins" in embed
+    assert "collect_platform_origins(request)" in embed_api

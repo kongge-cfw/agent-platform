@@ -44,10 +44,61 @@ def _normalize_origin(value: Optional[str]) -> str:
     return text.rstrip("/").lower()
 
 
+def _is_embed_document_url(value: Optional[str]) -> bool:
+    """iframe 文档地址：/embed 或 /zhiyuan/embed（Referer 带路径，Origin 通常不带）。"""
+    text = str(value or "").strip()
+    if not text or text.lower() == "null":
+        return False
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    path = parsed.path or ""
+    if not path:
+        return False
+    from app.core.app_prefix import configured_root_path, inferred_root_path, strip_root_from_path
+
+    root = configured_root_path() or inferred_root_path(path)
+    internal = strip_root_from_path(path, root) if root else path
+    return internal == "/embed" or internal.startswith("/embed/")
+
+
+def collect_platform_origins(request: Optional[Any] = None) -> set[str]:
+    """平台自己的 Origin（无路径）。iframe 换票的 Origin 是它，不是宿主页。"""
+    found: set[str] = set()
+
+    def _add(value: Optional[str]) -> None:
+        normalized = _normalize_origin(value)
+        if normalized:
+            found.add(normalized)
+
+    try:
+        from app.core.config import settings
+
+        _add(str(getattr(settings, "APP_PUBLIC_URL", None) or ""))
+    except Exception:
+        pass
+    try:
+        from app.core.app_prefix import public_base_url
+
+        _add(public_base_url())
+    except Exception:
+        pass
+    if request is None:
+        return found
+    headers = request.headers
+    proto = str(headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",", 1)[0].strip().lower()
+    for host_value in (headers.get("x-forwarded-host"), headers.get("host"), request.url.netloc):
+        host = str(host_value or "").split(",", 1)[0].strip()
+        if proto and host:
+            _add(f"{proto}://{host}")
+    return found
+
+
 def ticket_origin_allowed(
     origin: Optional[str],
     allowed_origins: list[str],
     sec_fetch_site: Optional[str] = None,
+    *,
+    referer: Optional[str] = None,
+    platform_origins: Optional[set[str]] = None,
 ) -> bool:
     """兑换请求来自 iframe，Origin 是南孜站点；宿主域名白名单不能拿来卡同源换票。"""
     cleaned = [str(item).strip() for item in (allowed_origins or []) if str(item).strip()]
@@ -56,11 +107,13 @@ def ticket_origin_allowed(
     site = str(sec_fetch_site or "").strip().lower()
     if site in {"same-origin", "same-site"}:
         return True
-    incoming = _normalize_origin(origin)
+    if _is_embed_document_url(origin) or _is_embed_document_url(referer):
+        return True
+    incoming = _normalize_origin(origin) or _normalize_origin(referer)
     if not incoming:
         return True
-    parsed = urlparse(str(origin or ""))
-    if parsed.path.startswith("/embed"):
+    allowed_platform = {_normalize_origin(item) for item in (platform_origins or set()) if item}
+    if incoming in allowed_platform:
         return True
     allowed = {_normalize_origin(item) for item in cleaned}
     return incoming in allowed
@@ -396,6 +449,9 @@ class EmbedService:
         ticket: str,
         origin: Optional[str] = None,
         sec_fetch_site: Optional[str] = None,
+        *,
+        referer: Optional[str] = None,
+        platform_origins: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         """
         原子核销 Ticket 并生成短期会话 Token (session_token)。
@@ -411,7 +467,7 @@ class EmbedService:
             raise RuntimeError("Redis service unavailable")
 
         ticket_key = f"embed:ticket:{ticket.strip()}"
-        raw_ticket_data = await redis.getdel(ticket_key)
+        raw_ticket_data = await redis.get(ticket_key)
         if not raw_ticket_data:
             raise ValueError("Ticket not found, expired, or already used")
 
@@ -429,14 +485,24 @@ class EmbedService:
                     allowed_origins = [str(item).strip() for item in parsed_origins if str(item).strip()]
             except json.JSONDecodeError:
                 allowed_origins = []
-        if not ticket_origin_allowed(origin, allowed_origins, sec_fetch_site=sec_fetch_site):
+        if not ticket_origin_allowed(
+            origin,
+            allowed_origins,
+            sec_fetch_site=sec_fetch_site,
+            referer=referer,
+            platform_origins=platform_origins,
+        ):
             logger.warning(
-                "Embed ticket origin rejected: origin=%s sec_fetch_site=%s allowed=%s",
+                "Embed ticket origin rejected: origin=%s referer=%s sec_fetch_site=%s allowed=%s",
                 origin,
+                referer,
                 sec_fetch_site,
                 allowed_origins,
             )
             raise PermissionError(f"Origin '{origin}' is not allowed for this ticket")
+        removed = await redis.delete(ticket_key)
+        if not removed:
+            raise ValueError("Ticket not found, expired, or already used")
 
         session_token = f"emb_ses_{secrets.token_urlsafe(32)}"
         manager = get_api_key_manager()

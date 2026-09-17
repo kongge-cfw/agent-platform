@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import require_api_key, get_db_session
-from app.services.embed_service import EmbedService
+from app.services.embed_service import EmbedService, collect_platform_origins
 from app.schemas.response import StandardResponse
 
 logger = logging.getLogger(__name__)
@@ -168,6 +168,8 @@ async def exchange_embed_ticket(
             ticket=payload.ticket,
             origin=origin,
             sec_fetch_site=request.headers.get("Sec-Fetch-Site"),
+            referer=request.headers.get("Referer"),
+            platform_origins=collect_platform_origins(request),
         )
         return StandardResponse(data=data)
     except ValueError as e:
