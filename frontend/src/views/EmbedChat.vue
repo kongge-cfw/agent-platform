@@ -127,7 +127,7 @@
             <!-- Shortcuts Button -->
             <div class="relative group inline-flex items-center">
               <button
-                v-if="isMobile || !config.showShortcuts"
+                v-if="isMobile"
                 @click="handleHeaderShortcutsClick"
                 class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
                 :class="{ 'text-primary bg-primary/10': showShortcutsHint }"
@@ -135,7 +135,7 @@
               >
                 <CommandLineIcon class="h-4 w-4" aria-hidden="true" />
               </button>
-              <div v-if="!showShortcutsHint && (isMobile || !config.showShortcuts)" class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
+              <div v-if="!showShortcutsHint && isMobile" class="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150 flex flex-col items-center z-50 transform -translate-y-0.5 group-hover:translate-y-0">
                 <div class="w-1.5 h-1.5 bg-gray-900/90 dark:bg-gray-800/95 rotate-45 -mb-0.5"></div>
                 <div class="rounded-md bg-gray-900/90 dark:bg-gray-800/95 px-2 py-0.5 text-[10px] font-medium text-white shadow-lg backdrop-blur-sm whitespace-nowrap">
                   {{ isMobile ? '快捷指令' : '显示快捷指令' }}
@@ -152,7 +152,7 @@
                 leave-to-class="opacity-0 -translate-y-1 scale-95"
               >
                 <div
-                  v-if="showShortcutsHint && (isMobile || !config.showShortcuts)"
+                  v-if="showShortcutsHint && isMobile"
                   class="absolute right-0 top-full mt-2.5 z-50 flex items-center gap-2.5 whitespace-nowrap rounded-xl border border-primary/20 bg-primary/95 px-3 py-2 text-[12px] text-white shadow-2xl backdrop-blur-md dark:border-slate-700/60 dark:bg-slate-900/95 pointer-events-auto"
                 >
                   <!-- 顶部小尖角 -->
@@ -1166,7 +1166,8 @@
         v-model="userInput"
         :is-processing="isProcessing || remoteRunActive"
         :is-submitting="sendLocked"
-        :show-shortcuts="!isMobile && config.showShortcuts"
+        :show-shortcuts="!isMobile"
+        :pin-shortcut-bar="true"
         :slash-commands="effectiveSlashCommands"
         :allowed-agents="allowedAgents"
         :current-user="currentUser"
@@ -1191,6 +1192,7 @@
         :expert-agent-id="config.expertAgentId"
         :is-loading-agents="isLoadingAgents"
         :lock-expert-agent="isRoutingSettingsLocked"
+        :allow-manage-shortcuts="canManageEmbedPersonalShortcuts"
         :sandbox-workspace-status="sandboxWorkspaceStatus"
         :sandbox-workspace-instance-id="sandboxWorkspaceInstanceId"
         :sandbox-workspace-started-at="sandboxWorkspaceStartedAt"
@@ -4519,8 +4521,10 @@ const handleChatBIContinueSelect = (query: string) => {
 };
 
 const handleReorderCommands = async (reorderData: any[]) => {
+    const items = (reorderData || []).filter((item: any) => Number.isFinite(Number(item?.id)));
+    if (!items.length) return;
     try {
-        await axios.post("/api/portal/slash-commands/reorder", { items: reorderData });
+        await axios.post("/api/portal/slash-commands/reorder", { items });
         await fetchSlashCommands();
     } catch (e) {
         console.error("Failed to reorder commands", e);
@@ -4716,6 +4720,67 @@ const SYSTEM_SLASH_COMMANDS = [
 const showCommandMenu = ref(false);
 const isKnowledgeEnabled = ref(true);
 const slashCommands = ref<any[]>([...SYSTEM_SLASH_COMMANDS]);
+const embedAppShortcutPrompts = ref<any[]>([]);
+const userSlashCommands = ref<any[]>([]);
+
+const toAppShortcutCommands = (raw: unknown) => {
+  const list = Array.isArray(raw) ? raw : [];
+  return list
+    .map((item: any, index: number) => ({
+      id: `app_prompt_${index}`,
+      label: String(item?.label || "").trim(),
+      command: String(item?.command || "").trim(),
+      sort_order: 10 + index,
+    }))
+    .filter((item) => item.label && item.command);
+};
+
+const resolveCurrentEmbedAppKey = () =>
+  String(currentUser.value?.app_key || currentUser.value?.embed_app_key || "").trim();
+
+const isPersonalSlashCommand = (cmd: any) => {
+  const username = String(currentUser.value?.user_name || "").trim();
+  if (!username) return false;
+  if (String(cmd?.created_by || "").trim() !== username) return false;
+  const appKey = resolveCurrentEmbedAppKey();
+  const cmdAppKey = String(cmd?.embed_app_key || "").trim();
+  if (isEmbeddedInIframe() || appKey) {
+    if (!appKey) return false;
+    return cmdAppKey === appKey;
+  }
+  return !cmdAppKey;
+};
+
+const applyEmbedShortcutPrompts = (raw: unknown) => {
+  embedAppShortcutPrompts.value = toAppShortcutCommands(raw);
+  mergeVisibleSlashCommands();
+};
+
+const systemSlashCommandsWithKnowledge = () =>
+  SYSTEM_SLASH_COMMANDS.map((cmd) => {
+    if (cmd.id === KNOWLEDGE_PORTAL_SYSTEM_COMMAND_ID) {
+      return { ...cmd, disabled: !isKnowledgeEnabled.value };
+    }
+    return cmd;
+  });
+
+const mergeVisibleSlashCommands = () => {
+  const scopedToEmbedApp = Boolean(resolveCurrentEmbedAppKey()) || isEmbeddedInIframe();
+  const extra = scopedToEmbedApp
+    ? [...userSlashCommands.value.filter(isPersonalSlashCommand), ...embedAppShortcutPrompts.value]
+    : userSlashCommands.value;
+  slashCommands.value = [...systemSlashCommandsWithKnowledge(), ...extra].sort(
+    (a, b) => {
+      const aSys = String(a.id || "").startsWith("sys_");
+      const bSys = String(b.id || "").startsWith("sys_");
+      if (aSys !== bSys) return aSys ? -1 : 1;
+      const aApp = String(a.id || "").startsWith("app_prompt_");
+      const bApp = String(b.id || "").startsWith("app_prompt_");
+      if (aApp !== bApp) return aApp ? 1 : -1;
+      return (a.sort_order || 999) - (b.sort_order || 999);
+    },
+  );
+};
 // History Sidebar State
 const showHistorySidebar = ref(false);
 const historyList = ref<any[]>([]);
@@ -5822,6 +5887,14 @@ const handleMemoryCleared = (payload: { conversationIds: string[]; all?: boolean
 const availableModels = ref<AIModel[]>([]);
 const currentUser = ref<any>(null);
 const accountInfo = ref<any>(null); // System account info from /me
+const canManageEmbedPersonalShortcuts = computed(() => {
+  if (resolveCurrentEmbedAppKey()) return true;
+  return !isEmbeddedInIframe();
+});
+watch(
+  () => [String(currentUser.value?.user_name || ""), resolveCurrentEmbedAppKey()],
+  () => mergeVisibleSlashCommands(),
+);
 const showShortcutsHint = ref(false);
 let shortcutsHintTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -6011,6 +6084,11 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
           ...sessionData.user_info,
         };
       }
+      applyEmbedShortcutPrompts(
+        sessionData.shortcut_prompts
+        ?? sessionData.user_info?.shortcut_prompts
+        ?? currentUser.value?.shortcut_prompts,
+      );
       const lockEntryAgent =
         sessionData.lock_entry_agent === true
         || sessionData.lock_entry_agent === 1
@@ -6217,7 +6295,6 @@ const fetchSlashCommands = async () => {
       headers["Authorization"] = `Bearer ${config.token}`;
       headers["X-API-Key"] = config.token;
     }
-    // 并行获取 RAGFlow 配置和快捷指令
     const [configRes, res] = await Promise.all([
       axios.get("/api/portal/ragflow/config", { headers }).catch(e => {
         console.warn("Failed to fetch ragflow config", e);
@@ -6226,7 +6303,7 @@ const fetchSlashCommands = async () => {
       axios.get("/api/portal/slash-commands/", { headers }).catch(e => {
         console.warn("Failed to fetch user slash-commands", e);
         return { data: null };
-      })
+      }),
     ]);
 
     if (configRes && configRes.data?.data) {
@@ -6235,39 +6312,11 @@ const fetchSlashCommands = async () => {
       isKnowledgeEnabled.value = true;
     }
 
-    const sysCommands = SYSTEM_SLASH_COMMANDS.map(cmd => {
-      if (cmd.id === KNOWLEDGE_PORTAL_SYSTEM_COMMAND_ID) {
-        return {
-          ...cmd,
-          disabled: !isKnowledgeEnabled.value
-        };
-      }
-      return cmd;
-    });
-
-    if (res.data) {
-      // 获取用户命令
-      const userCommands = Array.isArray(res.data) ? res.data : [];
-      // 合并系统命令和用户命令，并按 sort_order 排序
-      slashCommands.value = [
-        ...sysCommands,
-        ...userCommands
-      ].sort((a, b) => (a.sort_order || 999) - (b.sort_order || 999));
-    } else {
-      slashCommands.value = [...sysCommands];
-    }
+    userSlashCommands.value = Array.isArray(res.data) ? res.data : [];
+    mergeVisibleSlashCommands();
   } catch (e) {
     console.warn("Slash commands fetch failed", e);
-    const sysCommands = SYSTEM_SLASH_COMMANDS.map(cmd => {
-      if (cmd.id === KNOWLEDGE_PORTAL_SYSTEM_COMMAND_ID) {
-        return {
-          ...cmd,
-          disabled: !isKnowledgeEnabled.value
-        };
-      }
-      return cmd;
-    });
-    slashCommands.value = [...sysCommands];
+    mergeVisibleSlashCommands();
   }
 };
 const fetchModels = async () => {
@@ -6305,6 +6354,7 @@ const validateToken = async (options?: { strict?: boolean }): Promise<boolean> =
   const attachUser = (data: Record<string, unknown>) => {
     accountInfo.value = data as typeof accountInfo.value;
     currentUser.value = data as typeof currentUser.value;
+    applyEmbedShortcutPrompts(data.shortcut_prompts);
   };
 
   const tryOnce = async (headers: Record<string, string>) => {
@@ -8454,6 +8504,7 @@ const fetchUserInfo = async () => {
     const res = await axios.get('/api/portal/auth/me');
     if (res.data?.data) {
        currentUser.value = res.data.data;
+       applyEmbedShortcutPrompts((res.data.data as any).shortcut_prompts);
     }
     await refreshQuota();
   } catch (err) {

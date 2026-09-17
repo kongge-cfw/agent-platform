@@ -105,6 +105,7 @@ sequenceDiagram
 | 允许的域名 | 兑换时 Origin 必须匹配；Ticket 不可扩大域名 |
 | 必须提交业务用户身份 | 打开后禁止旧 `username` 代客 |
 | 身份字段 | 管理端不再单独勾选。保存时固定接受 `subject`、`display_name`、`dept_code`、`org_path`、`tenant_id`、`extra_data` |
+| 常用提示词 | 在嵌入应用列表点「提示词」维护。iframe 显示该入口的提示词；业务用户可用「+」维护**仅自己、且仅当前入口**可见的快捷指令，不带入其他子系统或站内全局指令 |
 | 会话归属 | 不再写入平台映射账号，会话按业务用户标识归属 |
 | 数据权限 | `nanzi_sql_rewrite`（默认，平台按身份字段改写行级 SQL）或 `mcp_only`（平台不改写 SQL，身份整包交给业务 MCP） |
 

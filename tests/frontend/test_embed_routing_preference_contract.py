@@ -157,3 +157,12 @@ def test_embed_apps_binds_role_instead_of_agent_whitelist():
     assert "写入映射账号" not in view
     assert "create_shadow_user" not in view
     assert "isolate_datasets_by_tenant" not in view
+    assert "常用提示词" in view
+    assert "openPromptModal" in view
+    assert "savePrompts" in view
+    assert "shortcut_prompts" in view
+    assert "shortcut_prompts" in source
+    assert "form.shortcut_prompts" not in view
+    assert 'h-[70vh]' in view
+    assert "发给 AI 的内容，可换行" in view
+    assert 'title="删除这条提示词"' in view

@@ -37,8 +37,11 @@ async def create_command(
     session: AsyncSession = Depends(get_db_session),
     user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """创建新的快捷指令"""
-    return await SlashCommandService.create_command(session, data, user.get("user_name", "unknown"))
+    """创建新的快捷指令。嵌入会话写入当前业务入口 app_key，不与其他入口或站内全局共享。"""
+    try:
+        return await SlashCommandService.create_command(session, data, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.put("/{cmd_id}", response_model=SlashCommandResponse)
 async def update_command(

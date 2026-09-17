@@ -23,3 +23,9 @@ def test_desktop_command_drawer_teleported_and_scrollable():
     assert "指令库 · Commands" in text
     # 打开时滚回顶部，避免只能看到底部
     assert "scrollTop = 0" in text
+    assert "个人自定义" in text
+    assert "系统提示词" in text
+    assert "command-drawer-grid" in text
+    assert "command-drawer-card" in text
+    assert "calc((100% - 32px) / 5)" in text
+    assert 'closest?.(\'[role="dialog"]\')' in text

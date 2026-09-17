@@ -35,6 +35,7 @@ import {
   PowerIcon,
   PuzzlePieceIcon,
   ServerIcon,
+  TrashIcon,
   XMarkIcon,
 } from "@heroicons/vue/24/outline";
 
@@ -124,6 +125,10 @@ const props = defineProps<{
   isLoadingAgents?: boolean;
   /** URL agent_id 深链锁定：隐藏专家切换/@，禁止切自动路由 */
   lockExpertAgent?: boolean;
+  /** 是否开放「新建/删除个人快捷指令」（默认开放；应用入口提示词不可删） */
+  allowManageShortcuts?: boolean;
+  /** 快捷指令条固定在输入框上方：不提供上移/折叠，系统胶囊仅保留新会话与历史 */
+  pinShortcutBar?: boolean;
   /** 沙箱工作区运行状态 */
   sandboxWorkspaceStatus?: "idle" | "starting" | "stopping" | "running" | "error";
   /** 当前用户分配的沙箱实例标识（Docker 容器 ID / K8s Pod 名） */
@@ -572,7 +577,11 @@ const selectNewConversationType = (command: string) => {
   emit('system-command', command);
 };
 
-const showShortcutBar = computed(() => props.showShortcuts && props.windowWidth >= 640);
+const pinShortcutBar = computed(() => props.pinShortcutBar === true);
+const showShortcutBar = computed(
+  () => (pinShortcutBar.value || props.showShortcuts) && props.windowWidth >= 640,
+);
+const ROW_SYSTEM_COMMAND_IDS = new Set(["sys_clear", "sys_history"]);
 
 const handleCompositionStart = () => {
   isComposing.value = true;
@@ -610,10 +619,14 @@ const systemCommandIconById: Record<string, any> = {
 
 const getSystemCommandIcon = (cmd: any) => systemCommandIconById[String(cmd?.id || '')] || null;
 
+const canManageShortcuts = computed(() => props.allowManageShortcuts !== false);
+
 /** 与 AgentDebug 快捷指令管理一致：本人创建或 admin 可删（不含内置 sys_ 虚拟指令） */
 const canDeleteCommand = (cmd: { id?: unknown; created_by?: string }) => {
-  if (!props.currentUser || String(cmd.id).startsWith('sys_')) return false;
-  if (props.currentUser.role === 'admin') return true;
+  if (!canManageShortcuts.value) return false;
+  const id = String(cmd.id || "");
+  if (!props.currentUser || id.startsWith("sys_") || id.startsWith("app_prompt_")) return false;
+  if (props.currentUser.role === "admin") return true;
   return cmd.created_by === props.currentUser.user_name;
 };
 
@@ -621,9 +634,14 @@ watch(() => filteredCommands.value, () => {
   activeCommandIndex.value = 0;
 });
 
+const isOwnedUserCommand = (cmd: any) => {
+  const id = String(cmd?.id || "");
+  return !id.startsWith("sys_") && !id.startsWith("app_prompt_");
+};
+
 let draggedItem: any = null;
 const handleDragStart = (e: DragEvent, cmd: any, type: string) => {
-    if (type !== 'user') return;
+    if (!canManageShortcuts.value || type !== 'user' || !isOwnedUserCommand(cmd)) return;
     draggedItem = cmd;
     if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
@@ -633,7 +651,8 @@ const handleDragStart = (e: DragEvent, cmd: any, type: string) => {
 
 const handleDrop = (_e: DragEvent, targetCmd: any, type: string) => {
     if (type !== 'user' || !draggedItem || draggedItem.id === targetCmd.id) return;
-    const items = [...props.slashCommands.filter(c => !String(c.id).startsWith('sys_'))];
+    if (!isOwnedUserCommand(targetCmd)) return;
+    const items = [...props.slashCommands.filter(isOwnedUserCommand)];
     const fromIndex = items.findIndex(i => i.id === draggedItem.id);
     const toIndex = items.findIndex(i => i.id === targetCmd.id);
     if (fromIndex !== -1 && toIndex !== -1) {
@@ -1191,13 +1210,23 @@ const shortcutScrollRef = ref<HTMLElement | null>(null);
 const desktopCommandDrawerRef = ref<HTMLElement | null>(null);
 
 /** 行内展示全部指令（超出横向滚动）；「更多」打开完整指令库 */
-const visibleRowSystemCommands = computed(() =>
-  filteredSystemCommands.value.filter((cmd) => cmd.id !== 'sys_project'),
-);
+const visibleRowSystemCommands = computed(() => {
+  const list = filteredSystemCommands.value.filter((cmd) => cmd.id !== "sys_project");
+  if (!pinShortcutBar.value) return list;
+  return list.filter((cmd) => ROW_SYSTEM_COMMAND_IDS.has(String(cmd.id)));
+});
+const isAppConfiguredCommand = (cmd: any) => String(cmd?.id || "").startsWith("app_prompt_");
 const visibleRowUserCommands = computed(() => filteredUserCommands.value);
-const hasShortcutChips = computed(
-  () => visibleRowSystemCommands.value.length > 0 || visibleRowUserCommands.value.length > 0,
+const visibleRowPersonalCommands = computed(() =>
+  filteredUserCommands.value.filter((cmd) => !isAppConfiguredCommand(cmd)),
 );
+const visibleRowAppPromptCommands = computed(() =>
+  filteredUserCommands.value.filter(isAppConfiguredCommand),
+);
+const hasShortcutChips = computed(() => {
+  if (pinShortcutBar.value) return visibleRowUserCommands.value.length > 0;
+  return visibleRowSystemCommands.value.length > 0 || visibleRowUserCommands.value.length > 0;
+});
 const showShortcutDivider = computed(
   () =>
     visibleRowSystemCommands.value.length > 0
@@ -1269,11 +1298,13 @@ const handleGlobalClick = (event: MouseEvent) => {
       showNewConversationMenu.value = false;
     }
   }
-  // 快捷指令「更多」桌面弹框：点击外部关闭
+  // 快捷指令「更多」桌面弹框：点击外部关闭；确认删除等 dialog 不算外部
   if (isDrawerExpanded.value && props.windowWidth >= 640) {
+    const targetEl = event.target as HTMLElement | null;
+    if (targetEl?.closest?.('[role="dialog"]')) return;
     const target = event.target as Node;
     const panel = desktopCommandDrawerRef.value;
-    const moreBtn = (event.target as HTMLElement | null)?.closest?.("[data-shortcut-more]");
+    const moreBtn = targetEl?.closest?.("[data-shortcut-more]");
     if (moreBtn) return;
     if (panel && !panel.contains(target)) {
       isDrawerExpanded.value = false;
@@ -1704,11 +1735,15 @@ defineExpose({
           class="flex items-center space-x-2 mb-2 px-1 relative h-8"
           :class="{ 'opacity-50 pointer-events-none select-none': isProcessing }"
         >
-            <!-- 1. Left Toggle Button (Visible on all devices now) -->
-            <div @click="emit('toggle-shortcuts')" class="flex items-center space-x-1 cursor-pointer select-none group flex-shrink-0 bg-white dark:bg-gray-900 pr-2 z-10">
-                <CommandLineIcon class="h-3.5 w-3.5 shrink-0 text-gray-400 group-hover:text-primary" aria-hidden="true" />
-                <span class="text-[10px] font-black text-gray-400 group-hover:text-primary transition-colors tracking-tighter">快捷指令</span>
-                <svg class="w-3 h-3 text-gray-300 group-hover:text-primary transition-transform duration-200 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7" /></svg>
+            <!-- 1. 标题：钉住时仅展示文案，不提供上移/折叠 -->
+            <div
+              class="flex items-center space-x-1 select-none flex-shrink-0 bg-white dark:bg-gray-900 pr-2 z-10"
+              :class="pinShortcutBar ? '' : 'cursor-pointer group'"
+              @click="!pinShortcutBar && emit('toggle-shortcuts')"
+            >
+                <CommandLineIcon class="h-3.5 w-3.5 shrink-0 text-gray-700 dark:text-gray-200" :class="{ 'group-hover:text-primary': !pinShortcutBar }" aria-hidden="true" />
+                <span class="text-[10px] font-black text-gray-700 dark:text-gray-200 tracking-tighter" :class="{ 'group-hover:text-primary transition-colors': !pinShortcutBar }">快捷指令</span>
+                <svg v-if="!pinShortcutBar" class="w-3 h-3 text-gray-500 group-hover:text-primary transition-transform duration-200 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7" /></svg>
             </div>
 
             <!-- 2. Middle Content -->
@@ -1722,7 +1757,7 @@ defineExpose({
                                 >
                                     <template v-for="cmd in visibleRowSystemCommands" :key="'row-sys-'+cmd.id">
                                         <div
-                                          v-if="cmd.id === 'sys_clear'"
+                                          v-if="cmd.id === 'sys_clear' && !pinShortcutBar"
                                           :ref="setNewConversationMenuRef"
                                           class="relative flex items-center shrink-0"
                                         >
@@ -1732,8 +1767,11 @@ defineExpose({
                                         <button v-else :disabled="cmd.disabled" @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-gray-100/80 dark:bg-gray-800 text-gray-500 rounded-full whitespace-nowrap hover:bg-gray-200 transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"><component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{{ cmd.label }}</button>
                                     </template>
                                     <div v-if="showShortcutDivider" class="w-px h-3 bg-gray-200 dark:bg-gray-700 flex-shrink-0"></div>
-                                    <template v-for="cmd in visibleRowUserCommands" :key="'row-user-'+cmd.id">
-                                        <button @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border border-blue-100/50 dark:border-blue-800 rounded-full whitespace-nowrap hover:bg-blue-100 transition-colors flex-shrink-0"><component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{{ cmd.label }}</button>
+                                    <template v-for="cmd in visibleRowPersonalCommands" :key="'row-personal-'+cmd.id">
+                                        <button @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-100/70 dark:border-emerald-800 rounded-full whitespace-nowrap hover:bg-emerald-100 transition-colors flex-shrink-0">{{ cmd.label }}</button>
+                                    </template>
+                                    <template v-for="cmd in visibleRowAppPromptCommands" :key="'row-app-'+cmd.id">
+                                        <button @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border border-blue-100/50 dark:border-blue-800 rounded-full whitespace-nowrap hover:bg-blue-100 transition-colors flex-shrink-0">{{ cmd.label }}</button>
                                     </template>
                                 </div>
                             </div>
@@ -1752,7 +1790,7 @@ defineExpose({
             </div>
 
             <!-- Add Button -->
-            <button @click="emit('open-command-manager')" class="flex-shrink-0 p-1.5 text-gray-400 hover:text-primary transition-all rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 group" title="新建快捷指令">
+            <button v-if="canManageShortcuts" @click="emit('open-command-manager')" class="flex-shrink-0 p-1.5 text-gray-400 hover:text-primary transition-all rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 group" title="新建快捷指令">
                 <svg class="w-4 h-4 transform group-hover:rotate-90 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" /></svg>
             </button>
         </div>
@@ -3324,20 +3362,66 @@ defineExpose({
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" /></svg>
               </button>
             </div>
-            <div class="space-y-6">
-              <div v-if="filteredUserCommands.length > 0">
-                <div class="text-[10px] font-black text-blue-500 mb-3 px-1 flex items-center uppercase tracking-tighter">Mine · 我的常用</div>
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  <div v-for="cmd in filteredUserCommands" :key="'grid-user-'+cmd.id" class="relative group/grid-item">
-                    <button draggable="true" @dragstart="handleDragStart($event, cmd, 'user')" @dragover.prevent @drop="handleDrop($event, cmd, 'user')" @click="handleShortcutClick(cmd); closeCommandDrawer();" class="w-full text-left p-3.5 rounded-2xl bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800 hover:border-primary/30 hover:bg-white dark:hover:bg-gray-900 hover:shadow-md transition-all">
-                      <div class="text-xs font-bold text-gray-800 dark:text-gray-200 mb-1 truncate">{{ cmd.label }}</div>
-                      <div class="text-[9px] text-gray-400 truncate opacity-60 font-mono">{{ cmd.command }}</div>
+            <div class="space-y-5">
+              <div v-if="visibleRowPersonalCommands.length > 0">
+                <div class="mb-2 flex items-center gap-2 px-0.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                  <span class="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">个人自定义</span>
+                  <span class="text-[10px] text-gray-400">{{ visibleRowPersonalCommands.length }}</span>
+                </div>
+                <div class="command-drawer-grid">
+                  <div
+                    v-for="cmd in visibleRowPersonalCommands"
+                    :key="'grid-personal-'+cmd.id"
+                    class="group relative min-w-0"
+                  >
+                    <button
+                      type="button"
+                      :draggable="isOwnedUserCommand(cmd)"
+                      class="command-drawer-card"
+                      @dragstart="handleDragStart($event, cmd, 'user')"
+                      @dragover.prevent
+                      @drop="handleDrop($event, cmd, 'user')"
+                      @click="handleShortcutClick(cmd); closeCommandDrawer();"
+                    >
+                      <div class="truncate pr-5 text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
+                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
                     </button>
-                    <button v-if="canDeleteCommand(cmd)" @click.stop="$emit('delete-command', cmd, $event)" class="absolute -top-1.5 -right-1.5 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg z-10 opacity-0 group-hover/grid-item:opacity-100 hover:scale-110 active:scale-95"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12" /></svg></button>
+                    <button
+                      v-if="canDeleteCommand(cmd)"
+                      type="button"
+                      class="absolute right-1.5 top-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 hover:text-red-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-gray-400"
+                      title="删除这条指令"
+                      @click.stop="$emit('delete-command', cmd, $event)"
+                    >
+                      <TrashIcon class="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               </div>
-              <div>
+              <div v-if="visibleRowAppPromptCommands.length > 0">
+                <div class="mb-2 flex items-center gap-2 px-0.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                  <span class="text-[11px] font-semibold text-blue-700 dark:text-blue-300">系统提示词</span>
+                  <span class="text-[10px] text-gray-400">{{ visibleRowAppPromptCommands.length }}</span>
+                </div>
+                <div class="command-drawer-grid">
+                  <button
+                    v-for="cmd in visibleRowAppPromptCommands"
+                    :key="'grid-app-'+cmd.id"
+                    type="button"
+                    class="command-drawer-card"
+                    @click="handleShortcutClick(cmd); closeCommandDrawer();"
+                  >
+                    <div class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
+                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                  </button>
+                </div>
+              </div>
+              <div v-if="!visibleRowPersonalCommands.length && !visibleRowAppPromptCommands.length && pinShortcutBar" class="px-1 py-6 text-center text-xs text-gray-400">
+                还没有提示词，点右侧 + 可以新增个人指令
+              </div>
+              <div v-if="!pinShortcutBar">
                 <div class="text-[10px] font-black text-gray-400 mb-3 px-1 flex items-center uppercase tracking-tighter">System · 系统功能</div>
                 <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <button :disabled="cmd.disabled" v-for="cmd in filteredSystemCommands" :key="'grid-sys-'+cmd.id" @click="handleShortcutClick(cmd); closeCommandDrawer();" class="w-full text-left p-3.5 rounded-2xl bg-gray-50/50 dark:bg-gray-900/30 border border-transparent hover:bg-gray-100 dark:hover:bg-gray-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-50/50">
@@ -3399,20 +3483,58 @@ defineExpose({
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" /></svg>
               </button>
             </div>
-            <div class="space-y-6">
-              <div v-if="filteredUserCommands.length > 0">
-                <div class="text-[10px] font-black text-blue-500 mb-3 px-1 flex items-center uppercase tracking-tighter">Mine · 我的常用</div>
-                <div class="grid grid-cols-2 gap-3">
-                  <div v-for="cmd in filteredUserCommands" :key="'mobile-user-'+cmd.id" class="relative">
-                    <button @click="handleShortcutClick(cmd); closeCommandDrawer();" class="w-full text-left p-3.5 rounded-2xl bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800 hover:border-primary/30 hover:bg-white dark:hover:bg-gray-900 hover:shadow-md transition-all">
-                      <div class="text-xs font-bold text-gray-800 dark:text-gray-200 mb-1 truncate">{{ cmd.label }}</div>
-                      <div class="text-[9px] text-gray-400 truncate opacity-60 font-mono">{{ cmd.command }}</div>
+            <div class="space-y-5">
+              <div v-if="visibleRowPersonalCommands.length > 0">
+                <div class="mb-2 flex items-center gap-2 px-0.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                  <span class="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">个人自定义</span>
+                  <span class="text-[10px] text-gray-400">{{ visibleRowPersonalCommands.length }}</span>
+                </div>
+                <div class="command-drawer-grid-m">
+                  <div
+                    v-for="cmd in visibleRowPersonalCommands"
+                    :key="'mobile-personal-'+cmd.id"
+                    class="group relative min-w-0"
+                  >
+                    <button type="button" class="command-drawer-card" @click="handleShortcutClick(cmd); closeCommandDrawer();">
+                      <div class="truncate pr-5 text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
+                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
                     </button>
-                    <button v-if="canDeleteCommand(cmd)" @click.stop="$emit('delete-command', cmd, $event)" class="absolute -top-1.5 -right-1.5 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg z-10"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12" /></svg></button>
+                    <button
+                      v-if="canDeleteCommand(cmd)"
+                      type="button"
+                      class="absolute right-1.5 top-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 hover:text-red-500"
+                      title="删除这条指令"
+                      @click.stop="$emit('delete-command', cmd, $event)"
+                    >
+                      <TrashIcon class="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               </div>
-              <div>
+              <div v-if="visibleRowAppPromptCommands.length > 0">
+                <div class="mb-2 flex items-center gap-2 px-0.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                  <span class="text-[11px] font-semibold text-blue-700 dark:text-blue-300">系统提示词</span>
+                  <span class="text-[10px] text-gray-400">{{ visibleRowAppPromptCommands.length }}</span>
+                </div>
+                <div class="command-drawer-grid-m">
+                  <button
+                    v-for="cmd in visibleRowAppPromptCommands"
+                    :key="'mobile-app-'+cmd.id"
+                    type="button"
+                    class="command-drawer-card"
+                    @click="handleShortcutClick(cmd); closeCommandDrawer();"
+                  >
+                    <div class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
+                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                  </button>
+                </div>
+              </div>
+              <div v-if="!visibleRowPersonalCommands.length && !visibleRowAppPromptCommands.length && pinShortcutBar" class="px-1 py-6 text-center text-xs text-gray-400">
+                还没有提示词，点右侧 + 可以新增个人指令
+              </div>
+              <div v-if="!pinShortcutBar">
                 <div class="text-[10px] font-black text-gray-400 mb-3 px-1 flex items-center uppercase tracking-tighter">System · 系统功能</div>
                 <div class="grid grid-cols-2 gap-3">
                   <button :disabled="cmd.disabled" v-for="cmd in filteredSystemCommands" :key="'mobile-sys-'+cmd.id" @click="cmd.disabled ? null : (handleShortcutClick(cmd), closeCommandDrawer());" class="w-full text-left p-3.5 rounded-2xl bg-gray-50/50 dark:bg-gray-900/30 border border-transparent hover:bg-gray-100 dark:hover:bg-gray-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-50/50">
@@ -3463,6 +3585,63 @@ defineExpose({
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* 指令库：桌面一行 5 个，不依赖 Tailwind JIT */
+.command-drawer-grid {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.command-drawer-grid > * {
+  box-sizing: border-box;
+  flex: 0 0 calc((100% - 32px) / 5);
+  width: calc((100% - 32px) / 5);
+  max-width: calc((100% - 32px) / 5);
+  min-width: 0;
+}
+.command-drawer-grid-m {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.command-drawer-grid-m > * {
+  box-sizing: border-box;
+  flex: 0 0 calc((100% - 8px) / 2);
+  width: calc((100% - 8px) / 2);
+  max-width: calc((100% - 8px) / 2);
+  min-width: 0;
+}
+
+/* 指令库卡片：灰描边标出可点区域，无彩底、无阴影 */
+.command-drawer-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.command-drawer-card:hover {
+  border-color: #d1d5db;
+  background: #fafafa;
+}
+.command-drawer-card:focus-visible {
+  outline: 2px solid #9ca3af;
+  outline-offset: 1px;
+}
+:global(.dark) .command-drawer-card {
+  border-color: #374151;
+}
+:global(.dark) .command-drawer-card:hover {
+  border-color: #4b5563;
+  background: rgba(55, 65, 81, 0.35);
+}
 
 /* ── LTM 气泡淡入淡出滑动效果 ── */
 .fade-slide-enter-active,

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import get_redis
 from app.models.user import User
+from app.schemas.embed_app import parse_shortcut_prompts
 from app.services.embed_app_service import (
     dump_policy_session_fields,
     operator_has_embed_role,
@@ -468,6 +469,7 @@ class EmbedService:
             "isolate_datasets_by_tenant": ticket_data.get("isolate_datasets_by_tenant", "0"),
             "embed_role_id": ticket_data.get("embed_role_id", ""),
             "lock_entry_agent": ticket_data.get("lock_entry_agent", ""),
+            "shortcut_prompts": ticket_data.get("shortcut_prompts") or "[]",
         }
         await redis.hset(cache_key, mapping=user_session_data)
         await redis.expire(cache_key, SESSION_TOKEN_TTL_SECONDS)
@@ -492,6 +494,7 @@ class EmbedService:
             "role": "user",
             "session_owner": ticket_data.get("session_owner") or None,
             "app_key": ticket_data.get("embed_app_key") or None,
+            "shortcut_prompts": parse_shortcut_prompts(ticket_data.get("shortcut_prompts")),
         }
         subject = str(ticket_data.get("external_subject") or "").strip()
         if subject:
@@ -504,6 +507,7 @@ class EmbedService:
             "user_info": user_info,
             "agent_id": (ticket_data.get("agent_id") or None) if lock_entry else None,
             "lock_entry_agent": lock_entry,
+            "shortcut_prompts": user_info.get("shortcut_prompts") or [],
         }
 
     @staticmethod

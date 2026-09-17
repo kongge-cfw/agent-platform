@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.embed_app import SysEmbedApp
 from app.models.permission import Role, UserRoleRelation
-from app.schemas.embed_app import parse_json_list
+from app.schemas.embed_app import parse_json_list, parse_shortcut_prompts, dump_shortcut_prompts
 
 DATA_PERMISSION_SQL_REWRITE = "nanzi_sql_rewrite"
 DATA_PERMISSION_MCP_ONLY = "mcp_only"
@@ -46,6 +46,7 @@ def parse_embed_app_row(app: SysEmbedApp) -> dict[str, Any]:
         "claim_keys": [str(item).strip() for item in parse_json_list(app.claim_keys)],
         "data_permission_mode": str(app.data_permission_mode or DATA_PERMISSION_SQL_REWRITE).strip()
         or DATA_PERMISSION_SQL_REWRITE,
+        "shortcut_prompts": parse_shortcut_prompts(app.shortcut_prompts),
         "is_active": bool(app.is_active),
     }
 
@@ -197,6 +198,7 @@ async def resolve_ticket_app_policy(
             "allowed_origins": list(allowed_origins or []),
             "create_shadow_user": True,
             "data_permission_mode": DATA_PERMISSION_SQL_REWRITE,
+            "shortcut_prompts": [],
             "role_id": None,
             "lock_entry_agent": False,
         }
@@ -233,6 +235,7 @@ async def resolve_ticket_app_policy(
         "allowed_origins": origins,
         "create_shadow_user": False,
         "data_permission_mode": policy["data_permission_mode"],
+        "shortcut_prompts": list(policy.get("shortcut_prompts") or []),
         "role_id": role_id,
         "lock_entry_agent": bool(policy["lock_entry_agent"]),
     }
@@ -245,6 +248,7 @@ def dump_policy_session_fields(policy: Mapping[str, Any]) -> dict[str, str]:
         "embed_app_key": str(app.get("app_key") or ""),
         "create_shadow_user": "1" if policy.get("create_shadow_user") else "0",
         "data_permission_mode": str(policy.get("data_permission_mode") or DATA_PERMISSION_SQL_REWRITE),
+        "shortcut_prompts": dump_shortcut_prompts(app.get("shortcut_prompts") or policy.get("shortcut_prompts") or []),
     }
     if app:
         role_id = policy.get("role_id") if policy.get("role_id") is not None else app.get("role_id")

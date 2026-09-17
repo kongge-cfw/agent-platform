@@ -522,6 +522,7 @@ async def validate_user_apikey(
     通过 Authorization 头传递 Key。
     如果有效，返回 200 和基础用户信息。
     """
+    from app.schemas.embed_app import parse_shortcut_prompts
     from app.services.config_service import ConfigService
     watermark_enabled = await ConfigService.get("embedchat_watermark_enabled") == "true"
     watermark_style = await ConfigService.get("embedchat_watermark_style") or "user_time"
@@ -535,6 +536,8 @@ async def validate_user_apikey(
             "user_name": user.get("user_name"),
             "real_name": user.get("real_name") or user.get("user_name"),
             "role": user.get("role"),
+            "app_key": user.get("embed_app_key") or user.get("app_key") or None,
+            "shortcut_prompts": parse_shortcut_prompts(user.get("shortcut_prompts")),
             "watermark": {
                 "enabled": watermark_enabled,
                 "style": watermark_style,

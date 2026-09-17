@@ -18,6 +18,58 @@ from app.services.embed_app_service import apply_claim_whitelist
 from app.services.embed_api_guard import embed_path_allowed
 
 
+def test_parse_shortcut_prompts_caps_and_requires_label_command():
+    from app.schemas.embed_app import parse_shortcut_prompts
+
+    parsed = parse_shortcut_prompts(
+        [
+            {"label": " 对账 ", "command": "帮我对账"},
+            {"label": "", "command": "空名称"},
+            {"label": "只有名"},
+            "bad",
+        ]
+    )
+    assert parsed == [{"label": "对账", "command": "帮我对账"}]
+    too_many = [{"label": f"n{i}", "command": f"c{i}"} for i in range(30)]
+    assert len(parse_shortcut_prompts(too_many)) == 20
+    assert parse_shortcut_prompts("not-json") == []
+    assert parse_shortcut_prompts(None) == []
+
+
+def test_slash_command_scope_binds_to_embed_app():
+    from app.services.slash_command_service import (
+        resolve_slash_command_app_key,
+        slash_command_list_mode,
+        slash_command_writable,
+    )
+
+    embed_user = {
+        "session_type": "embed",
+        "user_name": "ext:crm_zhangsan",
+        "embed_app_key": "app_aaa",
+        "role": "user",
+    }
+    platform = {"user_name": "ext:crm_zhangsan", "role": "user"}
+    own = {"created_by": "ext:crm_zhangsan", "embed_app_key": "app_aaa"}
+    other_app = {"created_by": "ext:crm_zhangsan", "embed_app_key": "app_bbb"}
+    global_cmd = {"created_by": "ext:crm_zhangsan", "embed_app_key": None}
+    admin_cmd = {"created_by": "admin", "embed_app_key": None}
+
+    assert resolve_slash_command_app_key(embed_user) == "app_aaa"
+    assert slash_command_list_mode(embed_user) == "embed_app"
+    assert slash_command_list_mode(platform) == "platform"
+    assert slash_command_writable(own, embed_user) is True
+    assert slash_command_writable(other_app, embed_user) is False
+    assert slash_command_writable(global_cmd, embed_user) is False
+    assert slash_command_writable(own, platform) is False
+    assert slash_command_writable(global_cmd, platform) is True
+    assert slash_command_writable(admin_cmd, platform) is False
+    assert slash_command_writable(admin_cmd, {**platform, "role": "admin"}) is True
+    unbound = {"session_type": "embed", "user_name": "ext:x", "role": "user"}
+    assert slash_command_list_mode(unbound) == "embed_unbound"
+    assert slash_command_writable(own, unbound) is False
+
+
 def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     filtered = apply_claim_whitelist(
         {
@@ -408,6 +460,10 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         require_identity=True,
         claim_keys=json.dumps(["subject", "display_name", "tenant_id", "extra_data.data_scope"]),
         data_permission_mode="mcp_only",
+        shortcut_prompts=json.dumps(
+            [{"label": "对账", "command": "帮我核对本月账单"}],
+            ensure_ascii=False,
+        ),
         is_active=True,
     )
     locked_app = SysEmbedApp(
@@ -482,6 +538,10 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
     session = exchange_resp.json()["data"]
     assert session.get("agent_id") in (None, "")
     assert session.get("lock_entry_agent") is False
+    assert session.get("shortcut_prompts") == [{"label": "对账", "command": "帮我核对本月账单"}]
+    assert session.get("user_info", {}).get("shortcut_prompts") == [
+        {"label": "对账", "command": "帮我核对本月账单"}
+    ]
     session_token = session["session_token"]
 
     blocked = await client.get(

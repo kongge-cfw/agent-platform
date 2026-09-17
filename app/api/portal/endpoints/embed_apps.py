@@ -17,6 +17,7 @@ from app.schemas.embed_app import (
     SysEmbedAppResponse,
     SysEmbedAppUpdate,
     dump_json_list,
+    dump_shortcut_prompts,
 )
 from app.services.embed_app_service import ensure_embed_role_exists, generate_embed_app_key
 
@@ -28,6 +29,8 @@ def _dump_lists(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("allowed_origins", "claim_keys"):
         if key in payload and payload[key] is not None:
             payload[key] = dump_json_list(payload[key])
+    if "shortcut_prompts" in payload and payload["shortcut_prompts"] is not None:
+        payload["shortcut_prompts"] = dump_shortcut_prompts(payload["shortcut_prompts"])
     return payload
 
 

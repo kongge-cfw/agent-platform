@@ -17,6 +17,9 @@ _STANDARD_CLAIM_KEYS = (
     "tenant_id",
     "extra_data",
 )
+_MAX_SHORTCUT_PROMPTS = 20
+_SHORTCUT_LABEL_MAX = 50
+_SHORTCUT_COMMAND_MAX = 500
 
 
 def parse_json_list(value: Any) -> list[Any]:
@@ -40,6 +43,38 @@ def parse_json_list(value: Any) -> list[Any]:
 def dump_json_list(value: Any) -> str:
     items = [str(item).strip() for item in parse_json_list(value) if str(item).strip()]
     return json.dumps(items, ensure_ascii=False)
+
+
+def parse_shortcut_prompts(value: Any) -> list[dict[str, str]]:
+    raw: Any = value
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    prompts: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()[:_SHORTCUT_LABEL_MAX]
+        command = str(item.get("command") or "").strip()[:_SHORTCUT_COMMAND_MAX]
+        if not label or not command:
+            continue
+        prompts.append({"label": label, "command": command})
+        if len(prompts) >= _MAX_SHORTCUT_PROMPTS:
+            break
+    return prompts
+
+
+def dump_shortcut_prompts(value: Any) -> str:
+    return json.dumps(parse_shortcut_prompts(value), ensure_ascii=False)
 
 
 def parse_optional_role_id(value: Any) -> Optional[int]:
@@ -68,6 +103,7 @@ class SysEmbedAppBase(BaseModel):
     require_identity: bool = True
     claim_keys: list[str] = Field(default_factory=list)
     data_permission_mode: str = "nanzi_sql_rewrite"
+    shortcut_prompts: list[dict[str, str]] = Field(default_factory=list)
     is_active: bool = True
 
     @field_validator("name")
@@ -113,6 +149,11 @@ class SysEmbedAppBase(BaseModel):
         self.claim_keys = cleaned
         return self
 
+    @field_validator("shortcut_prompts", mode="before")
+    @classmethod
+    def _shortcut_prompts(cls, value: Any) -> list[dict[str, str]]:
+        return parse_shortcut_prompts(value)
+
 
 class SysEmbedAppCreate(SysEmbedAppBase):
     role_id: int
@@ -146,6 +187,7 @@ class SysEmbedAppUpdate(BaseModel):
     require_identity: Optional[bool] = None
     claim_keys: Optional[list[str]] = None
     data_permission_mode: Optional[str] = None
+    shortcut_prompts: Optional[list[dict[str, str]]] = None
     is_active: Optional[bool] = None
 
     @field_validator("name")
@@ -160,9 +202,9 @@ class SysEmbedAppUpdate(BaseModel):
 
     @field_validator("role_id", mode="before")
     @classmethod
-    def _role_id(cls, value: Any) -> int:
+    def _role_id(cls, value: Any) -> Any:
         if value is None:
-            raise ValueError("必须关联角色")
+            return None
         return parse_required_role_id(value)
 
     @field_validator("data_permission_mode")
@@ -174,6 +216,13 @@ class SysEmbedAppUpdate(BaseModel):
         if text not in _DATA_PERMISSION_MODES:
             raise ValueError("data_permission_mode 仅支持 nanzi_sql_rewrite 或 mcp_only")
         return text
+
+    @field_validator("shortcut_prompts", mode="before")
+    @classmethod
+    def _update_shortcut_prompts(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        return parse_shortcut_prompts(value)
 
     @field_validator("allowed_origins", "claim_keys", mode="before")
     @classmethod
@@ -198,6 +247,11 @@ class SysEmbedAppResponse(SysEmbedAppBase):
     @classmethod
     def _response_lists(cls, value: Any) -> list[str]:
         return [str(item).strip() for item in parse_json_list(value) if str(item).strip()]
+
+    @field_validator("shortcut_prompts", mode="before")
+    @classmethod
+    def _response_prompts(cls, value: Any) -> list[dict[str, str]]:
+        return parse_shortcut_prompts(value)
 
 
 class EmbedRoleOption(BaseModel):

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ClipboardDocumentIcon, PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
+import { ClipboardDocumentIcon, ChatBubbleLeftRightIcon, PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { embedAppApi, type EmbedRoleOption, type SysEmbedApp, type SysEmbedAppPayload } from '../api/embedApp'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import { useToast } from '../composables/useToast'
@@ -25,6 +25,10 @@ const isEditing = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingApp = ref<SysEmbedApp | null>(null)
 const saving = ref(false)
+const showPromptModal = ref(false)
+const promptApp = ref<SysEmbedApp | null>(null)
+const promptDraft = ref<Array<{ label: string; command: string }>>([])
+const savingPrompts = ref(false)
 
 type AppForm = SysEmbedAppPayload & { id?: string; originsText: string; role_id: number | '' | null }
 
@@ -159,6 +163,61 @@ const saveApp = async () => {
   }
 }
 
+const openPromptModal = (app: SysEmbedApp) => {
+  promptApp.value = app
+  const items = (app.shortcut_prompts || []).map((item) => ({
+    label: String(item.label || ''),
+    command: String(item.command || ''),
+  }))
+  promptDraft.value = items.length ? items : [{ label: '', command: '' }]
+  showPromptModal.value = true
+}
+
+const addPromptRow = () => {
+  if (promptDraft.value.length >= 20) return
+  promptDraft.value.push({ label: '', command: '' })
+}
+
+const removePromptRow = (index: number) => {
+  promptDraft.value.splice(index, 1)
+  if (!promptDraft.value.length) promptDraft.value.push({ label: '', command: '' })
+}
+
+const savePrompts = async () => {
+  if (!promptApp.value) return
+  const incomplete = promptDraft.value.some((item) => {
+    const label = String(item.label || '').trim()
+    const command = String(item.command || '').trim()
+    return Boolean(label) !== Boolean(command)
+  })
+  if (incomplete) {
+    showToast('请完整填写名称和内容，或删除未填完的行', 'warning')
+    return
+  }
+  const shortcut_prompts = promptDraft.value
+    .map((item) => ({
+      label: String(item.label || '').trim(),
+      command: String(item.command || '').trim(),
+    }))
+    .filter((item) => item.label && item.command)
+  savingPrompts.value = true
+  try {
+    await embedAppApi.update(promptApp.value.id, { shortcut_prompts })
+    showToast('常用提示词已保存', 'success')
+    showPromptModal.value = false
+    promptApp.value = null
+    await fetchApps()
+  } catch (error: any) {
+    const detail = error.response?.data?.detail
+    const message = Array.isArray(detail)
+      ? detail.map((item: any) => item.msg || item).join('; ')
+      : (detail || '保存失败')
+    showToast(String(message), 'error')
+  } finally {
+    savingPrompts.value = false
+  }
+}
+
 const confirmDelete = async () => {
   if (!deletingApp.value) return
   try {
@@ -247,7 +306,15 @@ onMounted(() => {
               · {{ app.require_identity ? '必须提交业务身份' : '允许旧代客' }}
             </p>
           </div>
-          <div class="flex shrink-0 gap-2">
+          <div class="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-primary hover:bg-primary/10"
+              @click="openPromptModal(app)"
+            >
+              <ChatBubbleLeftRightIcon class="h-4 w-4" />
+              提示词 {{ app.shortcut_prompts?.length || 0 }}
+            </button>
             <button v-if="canEdit" type="button" class="rounded p-1.5 text-gray-500 hover:bg-gray-100" @click="openModal(app)">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
@@ -321,6 +388,73 @@ onMounted(() => {
           <button type="button" class="rounded-md bg-primary px-3 py-2 text-sm text-white disabled:opacity-60" :disabled="saving" @click="saveApp">
             {{ saving ? '保存中…' : '保存' }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showPromptModal" class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
+      <div class="flex h-[70vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-xl dark:bg-gray-900">
+        <div class="shrink-0 px-5 pt-5">
+          <h2 class="text-lg font-semibold">常用提示词 · {{ promptApp?.name || '' }}</h2>
+          <p class="mt-1 text-xs text-gray-400">仅该嵌入应用的 iframe 显示，与站内全局快捷指令、其他子系统互不影响。最多 20 条。</p>
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div class="space-y-3">
+            <div
+              v-for="(item, index) in promptDraft"
+              :key="index"
+              class="rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+            >
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="item.label"
+                  class="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950"
+                  placeholder="显示名称，如 对账"
+                  maxlength="50"
+                  :disabled="!canEdit"
+                />
+                <button
+                  v-if="canEdit"
+                  type="button"
+                  class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
+                  title="删除这条提示词"
+                  @click="removePromptRow(index)"
+                >
+                  <TrashIcon class="h-4 w-4" />
+                </button>
+              </div>
+              <textarea
+                v-model="item.command"
+                rows="4"
+                class="mt-2 w-full resize-y rounded-lg border px-3 py-2 text-sm leading-6 dark:border-gray-700 dark:bg-gray-950"
+                placeholder="发给 AI 的内容，可换行"
+                maxlength="500"
+                :disabled="!canEdit"
+              />
+            </div>
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center justify-between border-t border-gray-100 px-5 py-3 dark:border-gray-800">
+          <button
+            v-if="canEdit"
+            type="button"
+            class="text-xs text-primary disabled:text-gray-300"
+            :disabled="promptDraft.length >= 20"
+            @click="addPromptRow"
+          >新增一条</button>
+          <span v-else></span>
+          <div class="flex gap-2">
+            <button type="button" class="rounded-md px-3 py-2 text-sm" @click="showPromptModal = false">取消</button>
+            <button
+              v-if="canEdit"
+              type="button"
+              class="rounded-md bg-primary px-3 py-2 text-sm text-white disabled:opacity-60"
+              :disabled="savingPrompts"
+              @click="savePrompts"
+            >
+              {{ savingPrompts ? '保存中…' : '保存' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
