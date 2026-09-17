@@ -16,8 +16,8 @@ const props = withDefaults(
     /** 已挂载到输入框的技能 ID */
     attachedSkillIds?: string[]
     /**
-     * 当前会话有效智能体 ID。有值时按该智能体已发布版本的 skills_custom / skills
-     * 过滤「平台技能」列表；个人技能始终全量展示。
+     * 当前会话有效智能体 ID。传给 GET /api/portal/skills?agent_id=，由服务端按
+     * 已发布版本的 skills_custom / skills 过滤「平台技能」；个人技能始终全量展示。
      */
     agentId?: string | null
     /** 窄屏级联浮层宽度 */
@@ -41,9 +41,8 @@ const personalSkillsList = ref<SkillItem[]>([])
 const activeScope = ref<'global' | 'personal'>('global')
 const isLoadingSkillsList = ref(false)
 const skillSearchQuery = ref('')
-/** 当前智能体是否开启了自定义公共 Skills */
+/** 当前智能体已发布版本是否开启了自定义公共 Skills（由技能目录接口返回） */
 const skillsCustom = ref(false)
-const allowedGlobalSkillIds = ref<string[] | null>(null)
 const loadedOnce = ref(false)
 
 const attachedIdSet = computed(() => new Set(props.attachedSkillIds))
@@ -86,44 +85,22 @@ const skillAccentClass = (skill: SkillItem, index: number) => {
   return accents[index % accents.length]
 }
 
-const resolveAgentSkillFilter = async (agentId: string | null | undefined) => {
-  skillsCustom.value = false
-  allowedGlobalSkillIds.value = null
-  const id = String(agentId || '').trim()
-  if (!id) return
-  try {
-    const res = await axios.get(`/api/portal/agents/${encodeURIComponent(id)}/active-config`)
-    const cfg = res.data || {}
-    if (cfg.skills_custom) {
-      skillsCustom.value = true
-      allowedGlobalSkillIds.value = Array.isArray(cfg.skills)
-        ? cfg.skills.map((s: any) => String(s || '').trim()).filter(Boolean)
-        : []
-    }
-  } catch (err) {
-    console.warn('加载智能体 Skills 配置失败，回退为全量公共技能', err)
-  }
-}
-
 const loadSkillsList = async () => {
   skillsList.value = []
   personalSkillsList.value = []
+  skillsCustom.value = false
   isLoadingSkillsList.value = true
   try {
-    await resolveAgentSkillFilter(props.agentId)
+    const agentId = String(props.agentId || '').trim()
     const [globalRes, personalRes] = await Promise.allSettled([
-      axios.get('/api/portal/skills'),
+      axios.get('/api/portal/skills', agentId ? { params: { agent_id: agentId } } : undefined),
       axios.get('/api/portal/skills/personal'),
     ])
     if (globalRes.status === 'fulfilled' && globalRes.value.data?.status === 'success') {
-      let list = (globalRes.value.data.data || [])
+      skillsCustom.value = Boolean(globalRes.value.data.skills_custom)
+      skillsList.value = (globalRes.value.data.data || [])
         .map((s: any) => ({ ...s, scope: 'global' as const }))
         .filter((s: any) => s.enabled !== 'false')
-      if (skillsCustom.value && allowedGlobalSkillIds.value) {
-        const allow = new Set(allowedGlobalSkillIds.value)
-        list = list.filter((s: SkillItem) => allow.has(s.id))
-      }
-      skillsList.value = list
     }
     if (personalRes.status === 'fulfilled' && personalRes.value.data?.status === 'success') {
       personalSkillsList.value = (personalRes.value.data.data || [])

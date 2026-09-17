@@ -46,7 +46,6 @@ from app.services.ai.tools.resource_catalog_tools import (
 from app.services.ai.tools.user_info_tools import get_myinfo
 from app.services.ai.tools.user_confirmation_tools import request_user_confirmation
 from app.services.ai.tools.user_question_tools import ask_user_question
-from app.services.ai.tools.ui_card_tools import show_ui_card
 from app.services.ai.tools.session_status import get_runtime_capabilities, session_status
 from app.services.ai.tools.agent_delegate_tool import sub_agent_call, sub_agent_batch_call
 from app.services.ai.tools.todo_tools import todo_write
@@ -152,7 +151,6 @@ TOOL_EVIDENCE_TYPES = {
     "get_myinfo": frozenset({EvidenceType.INTERNAL_DATA}),
     "request_user_confirmation": frozenset({EvidenceType.RUNTIME_STATE}),
     "ask_user_question": frozenset({EvidenceType.RUNTIME_STATE}),
-    "show_ui_card": frozenset({EvidenceType.RUNTIME_STATE}),
     "session_status": frozenset({EvidenceType.RUNTIME_STATE}),
     "get_runtime_capabilities": frozenset({EvidenceType.RUNTIME_STATE}),
     "list_accessible_datasets": frozenset({EvidenceType.INTERNAL_DATA}),
@@ -184,7 +182,6 @@ TOOL_EVIDENCE_POLICY: dict[str, str] = {
     "get_myinfo": "allow_empty_success",
     "request_user_confirmation": "allow_empty_success",
     "ask_user_question": "allow_empty_success",
-    "show_ui_card": "allow_empty_success",
     "search_knowledge_base": "allow_empty_success",
     "search_qa_examples": "allow_empty_success",
     "jira_search": "allow_empty_success",
@@ -355,7 +352,6 @@ class ToolRegistry:
         "get_myinfo": get_myinfo,
         "request_user_confirmation": request_user_confirmation,
         "ask_user_question": ask_user_question,
-        "show_ui_card": show_ui_card,
         "sub_agent_call": sub_agent_call,
         "sub_agent_batch_call": sub_agent_batch_call,
         "todo_write": todo_write,

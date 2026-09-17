@@ -591,11 +591,6 @@ const availableTools = [
     isSystem: true,
   },
   {
-    name: "show_ui_card",
-    description: "向用户展示已登记的定制化业务卡片（查看/确认/驳回/修改），等待回执后再继续",
-    isSystem: true,
-  },
-  {
     name: "read_file",
     description: "AgentScope Read：按行读取文件内容，运行时替代旧 read_file",
     isSystem: true,

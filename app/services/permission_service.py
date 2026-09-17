@@ -266,7 +266,6 @@ class PermissionService:
             "menu:agent_management": "智能体中心",
             "menu:skills_management": "技能工作台",
             "menu:mcp_management": "MCP 工具集",
-            "menu:ui_cards": "对话卡片",
             "menu:mcp_service": "MCP 服务台",
             "menu:memory_management": "记忆工作台",
             "menu:chatbi_examples": "案例集管理",
@@ -300,11 +299,6 @@ class PermissionService:
 
             # 技能工作台
             "element:skills:admin": "技能工作台-平台管理与审核",
-
-            # 对话卡片
-            "element:ui_cards:create": "对话卡片-登记卡片",
-            "element:ui_cards:edit": "对话卡片-编辑卡片",
-            "element:ui_cards:delete": "对话卡片-删除卡片",
 
             # 任务调度台
             "element:task:manage": "任务调度台-任务管理",

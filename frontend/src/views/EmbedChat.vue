@@ -681,7 +681,7 @@
               :class="[
                 `markdown-theme-${config.markdownTheme || 'default'}`,
                 { 'message-borderless': config.hideMessageBorder },
-                visibleStreamBody(msg) || msg.groundingBlocked || msg.businessConfirmation || msg.userQuestion || msg.uiCard || (msg.processTimeline && msg.processTimeline.length > 0)
+                visibleStreamBody(msg) || msg.groundingBlocked || msg.businessConfirmation || msg.userQuestion || (msg.processTimeline && msg.processTimeline.length > 0)
                   ? [
                       'px-4 py-3 rounded-2xl rounded-tl-sm shadow-none border border-gray-100 dark:border-gray-700 border-l-4 border-l-primary/60 dark:border-l-primary/40 min-h-[46px]',
                       msg.isThinking
@@ -836,7 +836,7 @@
                                                                   :conversation-id="conversationId"
                                                                   :enable-browser-open="true"
                                                                   :quick-context="quickContextForMessage(msg)"
-                                                                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion || !!msg.uiCard"
+                                                                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"
                                                                   @quick-question="handleQuickQuestion"
                                                                   @show-citation="(payload) => handleShowCitation(msg, payload.id, payload.anchor)"
                                                                   @open-canvas="handleOpenCanvas"
@@ -876,13 +876,6 @@
                 :payload="msg.userQuestion"
                 :disabled="isProcessing"
                 @submit="(payload) => submitUserQuestion(msg, payload)"
-              />
-
-              <UiCardHost
-                v-if="msg.uiCard"
-                :payload="msg.uiCard"
-                :disabled="isProcessing"
-                @submit="(payload) => submitUiCard(msg, payload)"
               />
 
                                 <!-- AI Stalled Thinking Prompt (Moved out to be sibling to msg.content) -->
@@ -2207,7 +2200,6 @@ import ToolPermissionCard from "@/components/chat/ToolPermissionCard.vue";
 import GroundingBlockedCard from "@/components/GroundingBlockedCard.vue";
 import BusinessConfirmationCard from "@/components/BusinessConfirmationCard.vue";
 import UserQuestionCard from "@/components/UserQuestionCard.vue";
-import UiCardHost from "@/components/UiCardHost.vue";
 import DatasetCapabilityMenu from "@/components/chatbi/DatasetCapabilityMenu.vue";
 import DatasetPortalDrawer from "@/components/chatbi/DatasetPortalDrawer.vue";
 import ChatBIInsightPanel from "@/components/chatbi/ChatBIInsightPanel.vue";
@@ -2354,10 +2346,6 @@ import {
   buildUserQuestionUserMessage,
   type UserQuestionState,
 } from "@/utils/userQuestion";
-import {
-  buildUiCardUserMessage,
-  type UiCardState,
-} from "@/utils/uiCard";
 import { visibleUserMessageContent } from "@/utils/hitlReceiptDisplay";
 // --- Types ---
 interface LogEntry {
@@ -2370,7 +2358,7 @@ interface LogEntry {
   error_reason?: string;
   isExpanded: boolean;
   isRouter?: boolean;
-  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'tool_resolution' | 'intent' | 'permission' | 'external' | 'model' | 'agent' | 'context' | 'business_confirmation' | 'user_question' | 'ui_card' | 'system' | 'default';
+  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'tool_resolution' | 'intent' | 'permission' | 'external' | 'model' | 'agent' | 'context' | 'business_confirmation' | 'user_question' | 'system' | 'default';
   tool_name?: string;
   file_metadata?: import("@/utils/processTimeline").FileToolMetadata;
   resolution_status?: 'disabled' | 'missing' | 'filtered';
@@ -2530,7 +2518,6 @@ interface Message {
   };
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
-  uiCard?: UiCardState;
   _hasSilentlyRefreshed?: boolean;
 }
 
@@ -3866,10 +3853,11 @@ const syncResourceScopeActiveTabForDraft = () => {
 const loadResourceOptions = async () => {
   resourceOptionsLoading.value = true;
   try {
+    const skillAgentId = String(effectiveEmbedChatAgentId.value || '').trim();
     const [datasets, knowledge, globalSkills, personalSkills, mcpTools] = await Promise.allSettled([
       axios.get('/api/portal/metadata/datasets/accessible'),
       axios.get('/api/portal/ragflow/datasets', { params: { page: 1, page_size: 100, include_missing: false } }),
-      axios.get('/api/portal/skills'),
+      axios.get('/api/portal/skills', skillAgentId ? { params: { agent_id: skillAgentId } } : undefined),
       axios.get('/api/portal/skills/personal'),
       axios.get('/api/portal/tools/mcp'),
     ]);
@@ -4465,6 +4453,9 @@ watch(() => config.token, (newToken) => {
 watch(effectiveEmbedChatAgentId, (agentId) => {
     if (config.token) {
         void loadWelcomeCards(agentId);
+    }
+    if (resourceOptionsLoaded.value) {
+        void loadResourceOptions();
     }
 }, { immediate: true });
 
@@ -7737,25 +7728,6 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
-  userInput.value = content;
-  await sendMessage();
-};
-
-const submitUiCard = async (
-  msg: Message,
-  payload: { action: string; payload: Record<string, unknown> },
-) => {
-  const card = msg.uiCard;
-  if (!card || card.status !== "pending" || isProcessing.value) return;
-  const content = buildUiCardUserMessage(
-    card.card_id,
-    card.card_key,
-    payload.action,
-    payload.payload,
-  );
-  card.action = payload.action;
-  card.payload = payload.payload;
-  card.status = "submitted";
   userInput.value = content;
   await sendMessage();
 };

@@ -10,11 +10,6 @@ import {
   type UserQuestionState,
 } from "./userQuestion";
 import {
-  markOtherUiCardsStale,
-  parseUiCardEvent,
-  type UiCardState,
-} from "./uiCard";
-import {
   appendTimelineNarrationDelta,
   appendProcessNarrationText,
   appendTimelineReasoningDelta,
@@ -140,7 +135,6 @@ export interface AgentStreamMessage {
   groundingBlocked?: GroundingBlockedPayload;
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
-  uiCard?: UiCardState;
 }
 
 export type AddStreamLogFn<T extends AgentStreamMessage = AgentStreamMessage> = (
@@ -668,25 +662,6 @@ export function handleUserQuestion<T extends AgentStreamMessage>(
   });
 }
 
-export function handleUiCard<T extends AgentStreamMessage>(
-  msg: T,
-  data: Record<string, unknown>,
-  addLog: AddStreamLogFn<T>,
-  allMessages?: Array<{ role?: string; content?: string; uiCard?: UiCardState }>,
-) {
-  const parsed = parseUiCardEvent(data);
-  if (!parsed) return;
-  if (allMessages) markOtherUiCardsStale(allMessages, parsed.card_id);
-  msg.uiCard = parsed;
-  addLog(msg, {
-    id: `ui_card_${parsed.card_id}`,
-    title: "业务对话卡片",
-    details: parsed.title,
-    status: "pending",
-    category: "ui_card",
-  });
-}
-
 export function collapseSecondaryFoldsOnBody<T extends AgentStreamMessage>(msg: T): void {
   msg.isProcessNarrationExpanded = false;
   msg.isReasoningExpanded = false;
@@ -861,7 +836,6 @@ export function dispatchAgentscopeStreamEvent<T extends AgentStreamMessage>(
     content?: string;
     businessConfirmation?: BusinessConfirmationState;
     userQuestion?: UserQuestionState;
-    uiCard?: UiCardState;
   }>,
   onBashEnv?: (env: "host" | "docker" | "e2b" | "ssh" | "k8s") => void,
 ): boolean {
@@ -884,9 +858,6 @@ export function dispatchAgentscopeStreamEvent<T extends AgentStreamMessage>(
       return true;
     case "user_question":
       handleUserQuestion(msg, data, addLog, allMessages);
-      return true;
-    case "ui_card":
-      handleUiCard(msg, data, addLog, allMessages);
       return true;
     case "external_execution_result":
       if (msg.pendingExternalExecution) {

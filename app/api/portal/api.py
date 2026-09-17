@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.dependencies import require_admin, require_api_key
-from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, personal_skills, memory, saved_reports, portal_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, ui_cards, embed_apps
+from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, personal_skills, memory, saved_reports, portal_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, embed_apps
 
 portal_router = APIRouter()
 
@@ -63,8 +63,6 @@ portal_router.include_router(ragflow.router, prefix="/ragflow", tags=["RAGFlow�
 # 15. MCP 管理 (MCP Management)
 portal_router.include_router(mcp.router, prefix="/mcp", tags=["MCP管理"], dependencies=[Depends(require_api_key)])
 portal_router.include_router(mcp_service.router, prefix="/mcp-service", tags=["MCP服务台"], dependencies=[Depends(require_api_key)])
-portal_router.include_router(ui_cards.router, prefix="/ui-cards", tags=["对话卡片"], dependencies=[Depends(require_api_key)])
-portal_router.include_router(ui_cards.public_router, prefix="/ui-cards", tags=["对话卡片"])
 portal_router.include_router(embed_apps.router, prefix="/embed-apps", tags=["嵌入应用"], dependencies=[Depends(require_api_key)])
 
 # 16. 变更日志 (Changelog)

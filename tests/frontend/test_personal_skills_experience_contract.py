@@ -53,6 +53,9 @@ def test_chat_mount_includes_skill_scope():
 
 def test_skill_cascade_empty_state_points_to_personal_center():
     text = CASCADE.read_text(encoding="utf-8")
+    assert "active-config" not in text
+    assert "params: { agent_id: agentId }" in text
+    assert "/api/portal/skills" in text
     assert "/dashboard/personal?tab=skills" in text
     assert "SkillCascadeMenu" in CHAT_INPUT.read_text(encoding="utf-8") or "skill-cascade" in CHAT_INPUT.read_text(encoding="utf-8").lower()
     assert "SkillCascadeMenu" in CHAT_INPUT.read_text(encoding="utf-8")

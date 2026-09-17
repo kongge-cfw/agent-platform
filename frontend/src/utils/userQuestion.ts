@@ -87,7 +87,7 @@ export function buildUserQuestionUserMessage(
     lines.push("cancelled: true", "用户取消了本次提问，请停止当前任务，不要再次询问同一个问题。");
   } else {
     lines.push(
-      "请根据以上用户回答继续处理原问题。若仍缺少关键输入，本轮立刻再调用 ask_user_question（或 show_ui_card / request_user_confirmation）弹出下一张卡，不要只在正文里预告还需要确认什么。已回答的字段不要重问；信息已齐则直接执行。",
+      "请根据以上用户回答继续处理原问题。若仍缺少关键输入，本轮立刻再调用 ask_user_question（或 request_user_confirmation）弹出下一张卡，不要只在正文里预告还需要确认什么。已回答的字段不要重问；信息已齐则直接执行。",
     );
   }
   return lines.join("\n");

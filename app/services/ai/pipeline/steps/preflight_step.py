@@ -167,64 +167,6 @@ class PreflightStep(BasePipelineStep):
                 context.execution_status = "error"
                 return
 
-        from app.services.ai.ui_card import (
-            MAX_DATA_BYTES,
-            is_ui_card_receipt_message,
-            parse_ui_card_receipt,
-        )
-
-        if is_ui_card_receipt_message(incoming_content):
-            receipt = parse_ui_card_receipt(incoming_content)
-            if not receipt or not context.conversation_id:
-                yield {
-                    "type": "error",
-                    "status": "error",
-                    "content": "业务卡片回执格式无效或当前会话无法恢复卡片，请重新发起。",
-                    "trace_id": context.trace_id,
-                }
-                context.execution_status = "error"
-                return
-            payload_raw = json.dumps(receipt["payload"] or {}, ensure_ascii=False)
-            if len(payload_raw.encode("utf-8")) > MAX_DATA_BYTES:
-                yield {
-                    "type": "error",
-                    "status": "error",
-                    "content": "业务卡片回执 payload 超过 64KB，请精简后重试。",
-                    "trace_id": context.trace_id,
-                }
-                context.execution_status = "error"
-                return
-            from app.services.ai.ui_card_store import UiCardStore
-
-            try:
-                card_store = await UiCardStore.from_runtime()
-                await card_store.submit(
-                    user_id=context.lane_user_id,
-                    conversation_id=context.conversation_id,
-                    card_id=receipt["card_id"],
-                    action=receipt["action"],
-                    payload=receipt["payload"],
-                )
-            except (PermissionError, ValueError) as exc:
-                yield {
-                    "type": "error",
-                    "status": "error",
-                    "content": f"业务卡片回执未通过校验：{exc}",
-                    "trace_id": context.trace_id,
-                }
-                context.execution_status = "error"
-                return
-            except Exception:
-                logger.exception("Failed to validate ui-card receipt")
-                yield {
-                    "type": "error",
-                    "status": "error",
-                    "content": "当前无法验证业务卡片回执，请稍后重试。",
-                    "trace_id": context.trace_id,
-                }
-                context.execution_status = "error"
-                return
-
         # 3. Preparation Parent & Validation Timeline Logs
         from app.services.ai.agent_service import (
             _build_preparation_parent_log,

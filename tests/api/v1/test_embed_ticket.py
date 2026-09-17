@@ -38,6 +38,9 @@ def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "mcp_only"}) is True
     assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "nanzi_sql_rewrite"}) is False
     assert embed_path_allowed("GET", "/api/portal/auth/me") is True
+    assert embed_path_allowed("GET", "/api/portal/skills") is True
+    assert embed_path_allowed("GET", "/api/portal/skills/personal") is True
+    assert embed_path_allowed("GET", "/api/portal/agents/sys-agent-chat/active-config") is False
     assert embed_path_allowed("GET", "/api/portal/management/users") is False
     assert embed_path_allowed("POST", "/api/portal/mcp/servers") is False
     assert embed_path_allowed("POST", "/api/v1/chat/completions") is True

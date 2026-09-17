@@ -518,25 +518,6 @@ thought 不超过 40 个汉字。只返回下列 JSON，不要 Markdown 或额�
                     user_action_type="chat",
                 )
 
-        from app.services.ai.ui_card import is_ui_card_receipt_message
-
-        if last_agent_name and is_ui_card_receipt_message(user_input):
-            sticky_agent = self._match_agent(last_agent_name, agents_metadata)
-            if sticky_agent:
-                logger.info(
-                    "UI card receipt shortcut: sticky route to %s without LLM",
-                    sticky_agent["name"],
-                )
-                return TurnDecision.from_router_components(
-                    agent_id=sticky_agent["id"],
-                    agent_name=sticky_agent.get("name"),
-                    confidence=0.99,
-                    reasoning="业务卡片回执沿用上一轮智能体（跳过路由 LLM）",
-                    turn_labels=["ui_card_receipt", "follow_up"],
-                    relation_to_previous="follow_up",
-                    user_action_type="chat",
-                )
-
         if (
             last_agent_name
             and self._is_data_query_agent(agents_metadata, last_agent_name)

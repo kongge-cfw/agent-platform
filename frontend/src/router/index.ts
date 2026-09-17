@@ -41,12 +41,6 @@ const router = createRouter({
           name: 'EmbedChat',
           component: () => import('../views/EmbedChat.vue'),
           meta: { public: true, title: '嵌入式对话' } 
-        },
-        {
-          path: 'ui-card-demo',
-          name: 'UiCardDemo',
-          component: () => import('../views/UiCardDemo.vue'),
-          meta: { public: true, title: '对话卡片演示' }
         }
       ]
     },
@@ -211,12 +205,6 @@ const router = createRouter({
           meta: { perm: 'menu:mcp_management', title: 'MCP 工具集' }
         },
         {
-          path: 'ui-cards',
-          name: 'UiCards',
-          component: () => import('../views/UiCards.vue'),
-          meta: { perm: 'menu:ui_cards', title: '对话卡片' }
-        },
-        {
           path: 'embed-apps',
           name: 'EmbedApps',
           component: () => import('../views/EmbedApps.vue'),
@@ -316,7 +304,6 @@ const MENU_HOME_CANDIDATES: Array<{ perm: string; name: string }> = [
   { perm: 'menu:agent_management', name: 'AgentManagement' },
   { perm: 'menu:skills_management', name: 'SkillsManagement' },
   { perm: 'menu:mcp_management', name: 'McpManagement' },
-  { perm: 'menu:ui_cards', name: 'UiCards' },
   { perm: 'menu:mcp_service', name: 'McpServiceDesk' },
   { perm: 'menu:chat_logs', name: 'ChatLogs' },
   { perm: 'menu:metadata', name: 'Metadata' },

@@ -1,10 +1,9 @@
 /** 将 HITL 回执协议转成用户气泡可读摘要；发给模型的原文仍是协议文本。 */
 
 import { BUSINESS_CONFIRMATION_MESSAGE_PREFIX } from "./businessConfirmation";
-import { UI_CARD_MESSAGE_PREFIX } from "./uiCard";
 import { USER_QUESTION_MESSAGE_PREFIX } from "./userQuestion";
 
-export type HitlReceiptKind = "user_question" | "business_confirmation" | "ui_card";
+export type HitlReceiptKind = "user_question" | "business_confirmation";
 
 export interface HitlReceiptDisplay {
   kind: HitlReceiptKind;
@@ -44,20 +43,6 @@ function formatBusinessConfirmationSummary(content: string): string {
   return "已确认业务数据";
 }
 
-const UI_CARD_ACTION_LABELS: Record<string, string> = {
-  confirm: "已确认",
-  reject: "已驳回",
-  ack: "已查看",
-  close: "已关闭",
-  viewed: "已查看",
-};
-
-function formatUiCardSummary(content: string): string {
-  const action = protocolLine(content, "action").toLowerCase();
-  const verb = UI_CARD_ACTION_LABELS[action] || "已提交";
-  return `${verb}业务卡片`;
-}
-
 export function formatHitlReceiptDisplay(content: string | undefined | null): HitlReceiptDisplay | null {
   const text = String(content || "");
   if (text.includes(USER_QUESTION_MESSAGE_PREFIX)) {
@@ -65,9 +50,6 @@ export function formatHitlReceiptDisplay(content: string | undefined | null): Hi
   }
   if (text.includes(BUSINESS_CONFIRMATION_MESSAGE_PREFIX)) {
     return { kind: "business_confirmation", summary: formatBusinessConfirmationSummary(text) };
-  }
-  if (text.includes(UI_CARD_MESSAGE_PREFIX)) {
-    return { kind: "ui_card", summary: formatUiCardSummary(text) };
   }
   return null;
 }

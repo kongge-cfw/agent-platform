@@ -111,7 +111,6 @@ READ_ONLY_TOOL_NAMES = {
     "list_available_agents",
     "request_user_confirmation",
     "ask_user_question",
-    "show_ui_card",
     "get_my_tasks",
     "jira_search",
     "jira_get_projects",

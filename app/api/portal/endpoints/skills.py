@@ -14,6 +14,12 @@ from app.core.config import settings
 from app.core.dependencies import require_api_key, require_permission
 from app.core.orm import get_db_session
 from app.services.ai.agent_manager import AgentManagerService
+from app.services.ai.skill_resolver import skill_filter_kwargs_from_config
+from app.services.embed_identity import (
+    agent_config_matches_lock,
+    is_embed_session,
+    locked_agent_id,
+)
 from app.services.skill_publication_service import (
     PublicationConflictError,
     PublicationNotFoundError,
@@ -215,19 +221,62 @@ def get_file_tree(dir_path: str, base_path: str) -> list:
         logger.error(f"[Skills] Error generating tree for {dir_path}: {e}")
     return tree
 
+def _requested_agent_matches_lock(requested: str, locked: str, config: Any) -> bool:
+    if requested == locked:
+        return True
+    if config is None:
+        return False
+    return agent_config_matches_lock(
+        getattr(config, "agent_id", None),
+        getattr(config, "agent_name", None),
+        locked,
+    )
+
+
+async def _resolve_published_skill_filter(
+    *,
+    agent_id: Optional[str],
+    user: Dict,
+    session: Any,
+) -> Dict[str, Any]:
+    """按已发布版本解析公共技能白名单；嵌入会话未传 agent_id 时用 Ticket 锁定智能体。"""
+    requested = str(agent_id or "").strip()
+    locked = locked_agent_id(user) if is_embed_session(user) else ""
+    effective = requested or locked
+    empty_filter = {"skills_custom": False, "allowed_global_skills": None}
+    if not effective or session is None or not hasattr(session, "execute"):
+        return empty_filter
+
+    config = await AgentManagerService.get_active_agent_config(session, agent_id=effective)
+    if is_embed_session(user) and locked and requested:
+        if not _requested_agent_matches_lock(requested, locked, config):
+            raise HTTPException(status_code=403, detail="嵌入会话只能查询当前锁定智能体的技能")
+    return skill_filter_kwargs_from_config(config)
+
+
 @router.get("", response_model=Dict[str, Any])
 async def list_skills(
+    agent_id: Optional[str] = None,
     user: Dict = Depends(require_api_key),
+    session: AsyncSession = Depends(get_db_session),
 ):
     """
     扫描技能物理目录，解析 SKILL.md 返回技能列表。
+    传入 agent_id（嵌入会话也可省略，改用 Ticket 锁定智能体）时，按该智能体
+    已发布版本的 skills_custom / skills 过滤公共技能。
     平台技能目录可供登录用户查询和使用；创建、编辑、删除等管理操作
     仍由 element:skills:admin 单独保护。
     """
-    skills_list = []
+    filter_kw = await _resolve_published_skill_filter(
+        agent_id=agent_id,
+        user=user,
+        session=session,
+    )
+    skills_custom = bool(filter_kw.get("skills_custom"))
     if not os.path.exists(settings.SKILLS_DIR):
-        return {"status": "success", "data": []}
-        
+        return {"status": "success", "data": [], "skills_custom": skills_custom}
+
+    skills_list = []
     try:
         for item in sorted(os.listdir(settings.SKILLS_DIR)):
             item_path = os.path.join(settings.SKILLS_DIR, item)
@@ -239,8 +288,16 @@ async def list_skills(
     except Exception as e:
         logger.error(f"[Skills] Failed to list skills: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-        
-    return {"status": "success", "data": skills_list}
+
+    if skills_custom:
+        allow = {
+            str(skill_id).strip()
+            for skill_id in (filter_kw.get("allowed_global_skills") or [])
+            if str(skill_id).strip()
+        }
+        skills_list = [meta for meta in skills_list if str(meta.get("id") or "").strip() in allow]
+
+    return {"status": "success", "data": skills_list, "skills_custom": skills_custom}
 
 
 @router.get("/publication-requests", summary="列出待审核的平台技能发布申请")

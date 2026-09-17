@@ -236,15 +236,13 @@ _AGENT_SIGNATURE_RE = re.compile(
 
 
 def is_hitl_receipt_user_query(text: str | None) -> bool:
-    """当前用户消息是否为提问卡 / 确认卡 / 对话卡片回执。"""
+    """当前用户消息是否为提问卡 / 确认卡回执。"""
     from app.services.ai.business_confirmation import is_business_confirmation_receipt_message
-    from app.services.ai.ui_card import is_ui_card_receipt_message
     from app.services.ai.user_question import is_user_question_receipt_message
 
     return (
         is_user_question_receipt_message(text)
         or is_business_confirmation_receipt_message(text)
-        or is_ui_card_receipt_message(text)
     )
 
 

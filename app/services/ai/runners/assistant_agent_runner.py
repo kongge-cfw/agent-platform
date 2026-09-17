@@ -2525,26 +2525,6 @@ class AssistantAgentRunner(BaseExecutor):
                     return
                 state["hitl_card_emitted"] = True
                 yield question_event
-            if result.get("ui_card"):
-                from app.services.ai.ui_card import persist_ui_card_event
-
-                card_event = result["ui_card"]
-                try:
-                    await persist_ui_card_event(
-                        event=card_event,
-                        user_id=self._runtime_user_id(),
-                        conversation_id=self.conversation_id or "",
-                    )
-                except Exception:
-                    logger.exception("Failed to persist pending ui card")
-                    yield {
-                        "type": "error",
-                        "status": "error",
-                        "content": "无法保存业务卡片，请稍后重试。",
-                    }
-                    return
-                state["hitl_card_emitted"] = True
-                yield card_event
             if result.get("citation"):
                 yield result["citation"]
             if result.get("trace"):
@@ -3728,7 +3708,6 @@ class AssistantAgentRunner(BaseExecutor):
 
         from app.services.ai.business_confirmation import build_business_confirmation_sse
         from app.services.ai.user_question import build_user_question_sse
-        from app.services.ai.ui_card import build_ui_card_sse
 
         confirmation_output = tool_output
         if isinstance(tool_output, dict) and "text" in tool_output:
@@ -3750,13 +3729,6 @@ class AssistantAgentRunner(BaseExecutor):
             "user_question": None
             if is_error
             else build_user_question_sse(
-                tool_name=tool_name,
-                tool_output=confirmation_output,
-                tool_call_id=tool_id,
-            ),
-            "ui_card": None
-            if is_error
-            else build_ui_card_sse(
                 tool_name=tool_name,
                 tool_output=confirmation_output,
                 tool_call_id=tool_id,

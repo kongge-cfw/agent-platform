@@ -74,7 +74,6 @@ _EXCLUDED_TOOL_NAMES = frozenset(
         "delete_user_preference",
         "ask_user_question",
         "request_user_confirmation",
-        "show_ui_card",
     }
 )
 

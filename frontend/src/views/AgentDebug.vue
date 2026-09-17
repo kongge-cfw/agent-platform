@@ -10,7 +10,6 @@ import ToolPermissionCard from "@/components/chat/ToolPermissionCard.vue";
 import GroundingBlockedCard from "@/components/GroundingBlockedCard.vue";
 import BusinessConfirmationCard from "@/components/BusinessConfirmationCard.vue";
 import UserQuestionCard from "@/components/UserQuestionCard.vue";
-import UiCardHost from "@/components/UiCardHost.vue";
 import DatasetCapabilityMenu from "@/components/chatbi/DatasetCapabilityMenu.vue";
 import DatasetPortalDrawer from "@/components/chatbi/DatasetPortalDrawer.vue";
 import ChatBIInsightPanel from "@/components/chatbi/ChatBIInsightPanel.vue";
@@ -81,10 +80,6 @@ import {
   buildUserQuestionUserMessage,
   type UserQuestionState,
 } from "@/utils/userQuestion";
-import {
-  buildUiCardUserMessage,
-  type UiCardState,
-} from "@/utils/uiCard";
 import { visibleUserMessageContent } from "@/utils/hitlReceiptDisplay";
 import { useToast } from "../composables/useToast";
 import { useTokenQuota } from "@/composables/useTokenQuota";
@@ -1417,7 +1412,6 @@ interface Message {
   groundingBlocked?: GroundingBlockedPayload;
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
-  uiCard?: UiCardState;
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
@@ -3943,25 +3937,6 @@ const submitUserQuestion = async (
   await sendMessage();
 };
 
-const submitUiCard = async (
-  msg: Message,
-  payload: { action: string; payload: Record<string, unknown> },
-) => {
-  const card = msg.uiCard;
-  if (!card || card.status !== "pending" || isProcessing.value) return;
-  const content = buildUiCardUserMessage(
-    card.card_id,
-    card.card_key,
-    payload.action,
-    payload.payload,
-  );
-  card.action = payload.action;
-  card.payload = payload.payload;
-  card.status = "submitted";
-  userInput.value = content;
-  await sendMessage();
-};
-
 const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
   const pending = msg.pendingPermission;
   if (!pending || pending.status !== "pending" || pending.isSubmitting) return;
@@ -4787,7 +4762,7 @@ onUnmounted(() => {
                 <MessageRenderer
                   v-if="!msg.groundingBlocked && !msg.datasetNavigation?.groups?.length"
                   :content="visibleStreamBody(msg)"
-                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion || !!msg.uiCard"
+                  :hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"
                   @quick-question="handleQuickQuestion"
                   @show-citation="(payload) => handleShowCitation(msg, payload.id, payload.anchor)"
                   @open-canvas="handleOpenCanvas"
@@ -4942,13 +4917,6 @@ onUnmounted(() => {
                   class="typing-cursor"
                 ></span>
               </div>
-
-              <UiCardHost
-                v-if="msg.uiCard"
-                :payload="msg.uiCard"
-                :disabled="isProcessing"
-                @submit="(payload) => submitUiCard(msg, payload)"
-              />
 
               <style scoped>
               .typing-cursor::after {
