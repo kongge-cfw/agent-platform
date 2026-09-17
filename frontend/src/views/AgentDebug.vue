@@ -109,6 +109,7 @@ import SavedReportRunModal from "@/components/chat/SavedReportRunModal.vue";
 import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
 import { isImageAttachment } from "@/utils/attachmentImages";
 import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
+import { isPlatformRoutedUrl, withAppBase } from "@/utils/appBase";
 import { copyToClipboard } from "@/utils/clipboard";
 import {
   applyStreamErrorMessage,
@@ -2077,17 +2078,16 @@ const handleSelectLocalFs = (payload: { type: 'local_file' | 'local_dir'; path: 
 const resolveFileUrl = (url: string): string => {
   if (!url) return '';
   if (isDirectRenderableUrl(url)) {
-    return url;
+    if (/^(https?:|data:|blob:|quick:|canvas:)/i.test(url)) return url;
+    return withAppBase(url);
   }
   const publicUploadUrl = resolvePublicUploadsPreviewUrl(url);
   if (publicUploadUrl) return publicUploadUrl;
-  if (!url.startsWith('/static/') &&
-      !url.startsWith('/api/') &&
-      !url.startsWith('/assets/')) {
+  if (!isPlatformRoutedUrl(url)) {
     const convParam = conversationId.value ? `&conversation_id=${encodeURIComponent(conversationId.value)}` : "";
-    return `/api/v1/chat/fs/preview?path=${encodeURIComponent(url)}${convParam}`;
+    return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(url)}${convParam}`);
   }
-  return url;
+  return withAppBase(url);
 };
 
 const {

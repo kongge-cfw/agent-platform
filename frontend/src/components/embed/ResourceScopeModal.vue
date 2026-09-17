@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { mcpToolDisplayName as formatMcpToolDisplayName } from "@/utils/mcpToolDisplayName";
+import { withAppBase } from "@/utils/appBase";
 
 type ResourceScopeGroup = {
   key: ResourceScopeGroupKey;
@@ -465,7 +466,7 @@ const skillsForActiveScope = computed(() => {
                 可前往
                 <a
                   class="text-emerald-600 hover:underline font-semibold"
-                  href="/dashboard/personal?tab=skills"
+                  :href="withAppBase('/dashboard/personal?tab=skills')"
                   target="_blank"
                   rel="noopener noreferrer"
                 >个人中心 · 我的技能</a>

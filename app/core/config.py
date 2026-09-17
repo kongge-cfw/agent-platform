@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"  # Aligned with .env
     ALLOWED_ORIGINS: List[str] = ["*"]
     APP_PUBLIC_URL: Optional[str] = None
+    # 公网二级目录前缀。空=挂在站点根路径。挂 /zhiyuan 时必须设为 /zhiyuan：
+    # MCP issuer、调度深链、OpenAPI servers 在进程启动时读取，不能只靠 Nginx Header。
+    APP_ROOT_PATH: str = ""
     # 仅建议在一个节点开启，避免多节点部署重复启动 APScheduler。
     TASK_SCHEDULER_ENABLED: bool = True
 

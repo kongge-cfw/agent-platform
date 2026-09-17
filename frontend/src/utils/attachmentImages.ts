@@ -1,3 +1,5 @@
+import { stripAppBase, withAppBase } from "./appBase";
+
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
 export function normalizeAttachmentExt(ext?: string, url?: string): string {
@@ -26,20 +28,20 @@ export function getAttachmentPreviewUrl(file: {
 }): string | null {
   if (!file.url || !isImageAttachment(file)) return null;
   if (/^https?:\/\//.test(file.url)) return file.url;
-  // 历史公共静态托管（兼容旧消息）
-  if (file.url.startsWith("/static/uploads/")) return file.url;
-  if (file.url.startsWith("/api/")) return file.url;
-  // 用户私有 uploads / 工作空间路径：走鉴权预览 API
-  return `/api/v1/chat/fs/preview?path=${encodeURIComponent(file.url)}`;
+  const path = stripAppBase(file.url);
+  if (path.startsWith("/static/uploads/")) return withAppBase(file.url);
+  if (path.startsWith("/api/")) return withAppBase(file.url);
+  return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(file.url)}`);
 }
 
 /** `/api/...` 预览需带鉴权头，不能直接塞进 <img src> */
 export function attachmentPreviewNeedsAuthFetch(previewUrl: string | null | undefined): boolean {
   if (!previewUrl) return false;
-  if (previewUrl.startsWith("/static/")) return false;
+  const path = stripAppBase(previewUrl);
+  if (path.startsWith("/static/")) return false;
   if (/^https?:\/\//.test(previewUrl)) return false;
   if (previewUrl.startsWith("blob:") || previewUrl.startsWith("data:")) return false;
-  return previewUrl.startsWith("/api/");
+  return path.startsWith("/api/");
 }
 
 /** 附件在服务器上的绝对路径（供 AI 上下文与工具使用） */
@@ -55,8 +57,9 @@ export function getServerAttachmentPath(file: {
     return file.url || "";
   }
   const url = file.url || "";
-  if (url.startsWith("/static/uploads/")) {
-    const fileName = url.split("/").filter(Boolean).pop() || file.filename || "";
+  const path = stripAppBase(url);
+  if (path.startsWith("/static/uploads/")) {
+    const fileName = path.split("/").filter(Boolean).pop() || file.filename || "";
     return `/app/data/uploads/${fileName}`;
   }
   if (url && !url.startsWith("http")) {

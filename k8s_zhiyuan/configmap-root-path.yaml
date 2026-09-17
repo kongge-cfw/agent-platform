@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nanzi-ai-agent-config
+  namespace: nanzi-ai-agent
+data:
+  APP_ROOT_PATH: "/zhiyuan"

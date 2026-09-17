@@ -27,6 +27,7 @@ import AgentFlowGuideBanner from "../components/agent/AgentFlowGuideBanner.vue";
 import MessageRenderer from "../components/MessageRenderer.vue";
 import type { MarkdownTheme } from "@/types/markdownTheme";
 import axios from "@/utils/axios";
+import { withAppBase } from "@/utils/appBase";
 import { createUuid } from "../utils/conversationId";
 import { copyToClipboard } from "../utils/clipboard";
 import { getTemperatureGuidance } from "../utils/temperatureGuidance";
@@ -1908,14 +1909,14 @@ const openPreview = async (agent: AIAgent) => {
     if (res.data?.code === 200 && res.data.data?.ticket) {
       const ticket = res.data.data.ticket;
       const url = `/embed/chat?ticket=${encodeURIComponent(ticket)}&agent_id=${encodeURIComponent(agentKey)}&theme=light`;
-      window.open(url, "_blank");
+      window.open(withAppBase(url), "_blank");
       return;
     }
   } catch (e) {
     console.warn("Failed to generate embed ticket for preview, falling back to chat route", e);
   }
   // 降级兜底：在平台内部对话页打开
-  window.open(`/dashboard/chat?agent_id=${encodeURIComponent(agentKey)}`, "_blank");
+  window.open(withAppBase(`/dashboard/chat?agent_id=${encodeURIComponent(agentKey)}`), "_blank");
 };
 
 const createExternalEngineAgent = async () => {

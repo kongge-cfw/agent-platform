@@ -12,6 +12,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.app_prefix import apply_root_to_public_base
 from app.core.config import settings
 from app.core.orm import AsyncSessionLocal, engine
 from app.core import redis
@@ -1295,7 +1296,7 @@ async def _saved_report_subscription_wrapper(subscription_id: int, is_manual: bo
                             enabled=bool(getattr(subscription, "ai_analysis_enabled", True)),
                             analysis_instruction=getattr(subscription, "analysis_instruction", None),
                         )
-                        public_base = str(settings.APP_PUBLIC_URL or "").rstrip("/")
+                        public_base = apply_root_to_public_base(str(settings.APP_PUBLIC_URL or "").rstrip("/"))
                         report_url = (
                             f"{public_base}/dashboard/chat?dataset_portal=1&report_id={report.id}&run_id={run.id}"
                             if public_base and run else ""

@@ -1,5 +1,7 @@
+import { stripAppBase, withAppBase } from './appBase';
+
 const GENERATED_FILE_PATH_PREFIX = '/api/v1/chat/generated-files/';
-const GENERATED_FILE_URL_PATTERN = /(?:https?:\/\/[^\s<>"']+)?\/api\/v1\/chat\/generated-files\/[0-9a-f]{32}\?token=[A-Za-z0-9_-]+(?:#[A-Za-z0-9._~-]+)?/gi;
+const GENERATED_FILE_URL_PATTERN = /(?:https?:\/\/[^\s<>"']+)?\/(?:[\w-]+\/)?api\/v1\/chat\/generated-files\/[0-9a-f]{32}\?token=[A-Za-z0-9_-]+(?:#[A-Za-z0-9._~-]+)?/gi;
 
 const defaultPageUrl = () => {
   if (typeof window !== 'undefined' && window.location?.href) {
@@ -19,9 +21,9 @@ export const normalizeGeneratedFileHref = (href: string) => {
     const url = new URL(href, 'http://placeholder.local');
     if (
       (url.protocol === 'http:' || url.protocol === 'https:')
-      && url.pathname.startsWith(GENERATED_FILE_PATH_PREFIX)
+      && stripAppBase(url.pathname).startsWith(GENERATED_FILE_PATH_PREFIX)
     ) {
-      return `${url.pathname}${url.search}${url.hash}`;
+      return `${withAppBase(stripAppBase(url.pathname))}${url.search}${url.hash}`;
     }
   } catch {
     // Preserve malformed or non-URL values for the existing renderer logic.
@@ -35,11 +37,12 @@ export const resolveGeneratedFileHref = (href: string, pageUrl = defaultPageUrl(
   try {
     const page = new URL(pageUrl);
     const url = new URL(href, page);
-    if (!url.pathname.startsWith(GENERATED_FILE_PATH_PREFIX)) {
+    if (!stripAppBase(url.pathname).startsWith(GENERATED_FILE_PATH_PREFIX)) {
       return href;
     }
     url.protocol = page.protocol;
     url.host = page.host;
+    url.pathname = withAppBase(stripAppBase(url.pathname));
     return url.href;
   } catch {
     return href;

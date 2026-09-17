@@ -6,6 +6,7 @@ import gzip
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core import database
+from app.core.app_prefix import internal_request_path
 from typing import Optional
 
 from app.services.audit_service import AuditService, MAX_AUDIT_TEXT_BYTES
@@ -39,7 +40,7 @@ def _decode_captured_response_body(
 class AccessLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 1. Path Filtering: Only log /api/ requests
-        if not request.url.path.startswith("/api/"):
+        if not internal_request_path(request).startswith("/api/"):
             return await call_next(request)
 
         # 2. Trace ID Logic
@@ -114,7 +115,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             await AuditService.log_request_data(
                 trace_id=trace_id,
                 user_name=user_name,
-                endpoint=request.url.path,
+                endpoint=internal_request_path(request),
                 method=request.method,
                 status_code=response.status_code,
                 process_time_ms=process_time,

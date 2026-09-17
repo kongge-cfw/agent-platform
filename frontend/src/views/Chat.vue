@@ -43,6 +43,7 @@ import {
     createSavedReportOpenMessage,
     type SavedReportOpenRequest,
 } from '../utils/savedReportOpenProtocol';
+import { withAppBase } from '../utils/appBase';
 
 const route = useRoute();
 const router = useRouter();
@@ -64,7 +65,7 @@ const parseSavedReportDetailTab = (value: unknown): SavedReportOpenRequest["deta
 
 const initChat = () => {
     // 基础路径
-    iframeUrl.value = '/embed/chat';
+    iframeUrl.value = withAppBase('/embed/chat');
     
     // 设置超时检测 (5秒)
     isInitTimedOut.value = false;

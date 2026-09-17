@@ -744,6 +744,7 @@ CFG_REDIS_HOST="127.0.0.1"
 CFG_REDIS_PORT="6379"
 CFG_REDIS_DB="0"
 CFG_PUBLIC_URL="http://127.0.0.1:8001"
+CFG_ROOT_PATH=""
 
 if [ -f "configmap.yaml" ]; then
   log_info "检测到已存在 configmap.yaml，自动读取现有参数作为默认候选值。"
@@ -769,6 +770,8 @@ if [ -f "configmap.yaml" ]; then
   [ -n "$val" ] && CFG_REDIS_DB="$val"
   val=$(grep -E '^\s*APP_PUBLIC_URL:' configmap.yaml | awk -F'"' '{print $2}' || true)
   [ -n "$val" ] && CFG_PUBLIC_URL="$val"
+  val=$(grep -E '^\s*APP_ROOT_PATH:' configmap.yaml | awk -F'"' '{print $2}' || true)
+  CFG_ROOT_PATH="$val"
 fi
 
 echo "请选择主数据库类型："
@@ -794,6 +797,12 @@ prompt_input "Redis DB 库索引" "$CFG_REDIS_DB" CFG_REDIS_DB
 echo
 echo "平台外部访问基准地址 (影响 CORS 跨域与静态资源定位)："
 prompt_input "应用访问 URL (APP_PUBLIC_URL)" "$CFG_PUBLIC_URL" CFG_PUBLIC_URL
+echo "访问路径前缀：独占域名留空。与其它系统共用 Host 时填 /zhiyuan（进程必填，不能只靠 Ingress Header）。"
+prompt_input "APP_ROOT_PATH（一级目录留空）" "$CFG_ROOT_PATH" CFG_ROOT_PATH
+case "$CFG_ROOT_PATH" in
+  zhiyuan|/zhiyuan|/zhiyuan/) CFG_ROOT_PATH="/zhiyuan" ;;
+  /) CFG_ROOT_PATH="" ;;
+esac
 
 cat <<EOF > configmap.yaml
 apiVersion: v1
@@ -812,6 +821,7 @@ data:
   TASK_SCHEDULER_ENABLED: "true"
 
   APP_PUBLIC_URL: "${CFG_PUBLIC_URL}"
+  APP_ROOT_PATH: "${CFG_ROOT_PATH}"
   ALLOWED_ORIGINS: '["${CFG_PUBLIC_URL}"]'
   BROWSER_VIEWER_ALLOWED_ORIGINS: "${CFG_PUBLIC_URL}"
 
@@ -1058,16 +1068,21 @@ if [ "$run_data_init" = "true" ]; then
 fi
 
 echo
-prompt_confirm "是否配置 Ingress 外部路由网关 (ingress.example.yaml)？" "N" enable_ingress
+prompt_confirm "是否配置 Ingress 外部路由网关？" "N" enable_ingress
 if [ "$enable_ingress" = "true" ]; then
   prompt_input "Ingress 绑定的完整主机域名" "nanzi.example.com" INGRESS_HOST
+  INGRESS_FILE="ingress.example.yaml"
+  if [ "$CFG_ROOT_PATH" = "/zhiyuan" ]; then
+    INGRESS_FILE="ingress-zhiyuan.example.yaml"
+    log_info "已选择二级目录 /zhiyuan，将应用剥前缀 Ingress，并要求 ConfigMap APP_ROOT_PATH=/zhiyuan。"
+  fi
   if [ "$DRY_RUN" = "true" ]; then
     printf "  %b[DRY-RUN 演练]%b 验证替换域名后的 Ingress 资源配置...\n" "${C_YELLOW}" "${C_RESET}"
-    sed "s/nanzi\.example\.com/${INGRESS_HOST}/g" ingress.example.yaml | kubectl apply --dry-run=client -f - 2>/dev/null || true
+    sed "s/nanzi\.example\.com/${INGRESS_HOST}/g" "$INGRESS_FILE" | kubectl apply --dry-run=client -f - 2>/dev/null || true
     log_success "Ingress 路由语法校验通过"
   else
-    sed "s/nanzi\.example\.com/${INGRESS_HOST}/g" ingress.example.yaml | kubectl apply -f -
-    log_success "Ingress 路由已应用"
+    sed "s/nanzi\.example\.com/${INGRESS_HOST}/g" "$INGRESS_FILE" | kubectl apply -f -
+    log_success "Ingress 路由已应用 ($INGRESS_FILE)"
   fi
 fi
 

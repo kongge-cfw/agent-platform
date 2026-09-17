@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
+from app.core.app_prefix import configured_root_path
 from app.core.errors import COMMON_ERROR_RESPONSES
 from app.schemas.response import ErrorResponse
 import logging
@@ -63,6 +64,9 @@ async def custom_openapi(app: FastAPI):
             "description": "API 密钥认证，在请求头中携带 `X-API-Key: your_api_key_here`"
         }
     }
+
+    root = configured_root_path()
+    openapi_schema["servers"] = [{"url": root or "/", "description": "NanZi"}]
     
     app.openapi_schema = openapi_schema
     return app.openapi_schema

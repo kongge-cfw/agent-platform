@@ -32,8 +32,8 @@ def test_platform_mcp_token_endpoint_supports_user_authorization_and_refresh():
 def test_platform_mcp_authorization_redirect_preserves_login_return_url():
     source = Path("app/api/mcp_platform.py").read_text(encoding="utf-8")
 
-    assert 'f"/login?' in source
-    assert "request.url.path" in source
+    assert "join_app_path('/login'" in source
+    assert "internal_request_path(request)" in source
     assert "request.url.query" in source
 
 
@@ -50,6 +50,19 @@ def test_platform_mcp_uses_public_url_for_transport_security():
 
     assert "build_mcp_transport_security" in source
     assert "transport_security=build_mcp_transport_security(settings.APP_PUBLIC_URL)" in source
+    assert "settings_obj.auth = auth" in source
+    assert "logger.warning" in source
+
+
+def test_main_binds_platform_mcp_urls_before_mounting_streamable_app():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "bind_platform_mcp_public_urls()" in source
+    assert source.index("bind_platform_mcp_public_urls()") < source.index(
+        'app.mount("/mcp", platform_mcp.streamable_http_app())'
+    )
+    assert "get_swagger_ui_oauth2_redirect_html" in source
+    assert '/docs/oauth2-redirect' in source
 
 
 def test_platform_mcp_uses_the_canonical_resource_uri_at_oauth_boundaries():

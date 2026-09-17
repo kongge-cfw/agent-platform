@@ -604,3 +604,8 @@ frame.contentWindow.postMessage({
 
 - **解答**：嵌入应用把「数据权限」设为「不下改写，交给业务 MCP」后，平台只做表级 ACL（认签发人），行级条件不再改写；`identity` 整包进入 MCP `X-Nanzi-User-Context`。
 - **解决方案**：数据集仍须打 `tenant_id`（若开启租户隔离），行级规则由业务 MCP 解释 `dept_code` / `extra_data`。
+
+### Q7: 南孜和其它系统共用一个公网 IP:端口，iframe 地址怎么写？
+
+- **解答**：平台同时支持挂在站点根路径（一级目录）和 Nginx 二级目录。启用二级目录时约定为 `/zhiyuan`。
+- **解决方案**：iframe 写成 `https://公网IP/zhiyuan/embed/chat?ticket=...`；Ticket 签发仍打内网 `POST /api/v1/embed/tickets`（Nginx 对外则是 `/zhiyuan/api/v1/embed/tickets`）。进程必须设 `APP_ROOT_PATH=/zhiyuan`；Nginx 示例见 `docker/nginx-zhiyuan.example.conf`，并带 `X-Forwarded-Prefix /zhiyuan`。K8s 推荐 `kubectl apply -k k8s_zhiyuan`（会写入 ConfigMap 并挂剥前缀 Ingress），不要只靠 Ingress snippet。独占域名时继续用 `/embed/chat` 即可。

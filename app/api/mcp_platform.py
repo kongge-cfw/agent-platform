@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.app_prefix import internal_request_path, join_app_path, public_base_url
 from app.core.orm import get_db_session
 from app.models.platform_mcp import (
     McpOAuthAccessToken,
@@ -75,7 +75,7 @@ async def _record_oauth_failure(
 
 
 def _base_url() -> str:
-    return str(settings.APP_PUBLIC_URL or "http://localhost:8001").rstrip("/")
+    return public_base_url()
 
 
 def _form_from_body(body: bytes) -> dict[str, str]:
@@ -199,11 +199,11 @@ async def authorize_get(
 
     user = await AuthService.verify_api_key(admin_token, db) if admin_token else None
     if user is None:
-        next_url = request.url.path
+        next_url = internal_request_path(request)
         if request.url.query:
             next_url = f"{next_url}?{request.url.query}"
         return RedirectResponse(
-            url=f"/login?{urlencode({'next': next_url})}",
+            url=f"{join_app_path('/login', request)}?{urlencode({'next': next_url})}",
             status_code=status.HTTP_302_FOUND,
         )
 
@@ -228,7 +228,7 @@ async def authorize_get(
 <h1>授权访问 NanZi Platform MCP</h1>
 <p><strong>{safe_name}</strong> 正在请求以 <strong>{safe_user}</strong> 的身份访问 NanZi。</p>
 <p>请求范围：<code>{html.escape(fields['scope'])}</code></p>
-<form method="post" action="/oauth/authorize">{hidden}
+<form method="post" action="{html.escape(join_app_path('/oauth/authorize', request))}">{hidden}
 <button name="approve" value="true" type="submit">同意并继续</button>
 <button name="approve" value="false" type="submit">拒绝</button>
 </form></body></html>""",

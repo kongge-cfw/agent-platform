@@ -9,6 +9,7 @@ import ConfirmModal from '@/components/ConfirmModal.vue';
 import PivotTable from '@/components/embed/PivotTable.vue';
 import { useToast } from '@/composables/useToast';
 import { buildGeneratedWorkspaceFilename, canWriteWorkspaceFile, createWorkspaceEntry, isDirectRenderableUrl, resolvePublicUploadsPreviewUrl, saveWorkspaceFileContent } from '@/utils/workspaceFilePreview';
+import { isPlatformRoutedUrl, withAppBase } from '@/utils/appBase';
 import { copyToClipboard } from '@/utils/clipboard';
 import { useCodeExecution } from '@/composables/chat/useCodeExecution';
 
@@ -623,17 +624,16 @@ const confirmOverwrite = async () => {
 const resolveUrlPath = (val: string): string => {
   if (!val) return '';
   if (isDirectRenderableUrl(val)) {
-    return val;
+    if (/^(https?:|data:|blob:|quick:|canvas:)/i.test(val)) return val;
+    return withAppBase(val);
   }
   const publicUploadUrl = resolvePublicUploadsPreviewUrl(val);
   if (publicUploadUrl) return publicUploadUrl;
   // 兼容绝对路径与相对物理路径，只要它不属于静态路由与API接口路由，均通过后端预览API拉取
-  if (!val.startsWith('/static/') &&
-      !val.startsWith('/api/') &&
-      !val.startsWith('/assets/')) {
+  if (!isPlatformRoutedUrl(val)) {
     const convId = resolveConversationId();
     const convParam = convId ? `&conversation_id=${encodeURIComponent(convId)}` : "";
-    return `/api/v1/chat/fs/preview?path=${encodeURIComponent(val)}${convParam}`;
+    return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(val)}${convParam}`);
   }
   return val;
 };

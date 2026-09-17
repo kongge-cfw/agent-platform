@@ -1,3 +1,5 @@
+import { isPlatformRoutedUrl, stripAppBase } from './appBase';
+
 const decodeHtmlAttribute = (value: string) => value
   .replace(/&quot;/gi, '"')
   .replace(/&#39;|&apos;/gi, "'")
@@ -32,9 +34,11 @@ export const isInternalUrl = (value: string | null | undefined): boolean => {
   const raw = String(value || '').trim();
   if (!raw) return false;
 
+  if (isPlatformRoutedUrl(raw)) return true;
+
   // 1. 相对路径形式（如 /api/v1/chat/...）
   if (raw.startsWith('/') || !/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
-    const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+    const normalized = stripAppBase(raw.startsWith('/') ? raw : `/${raw}`).split('#')[0].split('?')[0];
     return INTERNAL_PATH_PATTERN.test(normalized);
   }
 
@@ -42,7 +46,7 @@ export const isInternalUrl = (value: string | null | undefined): boolean => {
   try {
     const url = new URL(raw);
     // 内部 API 或静态资源路径
-    if (INTERNAL_PATH_PATTERN.test(url.pathname)) {
+    if (INTERNAL_PATH_PATTERN.test(stripAppBase(url.pathname))) {
       return true;
     }
     // 同源/站内地址（当前站点自身的主机名）

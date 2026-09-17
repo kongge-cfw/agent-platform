@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_index_declares_svg_png_and_apple_touch_icons_with_nanzi_title():
     index = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
 
-    assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />' in index
-    assert '<link rel="icon" type="image/png" sizes="512x512" href="/favicon.png" />' in index
-    assert '<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />' in index
+    assert '<link rel="icon" type="image/svg+xml" href="./favicon.svg" />' in index
+    assert '<link rel="icon" type="image/png" sizes="512x512" href="./favicon.png" />' in index
+    assert '<link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />' in index
     assert "<title>NanZi·智能体平台</title>" in index
 
 

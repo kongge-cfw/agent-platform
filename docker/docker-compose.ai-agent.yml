@@ -12,6 +12,8 @@ services:
       - ${NANZI_ENV_FILE:-.env}
     environment:
       - APP_ENV=${APP_ENV:-prod}
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL:-}
+      - APP_ROOT_PATH=${APP_ROOT_PATH:-}
       - HOST_DATA_DIR=${HOST_DATA_DIR:-}
     volumes:
       # 如需 Oracle Thick 模式，取消下一行并改为宿主机 Instant Client 路径

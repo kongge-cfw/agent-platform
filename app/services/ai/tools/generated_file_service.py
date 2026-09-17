@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.core.app_prefix import apply_root_if_platform_origin, apply_root_to_public_base
 from app.models.artifact import AiArtifact
 from app.core.orm import AsyncSessionLocal
 from app.services.config_service import ConfigService
@@ -51,7 +52,9 @@ async def get_download_url_prefix() -> str:
         logger.warning("Failed to read download_url_prefix from system config: %s", exc)
         configured = None
     configured_base = _normalize_public_base_url(configured)
-    return configured_base or _normalize_public_base_url(settings.APP_PUBLIC_URL)
+    if configured_base:
+        return apply_root_if_platform_origin(configured_base)
+    return apply_root_to_public_base(_normalize_public_base_url(settings.APP_PUBLIC_URL))
 
 
 def build_download_url(
@@ -62,10 +65,14 @@ def build_download_url(
 ) -> str:
     """Build a download URL from a resolved public prefix."""
     path = f"/api/v1/chat/generated-files/{artifact_id}?token={token}"
-    public_base = _normalize_public_base_url(
-        settings.APP_PUBLIC_URL if public_base_url is None else public_base_url
-    )
-    return f"{public_base}{path}" if public_base else path
+    if public_base_url is None:
+        public_base = apply_root_to_public_base(_normalize_public_base_url(settings.APP_PUBLIC_URL))
+    else:
+        public_base = _normalize_public_base_url(public_base_url)
+    if public_base:
+        return f"{public_base}{path}"
+    from app.core.app_prefix import join_app_path
+    return join_app_path(path)
 
 
 @dataclass(frozen=True)

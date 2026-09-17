@@ -7,6 +7,7 @@ from typing import Any, Mapping, Optional
 
 from fastapi import HTTPException, Request, status
 
+from app.core.app_prefix import internal_request_path
 from app.services.embed_identity import is_embed_session
 
 # (method or *, path glob) — 嵌入 session 默认拒绝，仅允许白名单。
@@ -113,7 +114,7 @@ def embed_path_allowed(method: str, path: str) -> bool:
 def enforce_embed_api_surface(request: Request, user_info: Optional[Mapping[str, Any]]) -> None:
     if not is_embed_session(user_info):
         return
-    path = request.url.path
+    path = internal_request_path(request)
     if embed_path_allowed(request.method, path):
         return
     raise HTTPException(

@@ -1,10 +1,13 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { installAppBase, isEmbedLocation, getAppBasePath, clearClientAuth, redirectToLogin } from '@/utils/appBase'
 import './style.css'
 import App from '@/App.vue'
 import router from '@/router'
-
 import axios from 'axios'
+
+installAppBase()
+axios.defaults.baseURL = getAppBasePath() || undefined
 
 // Global Axios Interceptor for 401 Unauthorized
 axios.interceptors.response.use(
@@ -14,7 +17,7 @@ axios.interceptors.response.use(
       // In embedded mode or mcp probe/playground, we don't want to force redirect to login
       // instead, we let the component handle the state (e.g. showing "No Permission")
       if (
-        window.location.pathname.startsWith('/embed/') ||
+        isEmbedLocation() ||
         (error.config?.url?.startsWith('/mcp/') && !error.config?.url?.includes('/portal/')) ||
         error.config?.headers?.['X-Ignore-Auth-Redirect']
       ) {
@@ -22,12 +25,8 @@ axios.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // Clear local storage and redirect to login
-      localStorage.removeItem('api_key')
-      localStorage.removeItem('user_info')
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
-      }
+      clearClientAuth()
+      redirectToLogin()
     }
     return Promise.reject(error)
   }

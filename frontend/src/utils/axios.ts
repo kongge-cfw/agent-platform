@@ -4,10 +4,11 @@
  */
 import axios from 'axios'
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios'
+import { getAppBasePath, isEmbedLocation, clearClientAuth, redirectToLogin } from './appBase'
 
 // 创建 axios instance
 const instance = axios.create({
-  // 不需要 baseURL，Vite 代理会自动转发 /api 请求到后端
+  baseURL: getAppBasePath() || undefined,
   timeout: 60000, // 默认提高到 1 分钟，复杂任务请在请求中手动覆盖
   headers: {
     'Content-Type': 'application/json',
@@ -63,8 +64,7 @@ instance.interceptors.response.use(
         case 401:
           // In embedded mode or explicit probe request, we don't want to force redirect or clear critical tokens immediately
           if (
-            window.location.pathname.startsWith('/embed/') ||
-            window.location.pathname.includes('EmbedChat') ||
+            isEmbedLocation() ||
             (error.config?.url?.startsWith('/mcp/') && !error.config?.url?.includes('/portal/')) ||
             error.config?.headers?.['X-Ignore-Auth-Redirect']
           ) {
@@ -72,12 +72,8 @@ instance.interceptors.response.use(
             break;
           }
           // 未授权，清除本地存储并跳转登录
-          localStorage.removeItem('api_key')
-          localStorage.removeItem('user_info')
-          localStorage.removeItem('admin_token')
-          localStorage.removeItem('yovole_token')
-          document.cookie = 'admin_token=; path=/; max-age=0; samesite=lax'
-          window.location.href = '/login'
+          clearClientAuth()
+          redirectToLogin()
           break;
           
         case 403:

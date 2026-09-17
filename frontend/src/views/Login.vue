@@ -3,6 +3,7 @@ import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
 import { useBranding } from '../composables/useBranding'
+import { isBackendNextPath, stripAppBase, withAppBase } from '../utils/appBase'
 
 const router = useRouter()
 const route = useRoute()
@@ -176,11 +177,11 @@ const handleLoginSuccess = (userData: any) => {
       ? route.query.next
       : ''
     if (returnPath) {
-      // OAuth 授权端点由后端处理；必须整页请求，不能只让 SPA 改地址。
-      if (returnPath.startsWith('/oauth/authorize')) {
-        window.location.assign(returnPath)
+      // OAuth / docs 由后端处理；必须整页请求，不能只让 SPA 改地址。
+      if (isBackendNextPath(returnPath)) {
+        window.location.assign(withAppBase(returnPath))
       } else {
-        router.push(returnPath)
+        router.push(stripAppBase(returnPath))
       }
     } else if (userData.role !== 'admin') {
       router.push('/dashboard/workbench')

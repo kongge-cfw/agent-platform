@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { routerBase } from '../utils/appBase'
 import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Overview from '../views/Overview.vue'
@@ -18,7 +19,7 @@ import ChatLogs from '../views/ChatLogs.vue'
 import NoPermission from '../views/NoPermission.vue'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(routerBase()),
   routes: [
     {
       path: '/login',

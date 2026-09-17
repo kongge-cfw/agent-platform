@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.app_prefix import public_base_url
 from app.core.dependencies import require_api_key
 from app.core.orm import get_db_session
 from app.models.platform_mcp import (
@@ -586,13 +586,14 @@ async def get_overview(
         .all()
     )
     config = await PlatformMcpConfigService.get(db)
+    base = public_base_url()
     return {
         "service_name": PLATFORM_MCP_NAME,
         "mcp_endpoint": platform_mcp_resource_url(),
         "resource": platform_mcp_resource_url(),
-        "authorization_server": str(settings.APP_PUBLIC_URL or "http://localhost:8001").rstrip("/"),
-        "protected_resource_metadata": f"{str(settings.APP_PUBLIC_URL or 'http://localhost:8001').rstrip('/')}/.well-known/oauth-protected-resource/mcp/platform",
-        "authorization_server_metadata": f"{str(settings.APP_PUBLIC_URL or 'http://localhost:8001').rstrip('/')}/.well-known/oauth-authorization-server",
+        "authorization_server": base,
+        "protected_resource_metadata": f"{base}/.well-known/oauth-protected-resource/mcp/platform",
+        "authorization_server_metadata": f"{base}/.well-known/oauth-authorization-server",
         "jwks_url": None,
         "platform_enabled": bool(config.platform_enabled) if config else False,
         "client_count": len(clients),

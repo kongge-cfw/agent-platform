@@ -21,6 +21,9 @@ def test_k8s_docs_cover_first_deploy_secrets_data_init_and_upgrade_restart():
     assert "新环境可以不改" in text
     assert "管理员" in text
     assert "data-init-job.example.yaml" in text
+    assert "ingress.example.yaml" in text
+    assert "k8s_zhiyuan" in text
+    assert "APP_ROOT_PATH" in text
     assert "kubectl apply -f k8s_deploy/secret.yaml" in text
     assert "rollout restart deployment/nanzi-ai-agent" in text
     assert "系统配置或模型管理" in text

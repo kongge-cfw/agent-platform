@@ -4,6 +4,8 @@ from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from starlette.routing import Match
 
+from app.core.app_prefix import internal_request_path
+
 V1_API_PREFIX = "/api/v1"
 
 # 权限页可分配的外部 API 静态列表
@@ -78,7 +80,7 @@ def resolve_v1_api_resource_id(request: Request) -> tuple[str, str]:
         return build_api_resource_id(method, matched_path), matched_path
 
     route_path = getattr(route, "path", "") if route else ""
-    url_path = request.url.path
+    url_path = internal_request_path(request)
 
     if url_path.startswith(V1_API_PREFIX):
         return build_api_resource_id(method, url_path), url_path

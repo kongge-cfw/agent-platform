@@ -2,6 +2,7 @@
 import { ApiReference } from '@scalar/api-reference'
 import '@scalar/api-reference/style.css'
 import { computed, ref, onMounted } from 'vue'
+import { appLoginPath } from '../utils/appBase'
 
 const apiKey = ref(localStorage.getItem('api_key') || '')
 const specContent = ref<any>(null)
@@ -54,7 +55,7 @@ const configuration = computed(() => ({
 const goToLogin = () => {
   localStorage.removeItem('api_key')
   localStorage.removeItem('user_info')
-  window.location.href = '/login'
+  window.location.href = appLoginPath()
 }
 </script>
 

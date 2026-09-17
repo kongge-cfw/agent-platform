@@ -708,7 +708,7 @@ def test_token_lifecycle_table_hides_authorized_user_column():
 def test_login_reloads_backend_oauth_endpoint_after_same_origin_login():
     login = (ROOT / "frontend/src/views/Login.vue").read_text(encoding="utf-8")
 
-    assert "window.location.assign(returnPath)" in login
+    assert "window.location.assign(withAppBase(returnPath))" in login
     assert "oauth/authorize" in login
 
 

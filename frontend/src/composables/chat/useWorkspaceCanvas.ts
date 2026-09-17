@@ -1,5 +1,6 @@
 import { onUnmounted, ref, watch } from "vue";
 import axios from "@/utils/axios";
+import { isPlatformRoutedUrl } from "@/utils/appBase";
 import {
   openWorkspaceFileInCanvas,
   hasWorkspaceGlobPattern,
@@ -214,7 +215,7 @@ export function useWorkspaceCanvas(options: UseWorkspaceCanvasOptions) {
       payload.type === "html" &&
       (payload.content.startsWith("http://") ||
         payload.content.startsWith("https://") ||
-        payload.content.startsWith("/api/"))
+        isPlatformRoutedUrl(payload.content))
     ) {
       try {
         const resolvedUrl = options.resolveFileUrl(payload.content);

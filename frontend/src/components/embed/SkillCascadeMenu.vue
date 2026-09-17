@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import axios from '@/utils/axios'
 import { useToast } from '@/composables/useToast'
+import { withAppBase } from '@/utils/appBase'
 
 export interface SkillItem {
   id: string
@@ -225,7 +226,7 @@ void loadSkillsList()
             前往
             <a
               class="text-emerald-600 hover:underline font-semibold"
-              href="/dashboard/personal?tab=skills"
+              :href="withAppBase('/dashboard/personal?tab=skills')"
               target="_blank"
               rel="noopener noreferrer"
               @click.stop
@@ -279,7 +280,7 @@ void loadSkillsList()
     <!-- 桌面端保留「管理技能」；移动端底部抽屉不展示 -->
     <div v-if="!fullWidth" class="shrink-0 border-t border-gray-100 dark:border-gray-700/80 py-1 bg-white dark:bg-gray-800">
       <a
-        href="/dashboard/personal?tab=skills"
+        :href="withAppBase('/dashboard/personal?tab=skills')"
         target="_blank"
         rel="noopener noreferrer"
         class="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/70 transition-colors"

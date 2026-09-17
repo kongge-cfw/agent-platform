@@ -2262,6 +2262,7 @@ import SessionResourceScopeBar from "@/components/embed/SessionResourceScopeBar.
 import ResourceScopeModal from "@/components/embed/ResourceScopeModal.vue";
 import { isImageAttachment } from "@/utils/attachmentImages";
 import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
+import { isPlatformRoutedUrl, withAppBase } from "@/utils/appBase";
 import TraceLogViewer from "@/components/TraceLogViewer.vue";
 import ChatModelCallStatsModal from "@/components/chat/ChatModelCallStatsModal.vue";
 import DataPortalReportCreateModal from "@/components/data-portal/DataPortalReportCreateModal.vue";
@@ -5127,16 +5128,15 @@ const resolveFileUrl = (rawUrl: string): string => {
     url = url.replace(/###HTML_TAG_PLACEHOLDER_\d+###/g, '').trim();
   }
   if (isDirectRenderableUrl(url)) {
-    return url;
+    if (/^(https?:|data:|blob:|quick:|canvas:)/i.test(url)) return url;
+    return withAppBase(url);
   }
   const publicUploadUrl = resolvePublicUploadsPreviewUrl(url);
   if (publicUploadUrl) return publicUploadUrl;
   // 兼容绝对路径与相对物理路径，只要它不属于静态路由与API接口路由，均通过后端预览API拉取
-  if (!url.startsWith('/static/') &&
-      !url.startsWith('/api/') &&
-      !url.startsWith('/assets/')) {
+  if (!isPlatformRoutedUrl(url)) {
     const convParam = conversationId.value ? `&conversation_id=${encodeURIComponent(conversationId.value)}` : "";
-    return `/api/v1/chat/fs/preview?path=${encodeURIComponent(url)}${convParam}`;
+    return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(url)}${convParam}`);
   }
   return url;
 };

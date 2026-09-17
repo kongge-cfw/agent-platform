@@ -117,6 +117,7 @@ async def verify_v1_api_access(
     Enforce permission check for V1 External APIs.
     Checks if the user has explicit 'api' permission for the current endpoint.
     """
+    from app.core.app_prefix import internal_request_path
     from app.core.v1_api_access import is_v1_api_whitelisted, resolve_v1_api_resource_id
 
     if not request.scope.get("route"):
@@ -125,7 +126,7 @@ async def verify_v1_api_access(
     resource_id, path_template = resolve_v1_api_resource_id(request)
 
     # Whitelist Core Endpoints (Allow all authenticated users)
-    if is_v1_api_whitelisted(path_template) or is_v1_api_whitelisted(request.url.path):
+    if is_v1_api_whitelisted(path_template) or is_v1_api_whitelisted(internal_request_path(request)):
         return user_info
 
     try:

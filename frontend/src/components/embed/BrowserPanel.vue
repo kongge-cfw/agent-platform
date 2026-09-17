@@ -1027,6 +1027,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import axios from '@/utils/axios';
+import { withAppBase } from '@/utils/appBase';
 
 type ApprovalMode = 'guarded' | 'autopilot';
 type ControlOwner = 'ai' | 'human';
@@ -1754,7 +1755,7 @@ const connect = async () => {
   if (!props.visible || !props.sessionId || !props.viewerToken || typeof window === 'undefined') return;
   await nextTick();
   const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = `${scheme}//${window.location.host}/api/v1/chat/browser/sessions/${encodeURIComponent(props.sessionId)}/viewer`;
+  const url = `${scheme}//${window.location.host}${withAppBase(`/api/v1/chat/browser/sessions/${encodeURIComponent(props.sessionId)}/viewer`)}`;
   const client = new WebSocket(url, [`browser-viewer.${props.viewerToken}`]);
   socket.value = client;
   client.onopen = () => {

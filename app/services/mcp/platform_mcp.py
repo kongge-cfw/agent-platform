@@ -21,6 +21,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 
+from app.core.app_prefix import public_base_url
 from app.core.config import settings
 from app.core import redis
 from app.core.orm import AsyncSessionLocal
@@ -190,8 +191,7 @@ def get_method_definition(name: str) -> PlatformMcpMethodDefinition | None:
 
 
 def _platform_base_url() -> str:
-    value = str(settings.APP_PUBLIC_URL or "http://localhost:8001").rstrip("/")
-    return value
+    return public_base_url()
 
 
 def platform_mcp_resource_url() -> str:
@@ -238,6 +238,33 @@ platform_mcp = PlatformFastMCP(
         required_scopes=[],
     ),
 )
+
+
+def bind_platform_mcp_public_urls() -> None:
+    """在 ``streamable_http_app()`` 之前写入 issuer。FastMCP 会把 URL 打进路由。"""
+    issuer = _platform_base_url()
+    resource = platform_mcp_resource_url()
+    auth = AuthSettings(
+        issuer_url=issuer,
+        resource_server_url=resource,
+        required_scopes=[],
+    )
+    settings_obj = getattr(platform_mcp, "settings", None)
+    if settings_obj is None or not hasattr(settings_obj, "auth"):
+        logger.warning("Platform MCP settings.auth 不存在，issuer 未绑定: %s", issuer)
+        return
+    try:
+        settings_obj.auth = auth
+    except Exception as exc:
+        logger.warning("Platform MCP settings.auth 赋值失败，改用 object.__setattr__: %s", exc)
+        try:
+            object.__setattr__(settings_obj, "auth", auth)
+        except Exception as exc2:
+            logger.warning("Platform MCP issuer 绑定失败 (%s / %s)，请确认进程已设 APP_ROOT_PATH", exc, exc2)
+            return
+    current = getattr(settings_obj, "auth", None)
+    bound_issuer = str(getattr(current, "issuer_url", "") or "")
+    logger.info("Platform MCP issuer bound to %s (resource=%s)", bound_issuer or issuer, resource)
 
 
 @asynccontextmanager

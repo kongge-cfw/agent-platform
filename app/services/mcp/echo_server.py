@@ -13,6 +13,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
 
+from app.core.app_prefix import apply_root_to_public_base
 from app.core.config import settings
 from app.models.mcp import McpServer
 from app.services.mcp.mcp_auth_policy import (
@@ -52,8 +53,8 @@ def resolve_echo_base_url(request_base_url: str, public_url: str | None) -> str:
     """优先使用有效 APP_PUBLIC_URL，否则回退到当前请求地址。"""
     parsed = _parse_public_url(public_url)
     if parsed is not None:
-        return parsed[0]
-    return str(request_base_url).rstrip("/")
+        return apply_root_to_public_base(parsed[0])
+    return apply_root_to_public_base(str(request_base_url).rstrip("/"))
 
 
 def _mask_secret(value: str | None, *, prefix_length: int = 6, suffix_length: int = 6) -> str | None:

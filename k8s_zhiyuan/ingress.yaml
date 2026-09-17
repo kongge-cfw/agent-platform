@@ -1,24 +1,31 @@
-# 可选示例：仅适用于安装了 ingress-nginx 的集群。
-# 修改域名和 TLS Secret 后，再单独 apply，或加入 kustomization.yaml。
+# 二级目录 /zhiyuan：与其它系统共用 Ingress 入口时使用本文件，不要和
+# k8s_deploy/ingress.example.yaml（path: /）同时挂到同一个 host。
+#
+# 应用仍监听 / 与 /api。Ingress 剥掉 /zhiyuan。
+# 本文件由 `kubectl apply -k k8s_zhiyuan` 一起下发；install.sh 仍 apply
+# k8s_deploy/ingress-zhiyuan.example.yaml（内容需保持一致）。
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: nanzi-ai-agent
+  name: nanzi-ai-agent-zhiyuan
   namespace: nanzi-ai-agent
   labels:
     app.kubernetes.io/name: nanzi-ai-agent
     app.kubernetes.io/component: ingress
   annotations:
-    # SSE、长时间 Agent 请求和浏览器人工接管需要较长连接超时。
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-body-size: "25m"
-    # 浏览器运行时注册表目前位于进程内，需要会话粘性。
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-name: "nanzi_route"
+    nginx.ingress.kubernetes.io/session-cookie-path: "/zhiyuan"
     nginx.ingress.kubernetes.io/session-cookie-max-age: "86400"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-Prefix /zhiyuan;
 spec:
   ingressClassName: nginx
   tls:
@@ -29,15 +36,10 @@ spec:
     - host: nanzi.example.com
       http:
         paths:
-          # 一级目录：独占域名时使用 path /
-          - path: /
-            pathType: Prefix
+          - path: /zhiyuan(/|$)(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: nanzi-ai-agent
                 port:
                   name: http
-          # 二级目录 /zhiyuan：不要和上面的 path / 同时挂到同一 host。
-          # 完整可 apply 示例见 k8s_deploy/ingress-zhiyuan.example.yaml
-          # 一键：kubectl apply -k k8s_zhiyuan
-          # Nginx 裸机示例见 docker/nginx-zhiyuan.example.conf

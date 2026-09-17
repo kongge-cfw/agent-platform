@@ -423,6 +423,7 @@
     import { useToast } from '../composables/useToast';
     import { copyToClipboard } from '../utils/clipboard';
     import { renderSafeMarkdownPreview } from '../utils/safeMarkdown';
+    import { getAppBasePath, withAppBase } from '../utils/appBase';
 
     interface IntegrationTab {
         id: string;
@@ -466,7 +467,8 @@ const contextPayload = ref('{\n  "business_context": {\n    "ticket_id": "INC-10
     const selectedIntegrationAgentId = ref('');
 
     const integrationHost = computed(() => {
-        return typeof window !== 'undefined' ? window.location.origin : '';
+        if (typeof window === 'undefined') return '';
+        return `${window.location.origin}${getAppBasePath()}`;
     });
     const integrationApiKey = computed(() => config.token.trim() || 'CURRENT_USER_API_KEY');
     const integrationHasRealApiKey = computed(() => Boolean(config.token.trim()));
@@ -904,7 +906,7 @@ const isExpanded = ref(true);
     };
 
 const connect = () => {
-    iframeUrl.value = '/embed/chat?strict_token=1';
+    iframeUrl.value = withAppBase('/embed/chat?strict_token=1');
     log('Loading IFrame (strict token mode)...');
 };
 

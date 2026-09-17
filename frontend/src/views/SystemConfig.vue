@@ -1967,7 +1967,7 @@ const configShortDescriptions: Record<string, string> = {
   password_expire_days: '密码修改有效间隔天数（天）。个人中心将依据此天数提醒用户及时更新密码。默认 30 天。',
   agentscope_inject_runtime_state: '是否向 Agent 上下文注入运行时状态（当前时间、任务态、上下文占用）。',
   agentscope_inject_time_interval_hours: '运行时时间字段重复注入的最小间隔（小时）。',
-  download_url_prefix: '生成文件下载链接时使用的公网地址前缀。',
+  download_url_prefix: '生成文件下载链接时使用的公网地址前缀。平台 Origin 会自动补二级目录；CDN 请填独立域名。',
   multimodal_model_name: '当前对话模型不支持识图时，用此模型解析图片为文字。',
   agent_max_toolcall_timeout: '单次 Agent 工具调用的全局超时时间（秒），默认 180 秒，范围 1-3600；版本级配置优先于全局配置。',
   sql_execution_mode: 'remote 调用独立数据服务，local 由平台直连数据源。',
@@ -3480,8 +3480,8 @@ onUnmounted(() => {
                                class="shadow-sm focus:ring-primary focus:border-primary block w-full sm:text-sm border-gray-300 rounded-md bg-gray-100 p-2 disabled:opacity-70 disabled:cursor-not-allowed"
                              />
                              <div class="mt-2 text-xs text-blue-700 bg-blue-50/60 p-3 rounded-xl border border-blue-100/70 leading-relaxed">
-                               <div>💡 <strong>设置示例：</strong>填写 <code class="font-mono text-blue-800">https://your-domain.example.com</code>，生成的下载地址会是 <code class="font-mono text-blue-800">https://your-domain.example.com/api/v1/chat/generated-files/...</code>。</div>
-                               <div class="mt-1">只填写协议、域名和必要的反向代理前缀，<strong>不要填写</strong> API 路径、文件名或 token。留空时回退到环境变量 <code class="font-mono text-blue-800">APP_PUBLIC_URL</code> 或相对地址。</div>
+                               <div>💡 <strong>设置示例：</strong>填写平台 Origin <code class="font-mono text-blue-800">https://your-domain.example.com</code>。一级目录下生成 <code class="font-mono text-blue-800">https://your-domain.example.com/api/v1/chat/generated-files/...</code>；二级目录 <code class="font-mono text-blue-800">/zhiyuan</code> 会自动补前缀。</div>
+                               <div class="mt-1">只填写协议、域名；CDN 填独立域名（不会被拼 <code class="font-mono text-blue-800">/zhiyuan</code>）。也可直接写成 <code class="font-mono text-blue-800">https://your-domain.example.com/zhiyuan</code>。<strong>不要填写</strong> API 路径、文件名或 token。留空时回退到环境变量 <code class="font-mono text-blue-800">APP_PUBLIC_URL</code>。</div>
                              </div>
                           </div>
                           <div v-else-if="item.key === 'sandbox_ssh_auth_type'">

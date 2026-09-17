@@ -1204,7 +1204,7 @@ const effectiveGuideToken = computed(() => guideSelectedToken.value.trim() || on
 const mcpJson = computed(() => JSON.stringify({
   mcpServers: {
     'nanzi-platform': {
-      url: overview.value.mcp_endpoint || '/mcp/platform',
+      url: overview.value.mcp_endpoint || `${String(overview.value.authorization_server || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '')}/mcp/platform`,
       headers: {
         Authorization: `Bearer ${effectiveGuideToken.value}`,
       },
@@ -1302,7 +1302,7 @@ mcp_response.raise_for_status()`)
 const generatedMcpJson = computed(() => JSON.stringify({
   mcpServers: {
     'nanzi-platform': {
-      url: overview.value.mcp_endpoint || '/mcp/platform',
+      url: overview.value.mcp_endpoint || mcpEndpoint.value,
       headers: {
         Authorization: `Bearer ${oneTimeAccessToken.value}`,
       },

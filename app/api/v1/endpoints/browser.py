@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_admin, require_api_key
+from app.core.app_prefix import join_app_path, request_is_secure
 from app.core.orm import AsyncSessionLocal, get_db_session
 from app.schemas.browser import (
     BrowserPolicyUpdateRequest,
@@ -294,8 +295,8 @@ async def issue_browser_viewer_token(
             max_age=30 * 60,
             httponly=True,
             samesite="lax",
-            secure=request.url.scheme == "https",
-            path=f"/api/v1/chat/browser/sessions/{session_id}",
+            secure=request_is_secure(request),
+            path=join_app_path(f"/api/v1/chat/browser/sessions/{session_id}", request),
         )
         return {"session_id": session_id, "token": token, "expires_at": expires_at}
     except BrowserAccessDenied as exc:

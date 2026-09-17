@@ -1,12 +1,16 @@
 import api from '@/utils/axios'
 import { ref } from 'vue'
+import { getAppBasePath, withAppBase } from '@/utils/appBase'
 import {
   DEFAULT_BRANDING,
   DEFAULT_REPO_URL,
   type PublicBranding,
 } from '@/constants/branding'
 
-const BRANDING_CACHE_KEY = 'nanzi_public_branding'
+const BRANDING_CACHE_KEY = (() => {
+  const base = getAppBasePath()
+  return base ? `${base.slice(1)}:nanzi_public_branding` : 'nanzi_public_branding'
+})()
 
 function readCachedBranding(): PublicBranding | null {
   if (typeof localStorage === 'undefined') return null
@@ -46,7 +50,7 @@ function applyFavicon(iconUrl: string) {
     link.rel = 'icon'
     document.head.appendChild(link)
   }
-  link.href = href
+  link.href = href.startsWith('/') ? withAppBase(href) : href
 }
 
 export function applyDocumentTitle(pageTitle?: string) {

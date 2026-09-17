@@ -16,6 +16,9 @@ data:
 
   # 按实际部署域名修改；ALLOWED_ORIGINS 必须是 JSON 数组字符串。
   APP_PUBLIC_URL: "https://nanzi.example.com"
+  # 一级目录留空。二级目录必须写成 /zhiyuan；Ingress snippet 可能被集群关掉，不能只靠 Header。
+  # 一键：kubectl apply -k k8s_zhiyuan
+  APP_ROOT_PATH: ""
   ALLOWED_ORIGINS: '["https://nanzi.example.com"]'
   BROWSER_VIEWER_ALLOWED_ORIGINS: "https://nanzi.example.com"
 

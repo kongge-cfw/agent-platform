@@ -1,0 +1,18 @@
+# 二级目录 /zhiyuan 一键清单。必须放在 k8s_deploy 外面：
+# overlay 若写在 k8s_deploy/overlays 里再引用上级 kustomization，kustomize 会报 cycle；
+# 若引用上级单个 yaml，默认 kubectl apply -k 会因 load restrictor 拒绝。
+#
+#   kubectl apply -k k8s_zhiyuan
+#
+# 不要和 k8s_deploy/ingress.example.yaml（path: /）同时挂到同一个 Host。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nanzi-ai-agent
+
+resources:
+  - ../k8s_deploy
+  - ingress.yaml
+
+patches:
+  - path: configmap-root-path.yaml

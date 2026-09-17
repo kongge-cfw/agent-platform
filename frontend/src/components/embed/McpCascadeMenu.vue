@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import axios from '@/utils/axios'
 import { useToast } from '@/composables/useToast'
 import { mcpToolDisplayName } from '@/utils/mcpToolDisplayName'
+import { withAppBase } from '@/utils/appBase'
 
 export interface McpToolItem {
   id: string
@@ -237,7 +238,7 @@ void loadTools()
           前往
           <a
             class="text-emerald-600 hover:underline font-semibold"
-            href="/dashboard/personal?tab=mcp"
+            :href="withAppBase('/dashboard/personal?tab=mcp')"
             target="_blank"
             rel="noopener noreferrer"
             @click.stop
@@ -389,7 +390,7 @@ void loadTools()
       </div>
       <a
         v-if="!fullWidth"
-        href="/dashboard/personal?tab=mcp"
+        :href="withAppBase('/dashboard/personal?tab=mcp')"
         target="_blank"
         rel="noopener noreferrer"
         class="block w-full text-center text-[11px] font-medium text-primary/80 hover:text-primary py-0.5"

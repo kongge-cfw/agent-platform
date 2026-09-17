@@ -12,8 +12,12 @@ logging.basicConfig(
 from fastapi import FastAPI, HTTPException, Cookie, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.openapi.docs import (
+    get_redoc_html,
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError # Import Validation Error
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -21,6 +25,12 @@ from app.api.portal.api import portal_router
 from app.api.v1.api import v1_router
 from app.core.config import settings
 from app.core import database, redis
+from app.core.app_prefix import (
+    AppRootPathMiddleware,
+    get_app_root_path,
+    inject_spa_index,
+    join_app_path,
+)
 from app.core.middleware import AccessLogMiddleware
 from app.core.logging_filters import install_cancellation_log_filters
 from app.services.audit_service import AuditService
@@ -36,7 +46,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from app.core.orm import get_db_session
 from app.services.mcp.echo_server import echo_mcp, echo_mcp_lifespan
-from app.services.mcp.platform_mcp import platform_mcp, platform_mcp_lifespan
+from app.services.mcp.platform_mcp import (
+    bind_platform_mcp_public_urls,
+    platform_mcp,
+    platform_mcp_lifespan,
+)
 from app.api.mcp_platform import router as mcp_platform_router
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -341,6 +355,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(AccessLogMiddleware)
+app.add_middleware(AppRootPathMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS if settings.ALLOWED_ORIGINS else ["*"],
@@ -351,6 +366,8 @@ app.add_middleware(
 )
 
 # 内置平台 Echo MCP：创建配置后供所有智能体挂载，用于验证实际出站请求。
+# FastMCP 会把 issuer/resource URL 打进 streamable 路由，必须在 mount 前绑定。
+bind_platform_mcp_public_urls()
 app.mount("/mcp/echo", echo_mcp.streamable_http_app())
 app.mount("/mcp", platform_mcp.streamable_http_app())
 
@@ -387,22 +404,38 @@ async def get_current_user_from_cookie(
     return user
 
 @app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui_html(user: Optional[dict] = Depends(get_current_user_from_cookie)):
+async def custom_swagger_ui_html(
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user_from_cookie),
+):
     if not user:
-        return RedirectResponse("/login?next=/docs")
+        return RedirectResponse(f"{join_app_path('/login', request)}?next=/docs")
+    root = get_app_root_path(request)
     return get_swagger_ui_html(
-        openapi_url="/openapi.json",
+        openapi_url=f"{root}/openapi.json",
         title=app.title + " - Swagger UI",
-        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+        oauth2_redirect_url=join_app_path(
+            app.swagger_ui_oauth2_redirect_url or "/docs/oauth2-redirect",
+            request,
+        ),
         swagger_ui_parameters={"persistAuthorization": True}
     )
 
+
+@app.get("/docs/oauth2-redirect", include_in_schema=False)
+async def swagger_ui_oauth2_redirect() -> HTMLResponse:
+    return get_swagger_ui_oauth2_redirect_html()
+
 @app.get("/redoc", include_in_schema=False)
-async def redoc_html(user: Optional[dict] = Depends(get_current_user_from_cookie)):
+async def redoc_html(
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user_from_cookie),
+):
     if not user:
-        return RedirectResponse("/login?next=/redoc")
+        return RedirectResponse(f"{join_app_path('/login', request)}?next=/redoc")
+    root = get_app_root_path(request)
     return get_redoc_html(
-        openapi_url="/openapi.json",
+        openapi_url=f"{root}/openapi.json",
         title=app.title + " - ReDoc"
     )
 
@@ -438,7 +471,7 @@ app.mount("/branding", StaticFiles(directory=branding_dir), name="branding")
 
 
 @app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
+async def serve_spa(full_path: str, request: Request):
     # Skip API routes (handled above)
     if full_path.startswith("api"):
          raise HTTPException(status_code=404, detail="API Not Found")
@@ -451,8 +484,10 @@ async def serve_spa(full_path: str):
     # Serve index.html for all other routes (SPA)
     index_file = os.path.join(frontend_dist, "index.html")
     if os.path.exists(index_file):
-        return FileResponse(
-            index_file, 
+        with open(index_file, encoding="utf-8") as fh:
+            html = inject_spa_index(fh.read(), get_app_root_path(request))
+        return HTMLResponse(
+            html,
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                 "Pragma": "no-cache",

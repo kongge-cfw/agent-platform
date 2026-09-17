@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import require_api_key
 from app.core.orm import get_db_session
 from app.services.auth_service import AuthService
+from app.core.app_prefix import clear_admin_token_cookie, set_admin_token_cookie
 
 router = APIRouter()
 
@@ -43,14 +44,7 @@ async def sso_login(
         if not api_key:
              raise HTTPException(500, "User has no valid API Key for session")
 
-        response.set_cookie(
-            key="admin_token",
-            value=api_key,
-            httponly=True,
-            max_age=86400,
-            samesite="lax",
-            secure=False
-        )
+        set_admin_token_cookie(response, api_key)
 
         # 注册在线状态到 Redis
         await AuthService.register_online_state(api_key, user)
@@ -98,14 +92,7 @@ async def login(
             )
         api_key = request.api_key
         # Set cookie for API Key login
-        response.set_cookie(
-            key="admin_token",
-            value=request.api_key,
-            httponly=True,
-            max_age=86400,
-            samesite="lax",
-            secure=False
-        )
+        set_admin_token_cookie(response, request.api_key)
         await AuthService.record_user_login(int(user["user_id"]), db=db)
 
     # 2. Password Login
@@ -141,14 +128,7 @@ async def login(
             if not api_key:
                  raise HTTPException(500, "User has no valid API Key for session")
 
-            response.set_cookie(
-                key="admin_token",
-                value=api_key,
-                httponly=True,
-                max_age=86400,
-                samesite="lax",
-                secure=False
-            )
+            set_admin_token_cookie(response, api_key)
             # 注册在线状态到 Redis
             await AuthService.register_online_state(api_key, user)
             # 记录用户登录时间
@@ -213,14 +193,7 @@ async def two_factor_login(
     if not api_key:
         raise HTTPException(500, "User has no valid API Key for session")
 
-    response.set_cookie(
-        key="admin_token",
-        value=api_key,
-        httponly=True,
-        max_age=86400,
-        samesite="lax",
-        secure=False
-    )
+    set_admin_token_cookie(response, api_key)
     # 注册在线状态到 Redis
     await AuthService.register_online_state(api_key, user)
     # 记录用户登录时间
@@ -285,7 +258,7 @@ async def logout(
     if api_key:
         await AuthService.expire_api_key(api_key)
         
-    response.delete_cookie(key="admin_token")
+    clear_admin_token_cookie(response)
     return {"status": "success", "message": "Logged out successfully"}
 
 
@@ -617,14 +590,7 @@ async def reset_my_api_key(
         raise HTTPException(status_code=500, detail="重置 API Key 失败")
 
     # 同步更新当前会话 Cookie 与在线状态
-    response.set_cookie(
-        key="admin_token",
-        value=new_api_key,
-        httponly=True,
-        max_age=86400,
-        samesite="lax",
-        secure=False
-    )
+    set_admin_token_cookie(response, new_api_key)
     await AuthService.register_online_state(new_api_key, user)
 
     return {

@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import axios from '@/utils/axios'
 import { modelApi, type AIModel, type ReasoningEffort } from '@/api/model'
 import { mcpToolDisplayName } from '@/utils/mcpToolDisplayName'
+import { withAppBase } from '@/utils/appBase'
 
 export type TaskApprovalMode = 'ask' | 'allow' | 'deny'
 
@@ -1362,7 +1363,7 @@ watch(
               可前往
               <a
                 class="font-semibold text-emerald-600 hover:underline"
-                href="/dashboard/personal?tab=skills"
+                :href="withAppBase('/dashboard/personal?tab=skills')"
                 target="_blank"
                 rel="noopener noreferrer"
               >个人中心 · 我的技能</a>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { linkifyGeneratedFileUrls, resolveGeneratedFileHref } from '@/utils/generatedFileUrl';
+import { isPlatformRoutedUrl, withAppBase } from '@/utils/appBase';
 import { appendBrowserOpenActions, appendBrowserOpenActionsToCode, isBrowserOpenableUrl } from '@/utils/messageBrowserLinks';
 import { renderMarkdown } from '@/utils/markdown';
 import { enhanceMarkdownTablesForMobile } from '@/utils/markdownTableResponsive';
@@ -188,21 +189,19 @@ interface ContentSegment {
       }
       if (val.includes('uploads/')) {
         const parts = val.split('uploads/');
-        const newVal = '/static/uploads/' + parts[parts.length - 1];
+        const newVal = withAppBase('/static/uploads/' + parts[parts.length - 1]);
         return `${attr}="${newVal}"`;
       }
       if (!isHttpUrl(val) &&
           !val.startsWith('data:') &&
           !val.startsWith('quick:') &&
           !val.startsWith('canvas:') &&
-          !val.startsWith('/static/') &&
-          !val.startsWith('/api/') &&
-          !val.startsWith('/assets/')) {
+          !isPlatformRoutedUrl(val)) {
         const convId = props.conversationId === undefined
           ? localStorage.getItem("yovole_embed_conv_id") || ""
           : props.conversationId || "";
         const convParam = convId ? `&conversation_id=${encodeURIComponent(convId)}` : "";
-        const newVal = `/api/v1/chat/fs/preview?path=${encodeURIComponent(val)}${convParam}`;
+        const newVal = withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(val)}${convParam}`);
         return `${attr}="${newVal}"`;
       }
       return match;

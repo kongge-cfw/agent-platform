@@ -1,5 +1,6 @@
 import axios from '@/utils/axios'
 import { copyToClipboard } from './clipboard'
+import { isPlatformRoutedUrl, withAppBase } from './appBase'
 
 export type WorkspaceCanvasType = 'html' | 'code' | 'pdf' | 'csv' | 'image'
 
@@ -146,14 +147,14 @@ export function resolvePublicUploadsPreviewUrl(path: string): string | null {
   ]
   for (const prefix of prefixes) {
     if (normalized.startsWith(prefix)) {
-      return `/static/uploads/${normalized.slice(prefix.length).replace(/^\/+/, '')}`
+      return withAppBase(`/static/uploads/${normalized.slice(prefix.length).replace(/^\/+/, '')}`)
     }
   }
 
   const marker = '/data/uploads/'
   const markerIndex = normalized.indexOf(marker)
   if (markerIndex >= 0) {
-    return `/static/uploads/${normalized.slice(markerIndex + marker.length).replace(/^\/+/, '')}`
+    return withAppBase(`/static/uploads/${normalized.slice(markerIndex + marker.length).replace(/^\/+/, '')}`)
   }
   return null
 }
@@ -167,21 +168,22 @@ export function isDirectRenderableUrl(url: string): boolean {
     url.startsWith('blob:') ||
     url.startsWith('quick:') ||
     url.startsWith('canvas:') ||
-    url.startsWith('/static/') ||
-    url.startsWith('/api/') ||
-    url.startsWith('/assets/')
+    isPlatformRoutedUrl(url)
   )
 }
 
 export function resolveFsPreviewUrl(path: string, conversationId?: string | null): string {
   if (!path) return ''
   if (isDirectRenderableUrl(path)) {
-    return path
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('quick:') || path.startsWith('canvas:')) {
+      return path
+    }
+    return withAppBase(path)
   }
   const publicUploadUrl = resolvePublicUploadsPreviewUrl(path)
   if (publicUploadUrl) return publicUploadUrl
   const convParam = conversationId ? `&conversation_id=${encodeURIComponent(conversationId)}` : ''
-  return `/api/v1/chat/fs/preview?path=${encodeURIComponent(path)}${convParam}`
+  return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(path)}${convParam}`)
 }
 
 export function hasWorkspaceGlobPattern(path: string): boolean {

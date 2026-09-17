@@ -112,7 +112,9 @@
 | `secret.example.yaml` | Secret 模板（数据库/Redis/API Key 等敏感值）；复制后改名并填真实值，不要直接提交真实凭据 |
 | `sandbox-rbac.example.yaml` | `sandbox_policy = k8s` 时沙箱所需的最小 RBAC：让平台 ServiceAccount 能在沙箱命名空间（默认与平台同命名空间 `nanzi-ai-agent`）创建/管理 Pod、PVC 等 |
 | `data-init-job.example.yaml` | 可选的一次性公共文档初始化 Job（把镜像内 `data/docs` 同步到 PVC）；不在默认 Kustomize 资源中 |
-| `ingress.example.yaml` | ingress-nginx 可选示例，含 SSE 超时与会话粘性配置 |
+| `ingress.example.yaml` | ingress-nginx 一级目录（path `/`）可选示例，含 SSE 超时与会话粘性 |
+| `ingress-zhiyuan.example.yaml` | 二级目录 `/zhiyuan` Ingress（剥前缀）；必须同时设 `APP_ROOT_PATH=/zhiyuan` |
+| `../k8s_zhiyuan/` | 在默认清单上写入 `APP_ROOT_PATH=/zhiyuan` 并挂二级 Ingress：`kubectl apply -k k8s_zhiyuan` |
 
 **运维与部署脚本工具**
 
@@ -567,6 +569,7 @@ docker push registry.example.com/nanzi-ai-agent:1.2.0
 | `service.yaml` | 不用 | 让集群内部通过 80 访问应用 8001 | 保持不变 |
 | `data-init-job.example.yaml` | 需要公共文档时可用 | 一次性把镜像内的公共文档同步到 PVC | 复制为 `data-init-job.yaml`，把镜像改成与 Deployment 相同后单独应用 |
 | `ingress.example.yaml` | 需要域名访问时 | 配置外部域名、TLS、SSE 超时和会话粘性 | 复制为 `ingress.yaml`，改域名和证书后单独应用 |
+| `../k8s_zhiyuan/` | 与其它系统共用 Host、挂 `/zhiyuan` 时 | 写入 `APP_ROOT_PATH=/zhiyuan` 并挂剥前缀 Ingress | `kubectl apply -k k8s_zhiyuan`；不要和一级 Ingress 同时用 |
 | `namespace.yaml` | 通常不用 | 创建独立的 `nanzi-ai-agent` 命名空间 | 保持不变 |
 
 ### 第 4 步：填写 `configmap.yaml`
@@ -576,7 +579,8 @@ docker push registry.example.com/nanzi-ai-agent:1.2.0
 
 | 配置项 | 示例值 | 是否必改 | 是干什么的 |
 | --- | --- | --- | --- |
-| `APP_PUBLIC_URL` | `https://nanzi.example.com` | 是 | 用户访问平台的公开地址，生成链接和部分通知会使用 |
+| `APP_PUBLIC_URL` | `https://nanzi.example.com` | 是 | 用户访问平台的公开地址（只填 Origin，不要带 `/zhiyuan` 或 `/api`） |
+| `APP_ROOT_PATH` | 空 或 `/zhiyuan` | 二级目录必改 | 一级目录留空；挂 `/zhiyuan` 时必须写成 `/zhiyuan`，不能只靠 Ingress Header |
 | `ALLOWED_ORIGINS` | `["https://nanzi.example.com"]` | 是 | 浏览器 CORS 白名单，必须是 JSON 数组字符串 |
 | `BROWSER_VIEWER_ALLOWED_ORIGINS` | `https://nanzi.example.com` | 是 | 浏览器人工接管/查看功能允许的来源 |
 | `DATABASE_TYPE` | `mysql` | 是 | 主库类型，只能按实际使用 `mysql` 或 `postgresql` |
@@ -745,6 +749,16 @@ kubectl -n nanzi-ai-agent get ingress
 
 之后通过 `https://你的域名` 访问。Ingress 示例不是默认资源，不执行这一步也不影响
 集群内的 Service 和 `port-forward` 访问。
+
+与其它系统共用同一个 Host、挂在二级目录 `/zhiyuan` 时，不要用上面的 `path: /`。
+先把 ConfigMap 的 `APP_ROOT_PATH` 设为 `/zhiyuan`（`install.sh` 会询问），再执行：
+
+```bash
+kubectl apply -k k8s_zhiyuan
+```
+
+或单独 apply `ingress-zhiyuan.example.yaml`，但 **ConfigMap 不能留空**，不能只靠 Ingress `configuration-snippet`。
+不要把一级 Ingress 和二级 Ingress 挂到同一个 Host。
 
 ## 首次登录后的可选能力配置
 

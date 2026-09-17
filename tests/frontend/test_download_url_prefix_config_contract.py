@@ -29,6 +29,9 @@ def test_download_url_prefix_prefers_system_config_and_keeps_env_fallback():
 
     assert 'ConfigService.get("download_url_prefix")' in source
     assert "settings.APP_PUBLIC_URL" in source
+    assert "if configured_base:" in source
+    assert "apply_root_if_platform_origin(configured_base)" in source
+    assert "apply_root_to_public_base(_normalize_public_base_url(settings.APP_PUBLIC_URL))" in source
 
 
 def test_system_config_shows_download_url_prefix_example():
@@ -38,3 +41,4 @@ def test_system_config_shows_download_url_prefix_example():
     assert "示例" in source
     assert "/api/v1/chat/generated-files/" in source
     assert "不要填写" in source
+    assert "/zhiyuan" in source
