@@ -83,6 +83,8 @@ def test_nginx_and_ingress_subdirectory_examples_are_complete():
     assert 'proxy_set_header Connection "upgrade"' not in nginx
     assert "X-Forwarded-Host $host" in nginx
     assert "set $nanzi_connection_upgrade" in nginx
+    assert "proxy_read_timeout 3600s" in nginx
+    assert "gzip off" in nginx
     assert "进程必须设置 APP_ROOT_PATH=/zhiyuan" in nginx
     assert "path: /zhiyuan(/|$)(.*)" in ingress
     assert "ConfigMap APP_ROOT_PATH=/zhiyuan" in ingress
