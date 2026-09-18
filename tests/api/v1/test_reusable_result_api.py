@@ -180,7 +180,9 @@ async def test_list_reusable_results_rejects_unowned_conversation(monkeypatch):
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json()["data"]["items"] == []
+    assert response.json()["data"]["total"] == 0
     assert "private result" not in response.text
 
 
@@ -278,8 +280,8 @@ async def test_list_reusable_results_returns_empty_for_owned_empty_conversation(
 
 
 @pytest.mark.asyncio
-async def test_list_reusable_results_still_404s_unowned_conversation_with_no_trace(monkeypatch):
-    """对既无执行历史、也不是活跃会话、也无 Redis 历史痕遁的其他用户会话，仍应 404。"""
+async def test_list_reusable_results_returns_empty_for_unowned_conversation_with_no_trace(monkeypatch):
+    """对既无执行历史、也不是活跃会话、也无 Redis 历史的会话返回 200 空列表，而不是 404。"""
     monkeypatch.setattr(
         memory_service,
         "get_reusable_result",
@@ -306,4 +308,7 @@ async def test_list_reusable_results_still_404s_unowned_conversation_with_no_tra
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json()["data"]["items"] == []
+    assert response.json()["data"]["total"] == 0
+    assert "private result" not in response.text

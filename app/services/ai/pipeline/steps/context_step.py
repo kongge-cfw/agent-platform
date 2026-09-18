@@ -232,7 +232,13 @@ class ContextStep(BasePipelineStep):
         enrich_messages_with_skill_meta(messages)
         context.messages = messages
 
-        if context.user_question_cancelled:
+        from app.services.ai.business_confirmation import is_business_confirmation_cancel_message
+        from app.services.ai.hitl_continuation import is_hitl_cancel_receipt
+
+        confirmation_cancelled = is_business_confirmation_cancel_message(user_query)
+        if context.user_question_cancelled or confirmation_cancelled or is_hitl_cancel_receipt(
+            user_query
+        ):
             from app.services.ai.agent_service import _final_process_timeline
             from app.services.ai.runtime.agentscope.process_timeline_snapshot import (
                 cancel_todo_items,
@@ -240,10 +246,30 @@ class ContextStep(BasePipelineStep):
             )
             import asyncio
 
-            cancellation_message = "已取消本次提问，本次任务已停止。"
+            if context.cancelled_cancellation_message:
+                cancellation_message = context.cancelled_cancellation_message
+            elif confirmation_cancelled:
+                cancellation_message = "已取消本次业务确认，本次任务已停止。"
+            else:
+                cancellation_message = "已取消本次提问，本次任务已停止。"
             context.full_response_content = cancellation_message
             context.execution_status = "cancelled"
             context.shared_state["execution_status"] = "cancelled"
+            if conversation_id:
+                try:
+                    from app.services.ai.hitl_continuation import HitlContinuationStore
+
+                    store = await HitlContinuationStore.from_runtime()
+                    await store.clear(
+                        user_info=context.user_info,
+                        conversation_id=conversation_id,
+                        user_id=lane_user_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[ContextStep] Failed to clear HITL continuation on cancel",
+                        exc_info=True,
+                    )
             timeline_state = context.shared_state.setdefault("process_timeline", [])
             if isinstance(timeline_state, list) and not any(
                 isinstance(item, dict) and item.get("kind") == "todo"
@@ -255,7 +281,9 @@ class ContextStep(BasePipelineStep):
                 if previous_todos:
                     _track_process_timeline(timeline_state, previous_todos)
             todo_cancellation = cancel_todo_items(timeline_state)
-            resolved_agent_name = "sys_question_cancel"
+            resolved_agent_name = (
+                "sys_confirmation_cancel" if confirmation_cancelled else "sys_question_cancel"
+            )
             resolved_display_name = "系统助手"
             if conversation_id:
                 asyncio.create_task(

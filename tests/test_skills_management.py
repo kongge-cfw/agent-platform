@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, UploadFile
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.api.portal.endpoints import skills
 from app.api.portal.endpoints.skills import FileEditRequest, SkillCreateRequest
@@ -162,7 +162,12 @@ def test_skills_lifecycle_flow(mock_skills_dir):
     scripts_dir = next(node for node in detail["file_tree"] if node["name"] == "scripts")
     assert len(scripts_dir["children"]) == 0
 
-    response = run(skills.delete_entire_skill("test-cli-helper", user=user))
+    with patch(
+        "app.api.portal.endpoints.skills.AgentManagerService.unbind_skill_from_versions",
+        new_callable=AsyncMock,
+        return_value=0,
+    ):
+        response = run(skills.delete_entire_skill("test-cli-helper", user=user, session=AsyncMock()))
     assert "物理彻底移除" in response["message"]
 
     response = run(skills.list_skills(user=user))
@@ -371,3 +376,23 @@ def test_embed_list_skills_uses_role_agent_skill_union(mock_skills_dir):
     assert response["status"] == "success"
     assert response["skills_custom"] is True
     assert {item["id"] for item in response["data"]} == {"skill-a", "skill-b"}
+
+
+def test_delete_entire_skill_unbinds_agent_versions_before_rmtree(mock_skills_dir):
+    skill_dir = mock_skills_dir / "gone-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: gone\n---\n", encoding="utf-8")
+    user = {"user_name": "admin", "role": "admin"}
+    session = AsyncMock()
+
+    with patch(
+        "app.api.portal.endpoints.skills.AgentManagerService.unbind_skill_from_versions",
+        new_callable=AsyncMock,
+        return_value=3,
+    ) as mock_unbind:
+        response = run(skills.delete_entire_skill("gone-skill", user=user, session=session))
+
+    mock_unbind.assert_awaited_once_with(session, "gone-skill")
+    assert response["status"] == "success"
+    assert response["unbound_versions"] == 3
+    assert not skill_dir.exists()

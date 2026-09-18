@@ -112,6 +112,7 @@ class PromptAssemblyInput:
     runtime_tool_names: Optional[Iterable[str]] = None
     turn_decision: Optional[TurnDecision] = None
     user_info: Optional[Mapping[str, Any]] = None
+    hitl_continuation_block: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.prompt_layout_mode is not None:
@@ -307,6 +308,7 @@ def _build_stack_without_platform(params: PromptAssemblyInput) -> str:
         skills_dir=params.skills_dir,
     )
     prompt = _prepend_block(prompt, skills_block)
+    prompt = _prepend_block(prompt, params.hitl_continuation_block)
     prompt = _prepend_block(prompt, params.ltm_profile)
     prompt = _prepend_block(prompt, params.memory_recall_hint)
     prompt = _prepend_block(prompt, params.preloaded_memories)
@@ -391,6 +393,12 @@ def _enabled_prompt_plan(params: PromptAssemblyInput) -> PromptPlan:
             PromptSection("memory_recall", 50, params.memory_recall_hint or "", source="memory"),
             PromptSection("ltm_profile", 60, params.ltm_profile or "", source="memory"),
             PromptSection("skills", 70, skills_block, source="skill"),
+            PromptSection(
+                "hitl_continuation",
+                75,
+                params.hitl_continuation_block or "",
+                source="hitl",
+            ),
             PromptSection("sub_agents_context", 80, params.sub_agents_context or "", source="sub_agents"),
         ),
     )
@@ -438,6 +446,7 @@ def assemble_system_prompt(params: PromptAssemblyInput) -> AssembledSystemPrompt
                         skills_dir=params.skills_dir,
                     ),
                 ),
+                ("hitl_continuation", params.hitl_continuation_block),
             )
         )
         if text and text.strip()
@@ -471,6 +480,12 @@ def assemble_system_prompt(params: PromptAssemblyInput) -> AssembledSystemPrompt
                 skills_dir=params.skills_dir,
             ),
             source="skill",
+        ),
+        PromptSection(
+            "hitl_continuation",
+            65,
+            params.hitl_continuation_block,
+            source="hitl",
         ),
         PromptSection("agent_system_prompt", 70, params.agent_system_prompt, stability="stable", source="agent"),
     ]

@@ -405,7 +405,8 @@ def _history_reusable_metadata_window(page: int, page_size: int) -> Dict[str, in
     "/reusable-results",
     response_model=StandardResponse[ListResponse[ReusableResultListItem]],
     summary="当前会话可复用结果列表",
-    description="列出当前用户当前会话中仍可复用的结果摘要，不返回完整 payload、工具参数或凭证。",
+    description="列出当前用户当前会话中仍可复用的结果摘要，不返回完整 payload、工具参数或凭证。"
+    "新会话尚未写入历史/活跃标记时返回空列表，而不是 404。",
 )
 async def list_reusable_results(
     conversation_id: str = Query(..., min_length=1, description="会话 id"),
@@ -414,7 +415,11 @@ async def list_reusable_results(
 ):
     user_id = _require_chat_user_id(user_info)
     if not await _conversation_belongs_to_user(db, user_id, conversation_id):
-        raise HTTPException(status_code=404, detail="会话不存在")
+        # 与 /artifacts/counts 对齐：空会话、切会话抢跑、未归属会话一律 200 空列表，
+        # 避免前端一写入 conversationId 就打出 404；未归属时不读取 Redis，防止泄露。
+        return StandardResponse(
+            data=ListResponse(items=[], total=0, page=1, page_size=10)
+        )
     try:
         current, stack, legacy = await asyncio.gather(
             memory_service.get_reusable_result(user_id, conversation_id),

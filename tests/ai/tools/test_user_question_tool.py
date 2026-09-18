@@ -186,8 +186,10 @@ def test_user_question_tool_and_prompt_support_explicit_interactive_requests():
     from app.services.ai.tools.user_question_tools import ask_user_question
 
     assert "明确要求互动式提问" in ask_user_question.description
+    assert "JSON 对象" in ask_user_question.description
     assert "用户明确要求提问" in AgentServicePrompts._PLATFORM_USER_QUESTION_SECTION
     assert "列出问题" in AgentServicePrompts._PLATFORM_USER_QUESTION_SECTION
+    assert "JSON 对象" in AgentServicePrompts._PLATFORM_USER_QUESTION_SECTION
 
 
 def test_user_question_event_is_an_execution_interrupt():
@@ -207,3 +209,88 @@ def test_dataset_question_record_can_restore_only_validated_numeric_ids():
     assert metadata_dataset_ids_from_user_question_record({**record, "purpose": "other"}) is None
     assert metadata_dataset_ids_from_user_question_record({**record, "selected_option_ids": ["ds-name"]}) is None
     assert metadata_dataset_ids_from_user_question_record({**record, "status": "cancelled"}) is None
+
+
+_MALFORMED_ASK_USER_QUESTION_INPUT = """
+
+[{"id": "deadline", "label": "完成时限", "description": "默认 2026-09-30 (12天后)，可修改"}, {"id": "audit", "label": "提交后需行业审核", "description": "默认开启，企业提交后需您审核通过才算办结"}, {"id": "publish", "label": "下发方式", "description": "立即下发 / 仅保存草稿"}], "context">
+已解析附件《彭州_6月_超载》共 11 条记录，6 家企业。
+"""
+
+
+def test_coerce_malformed_options_array_and_context_marker():
+    from app.services.ai.tools.user_question_tools import coerce_ask_user_question_args
+
+    coerced = coerce_ask_user_question_args(_MALFORMED_ASK_USER_QUESTION_INPUT)
+    assert coerced is not None
+    assert coerced["question"] == "请确认以下任务参数"
+    assert [option["id"] for option in coerced["options"]] == ["deadline", "audit", "publish"]
+    assert coerced["is_multi_select"] is True
+    assert "彭州" in (coerced.get("context") or "")
+
+
+def test_coerce_missing_question_from_options_dict():
+    from app.services.ai.tools.user_question_tools import coerce_ask_user_question_args
+
+    coerced = coerce_ask_user_question_args(
+        {
+            "options": [
+                {"id": "now", "label": "立即下发"},
+                {"id": "draft", "label": "仅保存草稿"},
+            ],
+            "context": "x" * 1500,
+        }
+    )
+    assert coerced is not None
+    assert coerced["question"] == "请确认以下任务参数"
+    assert len(coerced["context"]) <= 1000
+    assert coerced["context"].endswith("...")
+
+
+def test_coerce_questions_alias_uses_first_card():
+    from app.services.ai.tools.user_question_tools import coerce_ask_user_question_args
+
+    coerced = coerce_ask_user_question_args(
+        {
+            "questions": [
+                {
+                    "header": "完成时限",
+                    "options": [
+                        {"id": "d1", "label": "明天"},
+                        {"id": "d2", "label": "下周"},
+                    ],
+                }
+            ]
+        }
+    )
+    assert coerced is not None
+    assert coerced["question"] == "完成时限"
+    assert [option["id"] for option in coerced["options"]] == ["d1", "d2"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_accepts_malformed_qwen_payload():
+    result = await ask_user_question.ainvoke(_MALFORMED_ASK_USER_QUESTION_INPUT)
+    payload = json.loads(result)
+    assert payload["status"] == "awaiting_user"
+    assert payload["question"] == "请确认以下任务参数"
+    assert [option["id"] for option in payload["options"]] == ["deadline", "audit", "publish"]
+    assert payload["is_multi_select"] is True
+    assert "彭州" in payload["context"]
+
+
+def test_agentscope_jsonschema_accepts_repaired_ask_user_question_input():
+    import jsonschema
+
+    from app.services.ai.runtime.agentscope.tools import install_ask_user_question_input_repair
+    from app.services.ai.tools.user_question_tools import AskUserQuestionArgs
+
+    install_ask_user_question_input_repair()
+    from agentscope.agent import _agent as agent_mod
+
+    schema = AskUserQuestionArgs.model_json_schema()
+    parsed = agent_mod._json_loads_with_repair(_MALFORMED_ASK_USER_QUESTION_INPUT, schema)
+    jsonschema.validate(parsed, schema)
+    assert parsed["question"] == "请确认以下任务参数"
+    assert [option["id"] for option in parsed["options"]] == ["deadline", "audit", "publish"]
+

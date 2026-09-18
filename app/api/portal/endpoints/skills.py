@@ -653,18 +653,28 @@ async def delete_skill_file(
 @router.delete("/{skill_id}", response_model=Dict[str, Any])
 async def delete_entire_skill(
     skill_id: str,
-    user: Dict = Depends(skill_platform_admin)
+    user: Dict = Depends(skill_platform_admin),
+    session: AsyncSession = Depends(get_db_session),
 ):
-    """
-    彻底注销并递归清空删除技能根目录
-    """
+    """彻底注销技能目录，并清除智能体版本中的显式绑定。"""
     try:
         skill_dir = validate_secure_skill_path(skill_id)
         if not os.path.exists(skill_dir):
             raise HTTPException(status_code=404, detail="技能目录不存在")
-            
+
+        unbound_versions = await AgentManagerService.unbind_skill_from_versions(session, skill_id)
         shutil.rmtree(skill_dir)
-        return {"status": "success", "message": f"技能 {skill_id} 已被物理彻底移除"}
+        from app.services.ai.skill_resolver import clear_skill_meta_cache
+
+        clear_skill_meta_cache()
+        from app.services.ai.router_service import router_service
+
+        router_service.invalidate_cache()
+        return {
+            "status": "success",
+            "message": f"技能 {skill_id} 已被物理彻底移除",
+            "unbound_versions": unbound_versions,
+        }
     except HTTPException:
         raise
     except Exception as e:

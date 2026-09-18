@@ -30,3 +30,9 @@ def test_admin_review_contract_is_scoped_to_platform_workbench():
     assert "个人" in source
     assert "平台" in source
     assert "!personalOnly" in source
+
+
+def test_platform_skill_delete_clears_agent_bindings():
+    source = _source()
+    assert "解除所有智能体版本中的绑定" in source
+    assert "fetchSkillBindings" in source

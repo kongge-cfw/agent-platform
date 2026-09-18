@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.core.context import get_current_agent_context
 from app.services.ai.tools.tool_compat import BaseTool
+
+logger = logging.getLogger(__name__)
 
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
@@ -99,6 +102,20 @@ class TodoWriteTool(BaseTool):
         context = get_current_agent_context()
         if context is not None:
             context.todo_snapshot = event if todos else None
+            try:
+                from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+                from app.services.ai.hitl_continuation import HitlContinuationStore
+
+                conversation_id = str(getattr(context, "conversation_id", "") or "").strip()
+                if conversation_id and todos:
+                    store = await HitlContinuationStore.from_runtime()
+                    await store.remember_todos(
+                        todos=event,
+                        user_id=try_session_user_id_from_agent_context(context),
+                        conversation_id=conversation_id,
+                    )
+            except Exception:
+                logger.warning("[todo_write] Failed to persist HITL continuation todos", exc_info=True)
         event_queue = getattr(context, "event_queue", None) if context else None
         if event_queue is not None:
             try:

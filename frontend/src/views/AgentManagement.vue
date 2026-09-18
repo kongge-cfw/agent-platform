@@ -883,9 +883,35 @@ const versionConfigSteps = computed<{ id: VersionConfigStep; label: string }[]>(
 });
 
 const selectedToolsCount = computed(() => versionForm.value.tools?.length ?? 0);
-const selectedSkillsCount = computed(() => versionForm.value.skills?.length ?? 0);
+const catalogSkillIds = computed(() =>
+  new Set(
+    availableSkills.value
+      .map((skill) => String(skill.id || '').trim())
+      .filter(Boolean)
+  )
+);
+const retainExistingSkills = (ids: string[] | undefined | null) => {
+  const list = Array.isArray(ids) ? ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  if (!availableSkills.value.length) return list;
+  const existing = catalogSkillIds.value;
+  return list.filter((id) => existing.has(id));
+};
+const selectedSkillsCount = computed(() => retainExistingSkills(versionForm.value.skills).length);
 const enabledGlobalSkills = computed(() =>
   availableSkills.value.filter((s) => String(s.enabled ?? 'true') !== 'false')
+);
+
+watch(
+  [availableSkills, () => versionForm.value.skills_custom, () => versionForm.value.skills],
+  () => {
+    if (!versionForm.value.skills_custom) return;
+    if (!availableSkills.value.length) return;
+    const current = versionForm.value.skills || [];
+    const next = retainExistingSkills(current);
+    if (next.length !== current.length) {
+      versionForm.value.skills = next;
+    }
+  },
 );
 const selectedStaticToolsCount = computed(() =>
   allAvailableTools.value.filter((t) => isToolSelected(t.name)).length
@@ -1780,14 +1806,14 @@ const openVersionModal = (
         comment: `Cloned from V${version.version_number}`,
         created_at: undefined,
         skills_custom: !!version.skills_custom,
-        skills: version.skills_custom ? [...(version.skills || [])] : [],
+        skills: version.skills_custom ? retainExistingSkills(version.skills) : [],
       };
     } else {
       // Edit mode
       versionForm.value = {
         ...version,
         skills_custom: !!version.skills_custom,
-        skills: version.skills_custom ? [...(version.skills || [])] : [],
+        skills: version.skills_custom ? retainExistingSkills(version.skills) : [],
       };
     }
   } else {
@@ -2004,7 +2030,7 @@ const persistNewAgentDraft = async (closeAfterSave: boolean) => {
         tools: [...mergedToolMap.values()],
         system_prompt: desiredVersion.system_prompt?.trim() || created.data.version.system_prompt,
         skills_custom: !!desiredVersion.skills_custom,
-        skills: desiredVersion.skills_custom ? (desiredVersion.skills || []) : [],
+        skills: desiredVersion.skills_custom ? retainExistingSkills(desiredVersion.skills) : [],
       },
     );
     const savedVersion = updated.data;
@@ -2043,7 +2069,7 @@ const saveVersion = async () => {
     return;
   }
 
-  if (versionForm.value.skills_custom && !(versionForm.value.skills?.length)) {
+  if (versionForm.value.skills_custom && !retainExistingSkills(versionForm.value.skills).length) {
     showToast("自定义 Skills 开启时至少选择一个公共技能", "warning");
     versionConfigStep.value = 'tools';
     toolTab.value = 'skills';
@@ -2053,7 +2079,7 @@ const saveVersion = async () => {
   const payload = {
     ...versionForm.value,
     skills_custom: !!versionForm.value.skills_custom,
-    skills: versionForm.value.skills_custom ? (versionForm.value.skills || []) : [],
+    skills: versionForm.value.skills_custom ? retainExistingSkills(versionForm.value.skills) : [],
   };
 
   try {
@@ -2068,7 +2094,6 @@ const saveVersion = async () => {
       await agentApi.createVersion(selectedAgent.value.id, payload);
       showToast("版本创建成功", "success");
     }
-    showVersionModal.value = false;
     showVersionModal.value = false;
     // Notify Drawer to update if open?
     // We can rely on refetching versions in drawer if we pass a signal or just refetch agent list?
@@ -2092,7 +2117,7 @@ const publishVersionFromEditor = async () => {
     versionConfigStep.value = "prompt";
     return;
   }
-  if (versionForm.value.skills_custom && !(versionForm.value.skills?.length)) {
+  if (versionForm.value.skills_custom && !retainExistingSkills(versionForm.value.skills).length) {
     showToast("自定义 Skills 开启时至少选择一个公共技能", "warning");
     versionConfigStep.value = "tools";
     toolTab.value = "skills";
@@ -2114,7 +2139,7 @@ const publishVersionFromEditor = async () => {
       const payload = {
         ...versionForm.value,
         skills_custom: !!versionForm.value.skills_custom,
-        skills: versionForm.value.skills_custom ? (versionForm.value.skills || []) : [],
+        skills: versionForm.value.skills_custom ? retainExistingSkills(versionForm.value.skills) : [],
       };
       if (!versionForm.value.id) {
         const created = await agentApi.createVersion(selectedAgent.value.id, payload);

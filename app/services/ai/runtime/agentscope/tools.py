@@ -1379,9 +1379,74 @@ class AgentScopeNativeApprovalTool:
             await result
 
 
+_ASK_USER_QUESTION_REPAIR_INSTALLED = False
+
+
+def _rewrite_ask_user_question_tool_call(tool_call: Any) -> None:
+    if str(getattr(tool_call, "name", "") or "") != "ask_user_question":
+        return
+    from app.services.ai.tools.user_question_tools import prepare_ask_user_question_tool_input
+
+    prepared = prepare_ask_user_question_tool_input(getattr(tool_call, "input", None))
+    if prepared is None:
+        return
+    try:
+        tool_call.input = prepared
+    except Exception:
+        logger.debug("ask_user_question input rewrite skipped", exc_info=True)
+
+
+def install_ask_user_question_input_repair() -> None:
+    """Rewrite malformed ask_user_question args before AgentScope jsonschema."""
+    global _ASK_USER_QUESTION_REPAIR_INSTALLED
+    if _ASK_USER_QUESTION_REPAIR_INSTALLED:
+        return
+    try:
+        from agentscope._utils import _common as common_mod
+        from agentscope.agent import Agent
+        from agentscope.agent import _agent as agent_mod
+        from agentscope.tool import _toolkit as toolkit_mod
+    except Exception:
+        logger.debug("ask_user_question input repair not installed", exc_info=True)
+        return
+
+    from app.services.ai.tools.user_question_tools import (
+        prepare_ask_user_question_tool_input,
+        schema_looks_like_ask_user_question,
+    )
+
+    original_loads = common_mod._json_loads_with_repair
+
+    def _json_loads_with_ask_user_question_repair(json_str, schema=None):
+        if schema_looks_like_ask_user_question(schema):
+            prepared = prepare_ask_user_question_tool_input(json_str)
+            if prepared is not None:
+                json_str = prepared
+        return original_loads(json_str, schema)
+
+    original_execute = agent_mod.Agent._execute_tool_call
+
+    async def _execute_tool_call_with_ask_user_question_repair(
+        self,
+        tool_call,
+        kept_rules=None,
+    ):
+        _rewrite_ask_user_question_tool_call(tool_call)
+        async for event in original_execute(self, tool_call, kept_rules):
+            yield event
+
+    common_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
+    agent_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
+    toolkit_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
+    agent_mod.Agent._execute_tool_call = _execute_tool_call_with_ask_user_question_repair
+    Agent._execute_tool_call = _execute_tool_call_with_ask_user_question_repair
+    _ASK_USER_QUESTION_REPAIR_INSTALLED = True
+
+
 def _load_agentscope_toolkit():
     from agentscope.tool import Toolkit
 
+    install_ask_user_question_input_repair()
     return Toolkit
 
 

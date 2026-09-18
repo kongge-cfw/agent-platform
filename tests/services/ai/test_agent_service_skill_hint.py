@@ -494,6 +494,26 @@ def test_skill_log_chunk_titles_distinguish_enabled_and_candidate_flow():
     assert "已识别候选流程" in fallback["details"]
 
 
+def test_runtime_skill_read_emits_enabled_flow_log():
+    from app.services.ai.skills.injector import SkillInjector
+
+    parsed = SkillInjector.parse_successful_skill_read(
+        {"skill_id": "industry-dispatch-task"},
+        "[技能读取成功: industry-dispatch-task/SKILL.md · scope=global]\n---\nname: 任务下发、查询、催办\ndescription: 行业任务\n---\n# 行业任务下发\n",
+    )
+    assert parsed == ("industry-dispatch-task", "任务下发、查询、催办")
+
+    enabled = SkillInjector.build_runtime_skill_enabled_log(*parsed)
+    assert enabled["id"] == "skill_enabled_industry-dispatch-task"
+    assert enabled["title"] == "已启用流程: 任务下发、查询、催办"
+    assert enabled["type"] == "log"
+
+    assert SkillInjector.parse_successful_skill_read(
+        {"skill_id": "industry-dispatch-task"},
+        "错误：技能 industry-dispatch-task 不存在",
+    ) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.no_infrastructure
 async def test_chat_stream_injects_skill_discovery_hint_into_system_prompt():

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.ai.tools.tool_compat import BaseTool
+
+logger = logging.getLogger(__name__)
 
 ValueType = Literal["string", "number", "boolean", "text"]
 
@@ -57,7 +60,9 @@ class RequestUserConfirmationTool(BaseTool):
     description = (
         "在录入/修改/删除业务数据前，向用户展示可编辑的业务确认卡。"
         "调用后返回 awaiting_user，必须停止并等待用户下一条消息："
-        "若收到「【业务确认】用户已确定」则按快照字段继续并视需要调用写入工具；"
+        "若收到「【业务确认】用户已确定」则继续原任务：按快照与已启用技能/续跑上下文执行，"
+        "禁止臆造外部主键；快照只有名称时先解析再写入。"
+        "外部对象字段必须同时给出显示名称和已解析主键；批量写入须按对象写结构化说明，禁止一句通用模板。"
         "若收到「【业务确认】用户已取消」则立即终止本次流程，不得调用写入类工具，"
         "且禁止再次调用本工具重新弹确认卡——只能用文字确认已取消并询问用户；"
         "仅当用户随后明确提供新的/修改后的数据并要求继续时，才可再次调用本工具。"
@@ -88,10 +93,31 @@ class RequestUserConfirmationTool(BaseTool):
             )
 
         confirmation_id = f"bc_{secrets.token_hex(8)}"
+        fields = [field.model_dump(mode="json") for field in args.fields]
+        try:
+            from app.core.context import get_current_agent_context
+            from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+            from app.services.ai.hitl_continuation import (
+                HitlContinuationStore,
+                enrich_confirmation_fields,
+            )
+
+            agent_ctx = get_current_agent_context()
+            conversation_id = str(getattr(agent_ctx, "conversation_id", "") or "").strip()
+            user_id = try_session_user_id_from_agent_context(agent_ctx) if agent_ctx else None
+            if conversation_id:
+                store = await HitlContinuationStore.from_runtime()
+                continuation = await store.get(user_id=user_id, conversation_id=conversation_id)
+                fields = enrich_confirmation_fields(fields, continuation)
+        except Exception:
+            logger.warning(
+                "[request_user_confirmation] Failed to enrich confirmation fields",
+                exc_info=True,
+            )
         ui = {
             "title": args.title,
             "summary": args.summary or "",
-            "fields": [field.model_dump(mode="json") for field in args.fields],
+            "fields": fields,
             "confirm_label": args.confirm_label or "确定",
             "cancel_label": args.cancel_label or "取消",
             "risk_note": args.risk_note or "",

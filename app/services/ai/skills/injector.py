@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from app.core.config import settings
@@ -284,6 +285,51 @@ class SkillInjector:
             "status": "success",
         }
 
+    @staticmethod
+    def _skill_name_from_instruction(text: str, fallback: str) -> str:
+        match = re.search(r"(?m)^name:\s*(.+)$", text or "")
+        if not match:
+            return fallback
+        raw = match.group(1).strip().strip('"').strip("'")
+        if not raw or raw[0] in {">", "|"}:
+            return fallback
+        return raw[:80] or fallback
+
+    @classmethod
+    def parse_successful_skill_read(
+        cls,
+        tool_args: Any,
+        tool_output: Any,
+    ) -> tuple[str, str] | None:
+        """若 read_skill_instruction 成功，返回 (skill_id, skill_name)。"""
+        if isinstance(tool_output, dict) and "text" in tool_output:
+            text = str(tool_output.get("text") or "")
+        else:
+            text = str(tool_output or "")
+        if "技能读取成功" not in text:
+            return None
+        skill_id = ""
+        if isinstance(tool_args, dict):
+            skill_id = str(tool_args.get("skill_id") or "").strip()
+        if not skill_id:
+            matched = re.search(r"\[技能读取成功:\s*([^/\s]+)/", text)
+            skill_id = (matched.group(1) if matched else "").strip()
+        if not skill_id:
+            return None
+        skill_name = cls._skill_name_from_instruction(text, skill_id)
+        return skill_id, skill_name
+
+    @classmethod
+    def build_runtime_skill_enabled_log(cls, skill_id: str, skill_name: str) -> Dict[str, Any]:
+        return cls.build_skill_log_chunk(
+            skill_id,
+            skill_name,
+            (
+                f"已读取完整 SKILL.md 指令（ID: {skill_id}）。"
+                "已预载完整流程说明，本轮可直接按该流程执行。"
+            ),
+        )
+
     @classmethod
     async def inject_skills(
         cls,
@@ -294,13 +340,45 @@ class SkillInjector:
         user_info: Optional[Dict[str, Any]] = None,
         skills_log_callback: Optional[Callable] = None,
         resource_scope: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[str] = None,
     ) -> List[str]:
         """挂载与自动匹配技能，返回 skills_injection。"""
+        from app.services.ai.hitl_continuation import (
+            HitlContinuationStore,
+            should_restore_hitl_continuation,
+        )
+
         active_skills = []
         if messages and "files" in messages[-1] and messages[-1]["files"]:
             for file_obj in messages[-1]["files"]:
                 if file_obj.get("type") == "skill":
                     active_skills.append(file_obj)
+
+        if conversation_id and should_restore_hitl_continuation(user_query):
+            try:
+                store = await HitlContinuationStore.from_runtime()
+                continuation = await store.get(
+                    user_info=user_info,
+                    conversation_id=conversation_id,
+                )
+                mounted_urls = {str(item.get("url") or "") for item in active_skills}
+                for item in (continuation or {}).get("skills") or []:
+                    skill_id = str((item or {}).get("id") or "").strip()
+                    if not skill_id or skill_id in mounted_urls:
+                        continue
+                    mounted_urls.add(skill_id)
+                    active_skills.append(
+                        {
+                            "type": "skill",
+                            "url": skill_id,
+                            "filename": (item or {}).get("name") or skill_id,
+                            "skillMeta": item,
+                            "scope": (item or {}).get("scope"),
+                            "_hitl_restore": True,
+                        }
+                    )
+            except Exception as restore_err:
+                logger.warning("[Skills] Failed to restore HITL continuation skills: %s", restore_err)
 
         scoped_skill_items = [
             item
@@ -310,7 +388,9 @@ class SkillInjector:
         if scoped_skill_items:
             scoped_ids = {str(item["id"]) for item in scoped_skill_items}
             active_skills = [
-                skill for skill in active_skills if str(skill.get("url") or "") in scoped_ids
+                skill
+                for skill in active_skills
+                if str(skill.get("url") or "") in scoped_ids or skill.get("_hitl_restore")
             ]
             mounted_ids = {str(item.get("url") or "") for item in active_skills}
             active_skills.extend(
@@ -326,6 +406,7 @@ class SkillInjector:
 
         mounted_skill_ids = {s.get("url") for s in active_skills if s.get("url")}
         skills_injection = []
+        activated_skill_metas: List[Dict[str, str]] = []
         full_load_policy = await cls.resolve_skill_full_load_policy()
         full_loaded_count = 0
 
@@ -407,8 +488,28 @@ class SkillInjector:
                     skill_id,
                     "full instruction preloaded" if full_instruction else "summary only",
                 )
+                activated_skill_metas.append(
+                    {
+                        "id": str(skill_id),
+                        "name": skill_name,
+                        "scope": str(skill_scope or ""),
+                    }
+                )
+                if skill_obj.get("_hitl_restore") and skills_log_callback:
+                    if full_instruction:
+                        details_msg = (
+                            f"HITL 续跑：已粘贴上一轮已启用流程「{skill_name}」(ID: {skill_id})。"
+                            "已预载完整 SKILL.md 指令，本轮按该流程继续执行。"
+                        )
+                    else:
+                        details_msg = (
+                            f"HITL 续跑：已粘贴上一轮已启用流程「{skill_name}」(ID: {skill_id})。"
+                            "未能预载全文，执行前须 read_skill_instruction。"
+                        )
+                    skills_log_callback(skill_id, skill_name, details_msg)
 
-        if user_query and not scoped_skill_items:
+        hitl_restored = any(bool(item.get("_hitl_restore")) for item in active_skills)
+        if user_query and not scoped_skill_items and not hitl_restored:
             try:
                 from app.services.ai.skill_resolver import (
                     load_skill_md_content,
@@ -452,6 +553,13 @@ class SkillInjector:
                         )
                     )
                     mounted_skill_ids.add(skill_id)
+                    activated_skill_metas.append(
+                        {
+                            "id": str(skill_id),
+                            "name": skill_name,
+                            "scope": str(skill_meta.get("scope") or ""),
+                        }
+                    )
                     logger.info(
                         "[Skills] Auto-resolved skill %s from query (%s).",
                         skill_id,
@@ -565,6 +673,13 @@ class SkillInjector:
                                 )
                             )
                             mounted_skill_ids.add(skill_id)
+                            activated_skill_metas.append(
+                                {
+                                    "id": str(skill_id),
+                                    "name": skill_name,
+                                    "scope": str(skill_meta.get("scope") or ""),
+                                }
+                            )
                             logger.info(
                                 "[Skills] Scanned skill %s from query (score=%s, %s).",
                                 skill_id,
@@ -634,5 +749,18 @@ class SkillInjector:
                 await skills_stats_service.record_activations(mounted_skill_ids)
             except Exception as stats_err:
                 logger.error(f"[SkillsStats] Auto-recording skill activations failed: {stats_err}")
+
+        if conversation_id:
+            try:
+                store = await HitlContinuationStore.from_runtime()
+                await store.remember_turn_inputs(
+                    user_info=user_info,
+                    conversation_id=conversation_id,
+                    user_query=user_query,
+                    messages=messages,
+                    skills=activated_skill_metas,
+                )
+            except Exception as persist_err:
+                logger.warning("[Skills] Failed to persist HITL continuation skills: %s", persist_err)
 
         return skills_injection

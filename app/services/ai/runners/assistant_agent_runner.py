@@ -2504,6 +2504,44 @@ class AssistantAgentRunner(BaseExecutor):
             )
             if result.get("log"):
                 yield result["log"]
+            skill_flow_log = result.get("skill_flow_log")
+            if isinstance(skill_flow_log, dict):
+                skill_log_id = str(skill_flow_log.get("id") or "").strip()
+                emitted_skill_logs = state.setdefault("skill_enabled_ids", set())
+                if skill_log_id and skill_log_id not in emitted_skill_logs:
+                    emitted_skill_logs.add(skill_log_id)
+                    yield skill_flow_log
+            try:
+                maybe_resolve = "resolve" in str(tool_name or "").lower()
+                if tool_name == "read_skill_instruction" or maybe_resolve:
+                    from app.services.ai.hitl_continuation import (
+                        HitlContinuationStore,
+                        is_entity_resolve_tool,
+                    )
+                    from app.services.ai.skills.injector import SkillInjector
+
+                    store = await HitlContinuationStore.from_runtime()
+                    if tool_name == "read_skill_instruction":
+                        parsed_skill = SkillInjector.parse_successful_skill_read(tool_args, output)
+                        if parsed_skill:
+                            await store.remember_skill(
+                                skill_id=parsed_skill[0],
+                                skill_name=parsed_skill[1],
+                                user_id=self._runtime_user_id(),
+                                conversation_id=self.conversation_id,
+                            )
+                    elif is_entity_resolve_tool(tool_name):
+                        await store.remember_resolve_tool(
+                            tool_name=tool_name,
+                            tool_output=output,
+                            user_id=self._runtime_user_id(),
+                            conversation_id=self.conversation_id,
+                        )
+            except Exception:
+                logger.warning(
+                    "[AssistantAgentRunner] Failed to persist HITL continuation facts",
+                    exc_info=True,
+                )
             if result.get("business_confirmation"):
                 state["hitl_card_emitted"] = True
                 yield result["business_confirmation"]
@@ -3650,10 +3688,23 @@ class AssistantAgentRunner(BaseExecutor):
             display_output = format_knowledge_tool_log_display(tool_output, max_len=1200)
         else:
             display_output = truncate_for_display(str(tool_output), max_len=500)
+        tool_title = f"工具完成: {tool_name} ({duration_tool:.0f}ms)"
+        skill_flow_log = None
+        if tool_name == "read_skill_instruction" and not is_error:
+            from app.services.ai.skills.injector import SkillInjector
+
+            parsed_skill = SkillInjector.parse_successful_skill_read(tool_args, tool_output)
+            if parsed_skill:
+                skill_id, skill_name = parsed_skill
+                tool_title = f"工具完成: {tool_name} · {skill_id} ({duration_tool:.0f}ms)"
+                skill_flow_log = SkillInjector.build_runtime_skill_enabled_log(
+                    skill_id,
+                    skill_name,
+                )
         log_event = {
             "type": "log",
             "id": tool_id,
-            "title": f"工具完成: {tool_name} ({duration_tool:.0f}ms)",
+            "title": tool_title,
             "details": display_output,
             "status": "success" if not is_error else "error",
             "category": "tool",
@@ -3735,6 +3786,7 @@ class AssistantAgentRunner(BaseExecutor):
                 tool_output=confirmation_output,
                 tool_call_id=tool_id,
             ),
+            "skill_flow_log": skill_flow_log,
         }
 
     def resolve_has_tool_meta(self) -> bool:

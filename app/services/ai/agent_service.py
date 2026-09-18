@@ -1936,6 +1936,7 @@ class AgentService:
         user_info: Optional[dict[str, Any]] = None,
         skills_log_callback: Optional[callable] = None,
         resource_scope: Optional[dict[str, Any]] = None,
+        conversation_id: Optional[str] = None,
     ) -> list[str]:
         """挂载与自动匹配技能，委托给 SkillInjector。"""
         return await SkillInjector.inject_skills(
@@ -1945,6 +1946,7 @@ class AgentService:
             user_info=user_info,
             skills_log_callback=skills_log_callback,
             resource_scope=resource_scope,
+            conversation_id=conversation_id,
         )
 
     async def _load_memory_context(
@@ -2288,6 +2290,7 @@ class AgentService:
                         user_info=user_info,
                         skills_log_callback=skills_log_callback,
                         resource_scope=(debug_options or {}).get("resource_scope"),
+                        conversation_id=conversation_id,
                     )
             except Exception as err:
                 logger.warning(f"Error in concurrent _inject_skills: {err}")

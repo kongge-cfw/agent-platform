@@ -1,7 +1,7 @@
 """公共 Skill 显式绑定智能体反查。"""
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -73,3 +73,48 @@ def test_skill_bindings_empty():
     session.execute = AsyncMock(return_value=_result([]))
     bindings = run(AgentManagerService.get_skill_explicit_bindings(session))
     assert bindings == {}
+
+
+def test_unbind_skill_from_versions_drops_id_and_disables_empty_custom():
+    kept = SimpleNamespace(
+        agent_id="a1",
+        version_number=4,
+        skills=["industry-dispatch-task", "task"],
+        skills_custom=True,
+    )
+    emptied = SimpleNamespace(
+        agent_id="a2",
+        version_number=1,
+        skills=["industry-dispatch-task"],
+        skills_custom=True,
+    )
+    unrelated = SimpleNamespace(
+        agent_id="a3",
+        version_number=1,
+        skills=["task"],
+        skills_custom=True,
+    )
+    session = AsyncMock()
+    scalars = MagicMock()
+    scalars.all.return_value = [kept, emptied, unrelated]
+    result = MagicMock()
+    result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=result)
+
+    with patch("app.services.ai.agent_manager.flag_modified"):
+        updated = run(AgentManagerService.unbind_skill_from_versions(session, "industry-dispatch-task"))
+
+    assert updated == 2
+    assert kept.skills == ["task"]
+    assert kept.skills_custom is True
+    assert emptied.skills == []
+    assert emptied.skills_custom is False
+    assert unrelated.skills == ["task"]
+    assert unrelated.skills_custom is True
+
+
+def test_unbind_skill_from_versions_skips_blank_id():
+    session = AsyncMock()
+    updated = run(AgentManagerService.unbind_skill_from_versions(session, "  "))
+    session.execute.assert_not_called()
+    assert updated == 0

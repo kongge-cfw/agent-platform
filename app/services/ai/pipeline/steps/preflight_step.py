@@ -108,11 +108,14 @@ class PreflightStep(BasePipelineStep):
             if isinstance(incoming_user_message, dict)
             else None
         )
+        from app.services.ai.business_confirmation import arm_cancel_confirmation_gate
         from app.services.ai.user_question import (
             is_user_question_receipt_message,
             metadata_dataset_ids_from_user_question_record,
             parse_user_question_receipt,
         )
+
+        arm_cancel_confirmation_gate(incoming_content)
 
         if is_user_question_receipt_message(incoming_content):
             receipt = parse_user_question_receipt(incoming_content)

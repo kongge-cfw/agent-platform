@@ -108,6 +108,32 @@ class AssembleStep(BasePipelineStep):
 
         agent_config = shared_state.get("agent_config") or getattr(context, "agent_config", None)
         preflight_ctx = shared_state.get("preflight_ctx")
+        user_query = str(context.user_query or shared_state.get("user_query") or "")
+        hitl_continuation = None
+        from app.services.ai.hitl_continuation import (
+            HitlContinuationStore,
+            attachment_paths as hitl_attachment_paths,
+            build_continuation_prompt_block,
+            is_hitl_cancel_receipt,
+            should_restore_hitl_continuation,
+        )
+
+        if is_hitl_cancel_receipt(user_query) and context.conversation_id:
+            try:
+                store = await HitlContinuationStore.from_runtime()
+                await store.clear(user_info=user_info, conversation_id=context.conversation_id)
+            except Exception:
+                logger.warning("[AssembleStep] Failed to clear HITL continuation on cancel", exc_info=True)
+        elif should_restore_hitl_continuation(user_query) and context.conversation_id:
+            try:
+                store = await HitlContinuationStore.from_runtime()
+                hitl_continuation = await store.get(
+                    user_info=user_info,
+                    conversation_id=context.conversation_id,
+                )
+            except Exception:
+                logger.warning("[AssembleStep] Failed to load HITL continuation", exc_info=True)
+        shared_state["hitl_continuation"] = hitl_continuation
 
         if agent_config:
             from app.services.ai.context_manager import AgentContextManager
@@ -141,6 +167,10 @@ class AssembleStep(BasePipelineStep):
                 authorized_paths = self.agent_service._authorized_attachment_paths(context.messages)
             if self.agent_service and hasattr(self.agent_service, "_current_turn_attachment_paths"):
                 current_turn_paths = self.agent_service._current_turn_attachment_paths(context.messages)
+            restored_paths = hitl_attachment_paths(hitl_continuation)
+            if restored_paths:
+                authorized_paths = sorted({*authorized_paths, *restored_paths})
+                current_turn_paths = sorted({*current_turn_paths, *restored_paths})
 
             context_setup_kwargs = dict(
                 config=agent_config,
@@ -159,6 +189,13 @@ class AssembleStep(BasePipelineStep):
                 agent_max_toolcall_timeout_seconds=getattr(context, "agent_max_toolcall_timeout_seconds", None),
             )
             await AgentContextManager.setup_context(**context_setup_kwargs)
+            restored_todos = (hitl_continuation or {}).get("todos") if isinstance(hitl_continuation, dict) else None
+            if isinstance(restored_todos, dict) and restored_todos.get("todos"):
+                from app.core.context import get_current_agent_context
+
+                agent_ctx = get_current_agent_context()
+                if agent_ctx is not None:
+                    agent_ctx.todo_snapshot = dict(restored_todos)
             if context.performance_tracker is not None:
                 context.performance_tracker.mark("context_setup")
 
@@ -244,6 +281,15 @@ class AssembleStep(BasePipelineStep):
                     skill_name,
                     details_msg,
                 )
+
+        restored_todos = (hitl_continuation or {}).get("todos") if isinstance(hitl_continuation, dict) else None
+        if isinstance(restored_todos, dict) and restored_todos.get("todos"):
+            todo_event = {
+                "type": "todo_update",
+                "todos": restored_todos.get("todos") or [],
+                "counts": restored_todos.get("counts") or {},
+            }
+            yield todo_event
 
         request_knowledge_dataset_ids = shared_state.get("request_knowledge_dataset_ids") or []
         configured_agent_dataset_ids = shared_state.get("configured_agent_dataset_ids") or []
@@ -340,6 +386,7 @@ class AssembleStep(BasePipelineStep):
             turn_decision=turn_decision,
             prompt_layout_mode=effective_layout_mode,
             user_info=user_info,
+            hitl_continuation_block=build_continuation_prompt_block(hitl_continuation),
         )
         assembled_prompt = assemble_system_prompt(assembly_input)
 

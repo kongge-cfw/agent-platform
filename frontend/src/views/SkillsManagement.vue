@@ -658,7 +658,9 @@ const deleteSkill = (skillId: string) => {
   confirmState.value = {
     show: true,
     title: isPersonal ? '删除个人技能' : '彻底删除技能',
-    message: `确定要彻底删除${isPersonal ? '个人' : ''}技能 [${skillId}] 吗？\n该操作会物理删除对应的技能目录及其所有子资产脚本，且不可恢复！`,
+    message: isPersonal
+      ? `确定要彻底删除个人技能 [${skillId}] 吗？\n该操作会物理删除对应的技能目录及其所有子资产脚本，且不可恢复！`
+      : `确定要彻底删除技能 [${skillId}] 吗？\n该操作会物理删除技能目录，并解除所有智能体版本中的绑定，且不可恢复！`,
     type: 'danger',
     onConfirm: async () => {
       try {
@@ -670,6 +672,7 @@ const deleteSkill = (skillId: string) => {
             fetchPersonalSkills()
           } else {
             fetchSkills()
+            fetchSkillBindings()
           }
           if (activeSkillId.value === skillId) {
             showDrawer.value = false

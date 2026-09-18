@@ -172,3 +172,57 @@ async def test_cancelled_user_question_cancels_open_todos_from_previous_turn():
     assert persisted_todos[2]["status"] == "cancelled"
     assert persisted_todos[3]["status"] == "cancelled"
 
+
+@pytest.mark.asyncio
+async def test_cancelled_business_confirmation_stops_before_agent_resolution():
+    service = AgentService()
+    receipt = (
+        "【业务确认】用户已取消\n"
+        "confirmation_id: bc_cancel\n"
+        "请立即终止本次录入/变更："
+        "不要调用写入类工具；"
+        "禁止再次调用 request_user_confirmation（不要重新弹确认卡）。"
+    )
+
+    with (
+        patch.object(service, "_quota_block_message", AsyncMock(return_value=None)),
+        patch(
+            "app.services.ai.agent_service.memory_service.get_history",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "app.services.ai.agent_service.memory_service.add_message",
+            AsyncMock(),
+        ),
+        patch(
+            "app.services.ai.context_manager.AgentContextManager.resolve_agent_config",
+            AsyncMock(),
+        ) as resolve_agent_config,
+        patch(
+            "app.services.ai.agent_service.AuditManager.log_transaction",
+            AsyncMock(),
+        ),
+        patch(
+            "app.services.config_service.ConfigService.get",
+            AsyncMock(return_value="20"),
+        ),
+        patch(
+            "app.core.redis.get_redis",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        chunks = [
+            chunk
+            async for chunk in service.chat_completion_stream(
+                [{"role": "user", "content": receipt}],
+                conversation_id="conversation-confirm-cancel",
+                user_info={"user_id": "100", "role": "admin"},
+                enable_multi_agent=False,
+            )
+        ]
+
+    texts = [str(chunk.get("content") or "") for chunk in chunks]
+    assert "已取消本次业务确认，本次任务已停止。" in texts
+    resolve_agent_config.assert_not_awaited()
+
+

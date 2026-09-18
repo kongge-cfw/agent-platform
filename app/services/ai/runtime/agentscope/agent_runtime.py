@@ -60,12 +60,15 @@ def build_runtime_middlewares(
     trace_id: str | None = None,
 ) -> list[Any]:
     """Assemble Agent middlewares: forbidden-tool DENY + audit + model-call stats."""
+    from app.core.context import get_current_agent_context
     from app.services.ai.runtime.agentscope.middleware import (
         BashSandboxParentLinkMiddleware,
         ModelCallStatsMiddleware,
         ToolPermissionMiddleware,
     )
-    from app.core.context import get_current_agent_context
+    from app.services.ai.runtime.agentscope.tools import install_ask_user_question_input_repair
+
+    install_ask_user_question_input_repair()
 
     runtime_context = get_current_agent_context()
     runtime_info = dict(

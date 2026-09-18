@@ -61,6 +61,12 @@ const locked = computed(
     props.payload.status === 'stale',
 );
 
+function isMultilineField(field: BusinessConfirmationField): boolean {
+  if (field.value_type === 'text') return true;
+  const value = field.value === null || field.value === undefined ? '' : String(field.value);
+  return value.includes('\n') || value.length > 80;
+}
+
 const statusLabel = computed(() => {
   if (props.payload.status === 'submitted') {
     return props.payload.decision === 'cancelled' ? '已取消' : '已确定';
@@ -187,10 +193,10 @@ function submit(confirmed: boolean) {
                       @change="onBooleanChange(field, ($event.target as HTMLInputElement).checked)"
                     />
                     <textarea
-                      v-else-if="field.value_type === 'text'"
+                      v-else-if="isMultilineField(field)"
                       v-model="field.value as string"
-                      rows="2"
-                      class="w-full rounded border border-sky-100 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:bg-gray-50 dark:border-sky-900/50 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-900/60"
+                      :rows="String(field.value || '').split('\n').length > 3 ? 6 : 3"
+                      class="w-full whitespace-pre-wrap rounded border border-sky-100 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:bg-gray-50 dark:border-sky-900/50 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-900/60"
                       :disabled="locked || field.editable === false"
                     />
                     <input

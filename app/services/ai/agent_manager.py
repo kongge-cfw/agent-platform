@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, update, or_, case
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.exc import IntegrityError, OperationalError
 from app.models.agent import AIAgent, AIAgentVersion
 from app.schemas.agent import ChatConfig, AIAgentBase, AIAgentVersionBase
@@ -1345,3 +1346,35 @@ class AgentManagerService:
             entry["count"] = len(entry["agents"])
 
         return bindings
+
+    @staticmethod
+    async def unbind_skill_from_versions(session: AsyncSession, skill_id: str) -> int:
+        """删除公共技能时，从全部智能体版本的 skills 白名单中摘掉该 ID。
+
+        若自定义白名单被摘空，则关闭 skills_custom，避免已发布版本锁死成「零公共技能」。
+        """
+        target = str(skill_id or "").strip()
+        if not target:
+            return 0
+
+        versions = (await session.execute(select(AIAgentVersion))).scalars().all()
+        updated = 0
+        for version in versions:
+            current = AgentManagerService._normalize_skills_list(getattr(version, "skills", None))
+            if target not in current:
+                continue
+            remaining = [sid for sid in current if sid != target]
+            version.skills = remaining
+            flag_modified(version, "skills")
+            if bool(getattr(version, "skills_custom", False)) and not remaining:
+                version.skills_custom = False
+            updated += 1
+            logger.info(
+                "[Skills] Unbound skill %s from agent_id=%s version=%s remaining=%s custom=%s",
+                target,
+                getattr(version, "agent_id", None),
+                getattr(version, "version_number", None),
+                remaining,
+                getattr(version, "skills_custom", False),
+            )
+        return updated
