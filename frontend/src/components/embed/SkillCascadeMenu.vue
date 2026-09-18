@@ -17,10 +17,12 @@ const props = withDefaults(
     /** 已挂载到输入框的技能 ID */
     attachedSkillIds?: string[]
     /**
-     * 当前会话有效智能体 ID。传给 GET /api/portal/skills?agent_id=，由服务端按
-     * 已发布版本的 skills_custom / skills 过滤「平台技能」；个人技能始终全量展示。
+     * 当前会话有效智能体 ID。站内调试传给 GET /api/portal/skills?agent_id=，
+     * 按该智能体已发布版本过滤平台技能。嵌入会话服务端改为应用角色绑定智能体的技能并集，此参数可忽略。
      */
     agentId?: string | null
+    /** 嵌入对话不展示个人技能（斜杠/技能中心只列智能体绑定的公共技能） */
+    hidePersonalSkills?: boolean
     /** 窄屏级联浮层宽度 */
     compact?: boolean
     /** 移动端底部抽屉内铺满宽度 */
@@ -28,7 +30,7 @@ const props = withDefaults(
     /** 桌面侧栏浮层：高度铺满左侧加号菜单，上下对齐 */
     fillHeight?: boolean
   }>(),
-  { attachedSkillIds: () => [], agentId: null, compact: false, fullWidth: false, fillHeight: false },
+  { attachedSkillIds: () => [], agentId: null, compact: false, fullWidth: false, fillHeight: false, hidePersonalSkills: false },
 )
 
 const emit = defineEmits<{
@@ -48,9 +50,10 @@ const loadedOnce = ref(false)
 
 const attachedIdSet = computed(() => new Set(props.attachedSkillIds))
 
-const currentScopeSkills = computed(() =>
-  activeScope.value === 'global' ? skillsList.value : personalSkillsList.value,
-)
+const currentScopeSkills = computed(() => {
+  if (props.hidePersonalSkills || activeScope.value === 'global') return skillsList.value
+  return personalSkillsList.value
+})
 
 const filteredSkillsList = computed(() => {
   const query = skillSearchQuery.value.trim().toLowerCase()
@@ -93,21 +96,30 @@ const loadSkillsList = async () => {
   isLoadingSkillsList.value = true
   try {
     const agentId = String(props.agentId || '').trim()
-    const [globalRes, personalRes] = await Promise.allSettled([
+    const requests: Promise<any>[] = [
       axios.get('/api/portal/skills', agentId ? { params: { agent_id: agentId } } : undefined),
-      axios.get('/api/portal/skills/personal'),
-    ])
+    ]
+    if (!props.hidePersonalSkills) {
+      requests.push(axios.get('/api/portal/skills/personal'))
+    }
+    const [globalRes, personalRes] = await Promise.allSettled(requests)
     if (globalRes.status === 'fulfilled' && globalRes.value.data?.status === 'success') {
       skillsCustom.value = Boolean(globalRes.value.data.skills_custom)
       skillsList.value = (globalRes.value.data.data || [])
         .map((s: any) => ({ ...s, scope: 'global' as const }))
         .filter((s: any) => s.enabled !== 'false')
     }
-    if (personalRes.status === 'fulfilled' && personalRes.value.data?.status === 'success') {
+    if (
+      !props.hidePersonalSkills
+      && personalRes
+      && personalRes.status === 'fulfilled'
+      && personalRes.value.data?.status === 'success'
+    ) {
       personalSkillsList.value = (personalRes.value.data.data || [])
         .map((s: any) => ({ ...s, scope: 'personal' as const }))
         .filter((s: any) => s.enabled !== 'false')
     }
+    if (props.hidePersonalSkills) activeScope.value = 'global'
     loadedOnce.value = true
   } catch (err) {
     console.error('加载技能列表失败:', err)
@@ -129,6 +141,14 @@ const mountSkill = (skill: SkillItem) => {
 watch(
   () => props.agentId,
   () => {
+    if (loadedOnce.value) void loadSkillsList()
+  },
+)
+
+watch(
+  () => props.hidePersonalSkills,
+  (hide) => {
+    if (hide) activeScope.value = 'global'
     if (loadedOnce.value) void loadSkillsList()
   },
 )
@@ -173,7 +193,7 @@ void loadSkillsList()
         />
       </div>
 
-      <div class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-900/50 p-0.5">
+      <div v-if="!hidePersonalSkills" class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-900/50 p-0.5">
         <button
           type="button"
           class="flex-1 py-1.5 text-center text-xs font-semibold rounded-md transition-colors"
@@ -219,7 +239,10 @@ void loadSkillsList()
       <div v-else-if="filteredSkillsList.length === 0" class="text-center py-12 px-4">
         <p class="text-sm text-gray-400 font-medium">未发现可用技能</p>
         <p class="text-xs text-gray-400/80 mt-2 leading-relaxed">
-          <template v-if="skillsCustom && activeScope === 'global'">
+          <template v-if="hidePersonalSkills">
+            当前入口仅展示智能体已绑定的公共技能
+          </template>
+          <template v-else-if="skillsCustom && activeScope === 'global'">
             可切换到「我的」查看个人技能
           </template>
           <template v-else-if="activeScope === 'personal'">
@@ -278,7 +301,7 @@ void loadSkillsList()
     </div>
 
     <!-- 桌面端保留「管理技能」；移动端底部抽屉不展示 -->
-    <div v-if="!fullWidth" class="shrink-0 border-t border-gray-100 dark:border-gray-700/80 py-1 bg-white dark:bg-gray-800">
+    <div v-if="!fullWidth && !hidePersonalSkills" class="shrink-0 border-t border-gray-100 dark:border-gray-700/80 py-1 bg-white dark:bg-gray-800">
       <a
         :href="withAppBase('/dashboard/personal?tab=skills')"
         target="_blank"

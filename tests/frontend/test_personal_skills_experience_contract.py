@@ -53,9 +53,14 @@ def test_chat_mount_includes_skill_scope():
 
 def test_skill_cascade_empty_state_points_to_personal_center():
     text = CASCADE.read_text(encoding="utf-8")
+    skills_api = (ROOT / "app" / "api" / "portal" / "endpoints" / "skills.py").read_text(encoding="utf-8")
     assert "active-config" not in text
     assert "params: { agent_id: agentId }" in text
     assert "/api/portal/skills" in text
+    assert "published_skill_union_for_agent_keys" in skills_api
+    assert "嵌入会话只能查询当前锁定智能体的技能" not in skills_api
+    assert "_resolve_embed_app_skill_filter" in skills_api
+    assert "hidePersonalSkills" in text
     assert "/dashboard/personal?tab=skills" in text
     assert "SkillCascadeMenu" in CHAT_INPUT.read_text(encoding="utf-8") or "skill-cascade" in CHAT_INPUT.read_text(encoding="utf-8").lower()
     assert "SkillCascadeMenu" in CHAT_INPUT.read_text(encoding="utf-8")

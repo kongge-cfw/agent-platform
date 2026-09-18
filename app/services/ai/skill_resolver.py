@@ -231,6 +231,29 @@ def skill_filter_kwargs_from_config(agent_config: Any = None) -> Dict[str, Any]:
     }
 
 
+def merge_skill_filters(filters: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """合并多个智能体的公共技能白名单。
+
+    - 空列表：不展示任何公共技能
+    - 任一智能体未开自定义 Skills：回落全部已启用公共技能
+    - 全部为自定义白名单：按 skill id 去重并集
+    """
+    items = [item for item in (filters or []) if isinstance(item, dict)]
+    if not items:
+        return {"skills_custom": True, "allowed_global_skills": []}
+    union: List[str] = []
+    seen: Set[str] = set()
+    for item in items:
+        if not item.get("skills_custom"):
+            return {"skills_custom": False, "allowed_global_skills": None}
+        for skill_id in item.get("allowed_global_skills") or []:
+            sid = str(skill_id or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                union.append(sid)
+    return {"skills_custom": True, "allowed_global_skills": union}
+
+
 def _is_path_under_root(path: str, root: str) -> bool:
     try:
         abs_path = os.path.abspath(path)

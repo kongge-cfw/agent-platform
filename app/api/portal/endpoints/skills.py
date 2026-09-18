@@ -14,9 +14,12 @@ from app.core.config import settings
 from app.core.dependencies import require_api_key, require_permission
 from app.core.orm import get_db_session
 from app.services.ai.agent_manager import AgentManagerService
-from app.services.ai.skill_resolver import skill_filter_kwargs_from_config
+from app.services.ai.skill_resolver import (
+    merge_skill_filters,
+    skill_filter_kwargs_from_config,
+)
 from app.services.embed_identity import (
-    agent_config_matches_lock,
+    embed_role_id,
     is_embed_session,
     locked_agent_id,
 )
@@ -221,16 +224,29 @@ def get_file_tree(dir_path: str, base_path: str) -> list:
         logger.error(f"[Skills] Error generating tree for {dir_path}: {e}")
     return tree
 
-def _requested_agent_matches_lock(requested: str, locked: str, config: Any) -> bool:
-    if requested == locked:
-        return True
-    if config is None:
-        return False
-    return agent_config_matches_lock(
-        getattr(config, "agent_id", None),
-        getattr(config, "agent_name", None),
-        locked,
-    )
+async def _resolve_embed_app_skill_filter(
+    *,
+    agent_id: Optional[str],
+    user: Dict,
+    session: Any,
+) -> Dict[str, Any]:
+    """嵌入技能目录：当前应用角色绑定智能体的已发布公共技能去重并集。"""
+    none_filter = merge_skill_filters([])
+    if session is None or not hasattr(session, "execute"):
+        return none_filter
+    keys: set[str] = set()
+    role_id = embed_role_id(user)
+    if role_id:
+        from app.services.embed_app_service import get_role_agent_ids
+
+        keys = await get_role_agent_ids(session, role_id)
+    if not keys:
+        fallback = locked_agent_id(user) or str(agent_id or "").strip()
+        if fallback:
+            keys = {fallback}
+    if not keys:
+        return none_filter
+    return await AgentManagerService.published_skill_union_for_agent_keys(session, list(keys))
 
 
 async def _resolve_published_skill_filter(
@@ -239,18 +255,22 @@ async def _resolve_published_skill_filter(
     user: Dict,
     session: Any,
 ) -> Dict[str, Any]:
-    """按已发布版本解析公共技能白名单；嵌入会话未传 agent_id 时用 Ticket 锁定智能体。"""
-    requested = str(agent_id or "").strip()
-    locked = locked_agent_id(user) if is_embed_session(user) else ""
-    effective = requested or locked
-    empty_filter = {"skills_custom": False, "allowed_global_skills": None}
-    if not effective or session is None or not hasattr(session, "execute"):
-        return empty_filter
+    """按已发布版本解析公共技能白名单。
 
-    config = await AgentManagerService.get_active_agent_config(session, agent_id=effective)
-    if is_embed_session(user) and locked and requested:
-        if not _requested_agent_matches_lock(requested, locked, config):
-            raise HTTPException(status_code=403, detail="嵌入会话只能查询当前锁定智能体的技能")
+    嵌入会话取应用角色绑定智能体的技能去重并集，不再按当前会话单个智能体过滤。
+    站内调试/管理仍可传 agent_id，按该智能体已发布版本的 skills_custom / skills 过滤。
+    """
+    empty_filter = {"skills_custom": False, "allowed_global_skills": None}
+    if is_embed_session(user):
+        return await _resolve_embed_app_skill_filter(
+            agent_id=agent_id,
+            user=user,
+            session=session,
+        )
+    requested = str(agent_id or "").strip()
+    if not requested or session is None or not hasattr(session, "execute"):
+        return empty_filter
+    config = await AgentManagerService.get_active_agent_config(session, agent_id=requested)
     return skill_filter_kwargs_from_config(config)
 
 
@@ -262,8 +282,8 @@ async def list_skills(
 ):
     """
     扫描技能物理目录，解析 SKILL.md 返回技能列表。
-    传入 agent_id（嵌入会话也可省略，改用 Ticket 锁定智能体）时，按该智能体
-    已发布版本的 skills_custom / skills 过滤公共技能。
+    站内传入 agent_id 时，按该智能体已发布版本的 skills_custom / skills 过滤公共技能。
+    嵌入会话忽略单个 agent_id，改为当前应用角色绑定智能体的已发布技能去重并集。
     平台技能目录可供登录用户查询和使用；创建、编辑、删除等管理操作
     仍由 element:skills:admin 单独保护。
     """

@@ -334,3 +334,40 @@ def test_enforce_command_blacklist(mock_skills_dir):
             # 测试非 exec_command 工具直接放行
             res3 = run(_enforce_command_blacklist("read_file", {"path": "/app/data"}))
             assert res3 is None
+
+
+def test_embed_list_skills_uses_role_agent_skill_union(mock_skills_dir):
+    from unittest.mock import AsyncMock, patch
+
+    for skill_id in ("skill-a", "skill-b", "skill-c"):
+        skill_dir = mock_skills_dir / skill_id
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\nenabled: true\n---\n",
+            encoding="utf-8",
+        )
+
+    user = {
+        "session_type": "embed",
+        "embed_role_id": 12,
+        "user_id": 99,
+        "user_name": "embed_user",
+        "role": "user",
+    }
+    session = SimpleNamespace(execute=object())
+
+    with patch(
+        "app.services.embed_app_service.get_role_agent_ids",
+        new_callable=AsyncMock,
+        return_value={"agent-1", "agent-2"},
+    ), patch(
+        "app.services.ai.agent_manager.AgentManagerService.published_skill_union_for_agent_keys",
+        new_callable=AsyncMock,
+        return_value={"skills_custom": True, "allowed_global_skills": ["skill-a", "skill-b"]},
+    ) as mock_union:
+        response = run(skills.list_skills(agent_id="other-agent", user=user, session=session))
+
+    mock_union.assert_awaited()
+    assert response["status"] == "success"
+    assert response["skills_custom"] is True
+    assert {item["id"] for item in response["data"]} == {"skill-a", "skill-b"}

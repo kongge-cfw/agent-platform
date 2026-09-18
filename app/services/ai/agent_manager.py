@@ -362,6 +362,36 @@ class AgentManagerService:
         return latest
 
     @staticmethod
+    async def published_skill_union_for_agent_keys(
+        session: AsyncSession,
+        agent_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """已发布版本公共技能去重并集；无智能体或都无已发布版本时返回空白名单。"""
+        from app.services.ai.skill_resolver import merge_skill_filters, skill_filter_kwargs_from_config
+
+        keys = {str(item or "").strip() for item in (agent_keys or []) if str(item or "").strip()}
+        if not keys:
+            return merge_skill_filters([])
+        agents = (
+            await session.execute(
+                select(AIAgent).where(
+                    AIAgent.is_enabled == True,
+                    or_(AIAgent.id.in_(list(keys)), AIAgent.name.in_(list(keys))),
+                )
+            )
+        ).scalars().all()
+        versions = await AgentManagerService._latest_published_versions_by_agent(
+            session,
+            [str(agent.id) for agent in agents],
+        )
+        filters = [
+            skill_filter_kwargs_from_config(versions[agent.id])
+            for agent in agents
+            if agent.id in versions
+        ]
+        return merge_skill_filters(filters)
+
+    @staticmethod
     async def get_active_agent_config(
         session: AsyncSession, 
         agent_id: Optional[str] = None, 

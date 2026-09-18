@@ -63,6 +63,36 @@ def test_embed_chat_pins_shortcut_bar_and_keeps_new_and_history_only():
     assert 'ROW_SYSTEM_COMMAND_IDS' in chat_input
     assert 'sys_clear' in chat_input
     assert 'sys_history' in chat_input
+    assert "isSlashPaletteCommand" in chat_input
+    assert "if (!pinShortcutBar.value) return true;" in chat_input
+    assert 'return !id.startsWith("sys_");' in chat_input
+    assert "queryMatchedCommands" in chat_input
+    assert "loadSlashPaletteSkills" in chat_input
+    assert "slashSkillPaletteItems" in chat_input
+    assert 'kind: "skill"' in chat_input
+    assert 'axios.get("/api/portal/skills"' in chat_input
+    assert 'axios.get("/api/portal/skills/personal")' not in chat_input
+    assert "mountSkillFromCascade" in chat_input
+    assert ">个人技能</span>" not in chat_input
+    assert ">平台技能</span>" in chat_input
+    assert "技能与指令" in chat_input
+    assert "Enter 选择 · Esc 关闭" in chat_input
+    assert "← → 切换" in chat_input
+    assert "cycleSlashPaletteTab" in chat_input
+    assert 'e.key === "ArrowLeft"' in chat_input
+    assert 'e.key === "ArrowRight"' in chat_input
+    assert "slashPaletteTab" in chat_input
+    assert "switchSlashPaletteTab('command')" in chat_input
+    assert "slashItemIcon" in chat_input
+    assert "slashPaletteCommands" in chat_input
+    assert "h-[15.75rem]" in chat_input
+    assert "flex h-12 cursor-pointer" in chat_input
+    assert "h-0.5 rounded-t-full bg-primary" in chat_input
+    assert "pinShortcutBar ? triggerFileInput() : togglePlusMenu()" in chat_input
+    assert "上传本地文件" in chat_input
+    assert ':hide-personal-skills="pinShortcutBar"' in chat_input
+    assert ">个人</span>" in chat_input
+    assert ">系统</span>" in chat_input
     assert 'v-if="!pinShortcutBar"' in chat_input
     assert "System · 系统功能" in chat_input
     assert "快捷指令" in chat_input

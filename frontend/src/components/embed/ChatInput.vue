@@ -114,7 +114,7 @@ const props = defineProps<{
   reasoningEffortOverride?: ReasoningEffort | null;
   temperatureOverride?: number | null;
   activeLtmPreference?: any;
-  /** 当前会话有效智能体 ID，用于过滤平台技能列表 */
+  /** 当前会话有效智能体 ID。站内调试用于过滤平台技能；嵌入会话由服务端按应用角色智能体并集过滤 */
   agentId?: string | null;
   /** 会话已挂载的 MCP 工具名 */
   attachedMcpToolNames?: string[];
@@ -592,6 +592,12 @@ const showShortcutBar = computed(
 );
 const ROW_SYSTEM_COMMAND_IDS = new Set(["sys_clear", "sys_history"]);
 
+const isSlashPaletteCommand = (cmd: any) => {
+  const id = String(cmd?.id || "");
+  if (!pinShortcutBar.value) return true;
+  return !id.startsWith("sys_");
+};
+
 const handleCompositionStart = () => {
   isComposing.value = true;
 };
@@ -603,15 +609,37 @@ const handleCompositionEnd = () => {
   }, 100);
 };
 
-const filteredCommands = computed(() => {
+const queryMatchedCommands = computed(() => {
   if (!props.modelValue.startsWith('/')) return props.slashCommands;
   const query = props.modelValue.slice(1).toLowerCase();
   if (!query) return props.slashCommands;
   return props.slashCommands.filter(cmd => (cmd.command?.toLowerCase().includes(query)) || (cmd.label?.toLowerCase().includes(query)));
 });
 
-const filteredUserCommands = computed(() => filteredCommands.value.filter(c => !String(c.id).startsWith('sys_')));
-const filteredSystemCommands = computed(() => filteredCommands.value.filter(c => String(c.id).startsWith('sys_')));
+const slashPaletteSkills = ref<SkillItem[]>([]);
+const slashSkillsLoading = ref(false);
+let slashSkillsLoadedAgent = "__unloaded__";
+let slashSkillsLoadSeq = 0;
+const slashPaletteTab = ref<"command" | "skill">("command");
+const slashPaletteListRef = ref<HTMLElement | null>(null);
+
+const isSlashSkillItem = (cmd: any) => cmd?.kind === "skill";
+const slashPaletteCommands = computed(() => queryMatchedCommands.value.filter(isSlashPaletteCommand));
+
+const switchSlashPaletteTab = (tab: "command" | "skill") => {
+  if (slashPaletteTab.value === tab) return;
+  slashPaletteTab.value = tab;
+  activeCommandIndex.value = 0;
+};
+
+const cycleSlashPaletteTab = (direction: -1 | 1) => {
+  const tabs = ["command", "skill"] as const;
+  const next = (tabs.indexOf(slashPaletteTab.value) + direction + tabs.length) % tabs.length;
+  switchSlashPaletteTab(tabs[next]);
+};
+
+const filteredUserCommands = computed(() => queryMatchedCommands.value.filter(c => !String(c.id).startsWith('sys_')));
+const filteredSystemCommands = computed(() => queryMatchedCommands.value.filter(c => String(c.id).startsWith('sys_')));
 
 const systemCommandIconById: Record<string, any> = {
   sys_clear: ChatBubbleLeftRightIcon,
@@ -628,6 +656,27 @@ const systemCommandIconById: Record<string, any> = {
 
 const getSystemCommandIcon = (cmd: any) => systemCommandIconById[String(cmd?.id || '')] || null;
 
+const slashItemIcon = (cmd: any) => {
+  if (isSlashSkillItem(cmd)) return PuzzlePieceIcon;
+  const sysIcon = getSystemCommandIcon(cmd);
+  if (sysIcon) return sysIcon;
+  if (String(cmd?.id || "").startsWith("app_prompt_")) return BoltIcon;
+  return CommandLineIcon;
+};
+
+const slashItemIconWrapClass = (cmd: any) => {
+  if (isSlashSkillItem(cmd)) {
+    return "border-amber-100 bg-amber-50 text-amber-600 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300";
+  }
+  if (String(cmd?.id || "").startsWith("sys_")) {
+    return "border-gray-200 bg-gray-100 text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300";
+  }
+  if (String(cmd?.id || "").startsWith("app_prompt_")) {
+    return "border-blue-100 bg-blue-50 text-blue-600 dark:border-blue-800/60 dark:bg-blue-950/40 dark:text-blue-300";
+  }
+  return "border-emerald-100 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300";
+};
+
 const canManageShortcuts = computed(() => props.allowManageShortcuts !== false);
 
 /** 与 AgentDebug 快捷指令管理一致：本人创建或 admin 可删（不含内置 sys_ 虚拟指令） */
@@ -638,10 +687,6 @@ const canDeleteCommand = (cmd: { id?: unknown; created_by?: string }) => {
   if (props.currentUser.role === "admin") return true;
   return cmd.created_by === props.currentUser.user_name;
 };
-
-watch(() => filteredCommands.value, () => {
-  activeCommandIndex.value = 0;
-});
 
 const isOwnedUserCommand = (cmd: any) => {
   const id = String(cmd?.id || "");
@@ -750,10 +795,38 @@ const handleKeydown = (e: KeyboardEvent) => {
   if (e.isComposing || isComposing.value) return;
   if (showMentionList.value && mentionListRef.value && mentionListRef.value.handleKeydown(e)) return;
   if (showCommandMenu.value) {
-    if (e.key === "ArrowUp") { e.preventDefault(); activeCommandIndex.value = (activeCommandIndex.value - 1 + filteredCommands.value.length) % filteredCommands.value.length; return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); activeCommandIndex.value = (activeCommandIndex.value + 1) % filteredCommands.value.length; return; }
-    if (e.key === "Enter") { e.preventDefault(); selectCommand(filteredCommands.value[activeCommandIndex.value]); return; }
-    if (e.key === "Escape") { showCommandMenu.value = false; return; }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!filteredCommands.value.length) return;
+      activeCommandIndex.value = (activeCommandIndex.value - 1 + filteredCommands.value.length) % filteredCommands.value.length;
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!filteredCommands.value.length) return;
+      activeCommandIndex.value = (activeCommandIndex.value + 1) % filteredCommands.value.length;
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      cycleSlashPaletteTab(-1);
+      return;
+    }
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      cycleSlashPaletteTab(1);
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      selectCommand(filteredCommands.value[activeCommandIndex.value]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      showCommandMenu.value = false;
+      return;
+    }
   }
   if (e.key === "Enter" && !e.shiftKey) {
     if (!canSend.value) return;
@@ -765,6 +838,13 @@ const handleKeydown = (e: KeyboardEvent) => {
 const selectCommand = (cmd: any) => {
   if (isInteractionLocked.value || !cmd) return;
   if (cmd.disabled) return;
+  if (isSlashSkillItem(cmd)) {
+    if (cmd.skill) mountSkillFromCascade(cmd.skill);
+    emit('update:modelValue', '');
+    showCommandMenu.value = false;
+    nextTick(() => inputRef.value?.focus());
+    return;
+  }
   if (String(cmd.id).startsWith('sys_')) {
     emit('system-command', cmd.command);
     emit('update:modelValue', '');
@@ -1430,6 +1510,90 @@ const attachedSkillIds = computed(() =>
     .map((f) => String(f.url)),
 );
 
+const loadSlashPaletteSkills = async () => {
+  const agentId = String(props.agentId || "").trim();
+  if (slashSkillsLoadedAgent === agentId) return;
+  const seq = ++slashSkillsLoadSeq;
+  slashSkillsLoadedAgent = agentId;
+  slashSkillsLoading.value = true;
+  try {
+    const globalRes = await axios.get(
+      "/api/portal/skills",
+      agentId ? { params: { agent_id: agentId } } : undefined,
+    );
+    if (seq !== slashSkillsLoadSeq) return;
+    slashPaletteSkills.value =
+      globalRes.data?.status === "success"
+        ? (globalRes.data.data || [])
+            .map((s: any) => ({ ...s, scope: "global" as const }))
+            .filter((s: any) => s.enabled !== "false")
+        : [];
+  } catch (err) {
+    console.error("加载斜杠技能列表失败:", err);
+    if (seq === slashSkillsLoadSeq) slashSkillsLoadedAgent = "__unloaded__";
+  } finally {
+    if (seq === slashSkillsLoadSeq) slashSkillsLoading.value = false;
+  }
+};
+
+const slashSkillPaletteItems = computed(() => {
+  const attached = new Set(attachedSkillIds.value);
+  const query = props.modelValue.startsWith("/") ? props.modelValue.slice(1).trim().toLowerCase() : "";
+  return slashPaletteSkills.value
+    .filter((skill) => {
+      if (!query) return true;
+      return (
+        skill.name?.toLowerCase().includes(query)
+        || skill.id?.toLowerCase().includes(query)
+        || skill.description?.toLowerCase().includes(query)
+        || skill.path?.toLowerCase().includes(query)
+      );
+    })
+    .map((skill) => ({
+      id: `skill:${skill.scope || "global"}:${skill.id}`,
+      kind: "skill" as const,
+      label: skill.name || skill.id,
+      command: skill.description || skill.id,
+      disabled: attached.has(skill.id),
+      skill,
+    }));
+});
+
+const filteredCommands = computed(() =>
+  slashPaletteTab.value === "skill" ? slashSkillPaletteItems.value : slashPaletteCommands.value,
+);
+
+watch(showCommandMenu, (open) => {
+  if (open) {
+    slashPaletteTab.value = "command";
+    activeCommandIndex.value = 0;
+    void loadSlashPaletteSkills();
+  }
+});
+
+watch(
+  () => props.agentId,
+  () => {
+    slashSkillsLoadSeq += 1;
+    slashSkillsLoadedAgent = "__unloaded__";
+    slashPaletteSkills.value = [];
+    if (showCommandMenu.value) void loadSlashPaletteSkills();
+  },
+);
+
+watch(filteredCommands, () => {
+  activeCommandIndex.value = 0;
+});
+
+watch(activeCommandIndex, () => {
+  nextTick(() => {
+    const list = slashPaletteListRef.value;
+    if (!list) return;
+    const activeItem = list.children[activeCommandIndex.value] as HTMLElement | undefined;
+    if (activeItem) activeItem.scrollIntoView({ block: "nearest" });
+  });
+});
+
 const isExpertMode = computed(
   () => props.routingMode === "expert" && !!props.expertAgentId,
 );
@@ -1902,36 +2066,101 @@ defineExpose({
             </div>
 
             <div
-              v-if="showCommandMenu && filteredCommands.length > 0 && !isInteractionLocked"
-              class="absolute bottom-full left-0 right-0 z-[100] mb-2 flex max-h-72 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl animate-fade-in-up dark:border-gray-700 dark:bg-gray-800 sm:max-w-sm"
+              v-if="showCommandMenu && !isInteractionLocked"
+              class="absolute bottom-full left-0 right-0 z-[100] mb-2 flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl animate-fade-in-up dark:border-gray-700 dark:bg-gray-800 sm:max-w-sm"
+              role="listbox"
+              aria-label="指令与技能"
             >
-              <div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-700">
-                <div class="flex items-center space-x-2">
-                  <span class="text-[10px] font-black uppercase tracking-widest text-gray-400">快捷指令库</span>
-                  <span class="rounded-md bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">{{ filteredCommands.length }} 匹配</span>
+              <div class="flex items-center justify-between border-b border-gray-200 bg-white px-2.5 dark:border-gray-700 dark:bg-gray-800">
+                <div class="flex min-w-0 items-end gap-1">
+                  <span class="mb-2 h-3.5 w-1 shrink-0 rounded-full bg-primary" />
+                  <button
+                    type="button"
+                    class="relative flex items-center gap-1 px-2 pb-2 pt-2 text-xs font-semibold transition-colors"
+                    :class="slashPaletteTab === 'command' ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+                    @mousedown.prevent
+                    @click="switchSlashPaletteTab('command')"
+                  >
+                    指令
+                    <span
+                      class="rounded-md px-1.5 py-0.5 text-[9px] font-bold"
+                      :class="slashPaletteTab === 'command' ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'"
+                    >{{ slashPaletteCommands.length }}</span>
+                    <span
+                      v-if="slashPaletteTab === 'command'"
+                      class="absolute inset-x-2 bottom-0 h-0.5 rounded-t-full bg-primary"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    class="relative flex items-center gap-1 px-2 pb-2 pt-2 text-xs font-semibold transition-colors"
+                    :class="slashPaletteTab === 'skill' ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+                    @mousedown.prevent
+                    @click="switchSlashPaletteTab('skill')"
+                  >
+                    技能
+                    <span
+                      class="rounded-md px-1.5 py-0.5 text-[9px] font-bold"
+                      :class="slashPaletteTab === 'skill' ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'"
+                    >{{ slashSkillPaletteItems.length }}</span>
+                    <span
+                      v-if="slashPaletteTab === 'skill'"
+                      class="absolute inset-x-2 bottom-0 h-0.5 rounded-t-full bg-primary"
+                    />
+                  </button>
                 </div>
+                <span class="mb-2 hidden shrink-0 text-[9px] text-gray-400 sm:inline">← → 切换 · Enter 选择 · Esc 关闭</span>
               </div>
-              <div class="overflow-y-auto p-1 custom-scrollbar">
+              <div ref="slashPaletteListRef" class="h-[15.75rem] overflow-y-auto px-1.5 py-1.5 custom-scrollbar">
+                <div
+                  v-if="slashPaletteTab === 'skill' && slashSkillsLoading && !slashPaletteSkills.length"
+                  class="flex h-full items-center justify-center text-[11px] text-gray-400"
+                >
+                  正在加载技能…
+                </div>
+                <div
+                  v-else-if="filteredCommands.length === 0"
+                  class="flex h-full items-center justify-center text-[11px] text-gray-400"
+                >
+                  {{ slashPaletteTab === 'skill' ? '暂无匹配技能' : '暂无匹配指令' }}
+                </div>
                 <div
                   v-for="(cmd, index) in filteredCommands"
                   :key="cmd.id"
                   @click="cmd.disabled ? null : selectCommand(cmd)"
-                  class="flex cursor-pointer items-center space-x-3 rounded-lg px-3 py-2 transition-all"
+                  class="flex h-12 cursor-pointer items-center gap-2 rounded-lg px-2 transition-all"
                   :class="[
                     cmd.disabled ? 'opacity-40 cursor-not-allowed' : '',
-                    index === activeCommandIndex ? 'bg-primary/10 ring-1 ring-primary/20 dark:bg-primary/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+                    index === activeCommandIndex
+                      ? (isSlashSkillItem(cmd)
+                        ? 'bg-amber-50 ring-1 ring-amber-200/70 dark:bg-amber-950/40 dark:ring-amber-800/60'
+                        : isAppConfiguredCommand(cmd)
+                        ? 'bg-blue-50 ring-1 ring-blue-200/70 dark:bg-blue-950/40 dark:ring-blue-800/60'
+                        : String(cmd.id).startsWith('sys_')
+                          ? 'bg-primary/10 ring-1 ring-primary/20 dark:bg-primary/20'
+                          : 'bg-emerald-50 ring-1 ring-emerald-200/70 dark:bg-emerald-950/40 dark:ring-emerald-800/60')
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                   ]"
                 >
+                  <div
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border"
+                    :class="slashItemIconWrapClass(cmd)"
+                  >
+                    <component :is="slashItemIcon(cmd)" class="h-3.5 w-3.5" aria-hidden="true" />
+                  </div>
                   <div class="min-w-0 flex-1">
-                    <div class="flex items-center space-x-2">
-                      <span class="flex items-center gap-1.5 truncate text-sm font-bold text-gray-900 dark:text-gray-100" :class="[index === activeCommandIndex && !cmd.disabled ? 'text-primary' : '', cmd.disabled ? 'text-gray-400 dark:text-gray-500' : '']">
-                        <component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <div class="flex items-center gap-1.5">
+                      <span class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100" :class="[cmd.disabled ? 'text-gray-400 dark:text-gray-500' : '']">
                         {{ cmd.label }}
                       </span>
-                      <span v-if="cmd.disabled" class="rounded border border-yellow-200 bg-yellow-50 px-1 py-0.5 text-[8px] font-bold text-yellow-600 dark:border-yellow-900/30 dark:bg-yellow-950/20">功能未启用</span>
-                      <span v-if="String(cmd.id).startsWith('sys_')" class="rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-[8px] font-black uppercase tracking-tighter text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-400">SYS</span>
+                      <span v-if="cmd.disabled && isSlashSkillItem(cmd)" class="shrink-0 rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-[8px] font-bold text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-400">已挂载</span>
+                      <span v-else-if="cmd.disabled" class="shrink-0 rounded border border-yellow-200 bg-yellow-50 px-1 py-0.5 text-[8px] font-bold text-yellow-600 dark:border-yellow-900/30 dark:bg-yellow-950/20">功能未启用</span>
+                      <span v-else-if="isSlashSkillItem(cmd)" class="shrink-0 rounded border border-amber-100 bg-amber-50 px-1 py-0.5 text-[8px] font-bold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">平台技能</span>
+                      <span v-else-if="String(cmd.id).startsWith('sys_')" class="shrink-0 rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-[8px] font-black uppercase tracking-tighter text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-400">SYS</span>
+                      <span v-else-if="isAppConfiguredCommand(cmd)" class="shrink-0 rounded border border-blue-100 bg-blue-50 px-1 py-0.5 text-[8px] font-bold text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300">系统</span>
+                      <span v-else class="shrink-0 rounded border border-emerald-100 bg-emerald-50 px-1 py-0.5 text-[8px] font-bold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">个人</span>
                     </div>
-                    <div class="truncate font-mono text-[10px] text-gray-400 opacity-70">
+                    <div class="truncate font-mono text-[10px] leading-4 text-gray-400 opacity-70">
                       {{ cmd.command }}
                     </div>
                   </div>
@@ -2385,7 +2614,7 @@ defineExpose({
             >
                 <!-- Plus Button & Menu (Premium Glassmorphism Style) -->
                 <div ref="plusMenuContainerRef" class="relative flex-shrink-0 z-30">
-                    <button @click="togglePlusMenu" :disabled="isInteractionLocked" class="w-8 h-8 sm:w-7 sm:h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400" :class="{ 'text-primary bg-gray-100 dark:bg-gray-700 rotate-45': showPlusMenu && !isInteractionLocked }" title="添加附件或上下文">
+                    <button @click="pinShortcutBar ? triggerFileInput() : togglePlusMenu()" :disabled="isInteractionLocked" class="w-8 h-8 sm:w-7 sm:h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400" :class="{ 'text-primary bg-gray-100 dark:bg-gray-700 rotate-45': showPlusMenu && !pinShortcutBar && !isInteractionLocked }" :title="pinShortcutBar ? '上传本地文件' : '添加附件或上下文'">
                         <svg class="w-5 h-5 sm:w-4 sm:h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
                         </svg>
@@ -2402,7 +2631,7 @@ defineExpose({
                       leave-from-class="transform opacity-100 scale-100"
                       leave-to-class="transform opacity-0 scale-95"
                     >
-                        <div v-if="showPlusMenu" class="absolute bottom-full left-0 mb-2 z-50">
+                        <div v-if="showPlusMenu && !pinShortcutBar" class="absolute bottom-full left-0 mb-2 z-50">
                             <div class="relative">
                                 <div class="w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1.5 animate-fade-in-up">
                                     <!-- Data Portal -->
@@ -2552,6 +2781,7 @@ defineExpose({
                                     fill-height
                                     :agent-id="agentId"
                                     :attached-skill-ids="attachedSkillIds"
+                                    :hide-personal-skills="pinShortcutBar"
                                     @select="mountSkillFromCascade"
                                   />
                                 </div>
@@ -2631,6 +2861,7 @@ defineExpose({
                                 full-width
                                 :agent-id="agentId"
                                 :attached-skill-ids="attachedSkillIds"
+                                :hide-personal-skills="pinShortcutBar"
                                 @select="mountSkillFromCascade"
                               />
                             </div>

@@ -97,12 +97,24 @@ watch(
   },
 );
 
+const scrollActiveItemIntoView = () => {
+  const list = listContainer.value;
+  if (!list) return;
+  const activeItem = list.querySelector(
+    `[data-mention-index="${selectedIndex.value}"]`,
+  ) as HTMLElement | null;
+  if (!activeItem) return;
+  const listRect = list.getBoundingClientRect();
+  const itemRect = activeItem.getBoundingClientRect();
+  if (itemRect.top < listRect.top) {
+    list.scrollTop -= listRect.top - itemRect.top;
+  } else if (itemRect.bottom > listRect.bottom) {
+    list.scrollTop += itemRect.bottom - listRect.bottom;
+  }
+};
+
 watch(selectedIndex, () => {
-  nextTick(() => {
-    if (!listContainer.value) return;
-    const activeItem = listContainer.value.children[selectedIndex.value] as HTMLElement | undefined;
-    if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
-  });
+  nextTick(scrollActiveItemIntoView);
 });
 
 const handleSelectRow = (row: MentionRow) => {
@@ -174,6 +186,7 @@ defineExpose({ handleKeydown });
         <button
           v-if="row.kind === 'auto'"
           type="button"
+          :data-mention-index="index"
           class="w-full flex items-start gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition-colors border border-transparent text-left"
           :class="index === selectedIndex
             ? 'bg-primary/10 border-primary/15'
@@ -213,6 +226,7 @@ defineExpose({ handleKeydown });
         <button
           v-else-if="row.kind === 'agent'"
           type="button"
+          :data-mention-index="index"
           class="w-full flex items-start gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition-colors border border-transparent text-left"
           :class="index === selectedIndex
             ? 'bg-primary/10 border-primary/15'
@@ -254,10 +268,6 @@ defineExpose({ handleKeydown });
           </div>
         </button>
       </template>
-    </div>
-
-    <div class="px-2.5 py-1.5 border-t border-gray-200 dark:border-gray-700 text-center shrink-0 bg-gray-50 dark:bg-gray-900/80">
-      <span class="text-[10px] text-gray-500 dark:text-gray-400">共 {{ filteredAgents.length }} 个专家</span>
     </div>
   </div>
 </template>

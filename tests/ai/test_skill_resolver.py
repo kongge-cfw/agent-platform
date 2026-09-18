@@ -12,6 +12,7 @@ from app.services.ai.skill_resolver import (
     _score_skill_match,
     is_main_general_agent,
     lexical_relevance_score,
+    merge_skill_filters,
     scan_relevant_skills,
     should_scan_skills_for_query,
 )
@@ -122,3 +123,29 @@ def test_is_main_general_agent_rejects_chatbi():
             capabilities=["data_query"],
         )
     ) is False
+
+
+def test_merge_skill_filters_unions_and_dedupes_custom_allowlists():
+    merged = merge_skill_filters(
+        [
+            {"skills_custom": True, "allowed_global_skills": ["skill-a", "skill-b"]},
+            {"skills_custom": True, "allowed_global_skills": ["skill-b", "skill-c"]},
+        ]
+    )
+    assert merged["skills_custom"] is True
+    assert merged["allowed_global_skills"] == ["skill-a", "skill-b", "skill-c"]
+
+
+def test_merge_skill_filters_any_default_strategy_keeps_all_public_skills():
+    merged = merge_skill_filters(
+        [
+            {"skills_custom": True, "allowed_global_skills": ["skill-a"]},
+            {"skills_custom": False, "allowed_global_skills": []},
+        ]
+    )
+    assert merged["skills_custom"] is False
+    assert merged["allowed_global_skills"] is None
+
+
+def test_merge_skill_filters_empty_means_no_public_skills():
+    assert merge_skill_filters([]) == {"skills_custom": True, "allowed_global_skills": []}

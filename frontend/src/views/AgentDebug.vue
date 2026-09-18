@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // ... imports ...
-import { ref, nextTick, watch, onUnmounted, reactive, onMounted, computed } from "vue";
+import { ref, nextTick, watch, onUnmounted, reactive, onMounted, computed, triggerRef } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import TraceLogViewer from "@/components/TraceLogViewer.vue";
 import DebugConfigPanel from "@/components/DebugConfigPanel.vue";
@@ -70,6 +70,17 @@ import {
   type GroundingBlockedPayload,
 } from "@/utils/agentscopeSseHandlers";
 import { cancelOpenTodosInMessages, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import {
+  discardInflightConversation,
+  lastNonSystemMessage,
+  mergeCompletedRunIntoMessages,
+  messageLooksIncomplete,
+  needsGeneratingPlaceholder,
+  patchInflightConversation,
+  peekInflightConversation,
+  shouldSkipHistoryReplace,
+  stashInflightConversation,
+} from "@/utils/inflightConversation";
 import {
   attachHitlCardsFromTimeline,
   historyHasActionableResumeCard,
@@ -303,13 +314,18 @@ const continueChatFromTrace = () => {
     if (targetId) {
         const previousId = conversationId.value;
         if (previousId && previousId !== targetId) {
+            stashCurrentInflightIfNeeded();
             finalizeConversationInBackground(previousId);
         }
         conversationId.value = targetId;
         resetDebugThinkingOverrides();
         localStorage.setItem("agent_debug_conv_id", targetId);
-        messages.value = [];
-        loadSessionHistory(targetId);
+        if (restoreInflightConversation(targetId)) {
+            afterConversationActivated(targetId);
+        } else {
+            messages.value = [];
+            loadSessionHistory(targetId).then(() => afterConversationActivated(targetId));
+        }
         showSessionPreview.value = false;
     } else {
         alert("无法继续：该会话可能未正确保存或仅为单次追踪记录。");
@@ -556,6 +572,33 @@ const refreshCurrentRunStatus = () => (
     : Promise.resolve(false)
 );
 
+let runStatusHydrateCid = "";
+let hydrateRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const clearHydrateRetryTimer = () => {
+  if (hydrateRetryTimer) {
+    clearTimeout(hydrateRetryTimer);
+    hydrateRetryTimer = null;
+  }
+};
+let stashCurrentInflightIfNeeded = () => {};
+let restoreInflightConversation = (_cid: string): boolean => false;
+let afterConversationActivated = (_cid: string) => {};
+let hydrateCompletedConversationRun = async (_opts?: { retry?: number }) => {};
+
+watch(remoteRunActive, (active, wasActive) => {
+  if (active && conversationId.value) {
+    runStatusHydrateCid = conversationId.value;
+  }
+  if (
+    wasActive === true
+    && active === false
+    && conversationId.value
+    && runStatusHydrateCid === conversationId.value
+  ) {
+    void hydrateCompletedConversationRun();
+  }
+});
+
 watch(conversationId, () => {
   void refreshCurrentRunStatus();
 }, { immediate: true });
@@ -607,6 +650,7 @@ const loadGreeting = async () => {
 const generateNewConversation = (isManual = false) => {
   const previousId = conversationId.value;
   if (previousId) {
+    if (isManual) stashCurrentInflightIfNeeded();
     finalizeConversationInBackground(previousId);
   }
   conversationId.value = createConversationId();
@@ -619,53 +663,54 @@ const generateNewConversation = (isManual = false) => {
   }
 };
 
+const mapDebugConversationMessages = (rawMessages: any[]): Message[] => {
+  const validMessages: any[] = [];
+  if (rawMessages.length > 0) {
+    validMessages.push(rawMessages[0]);
+    for (let i = 1; i < rawMessages.length; i++) {
+      const prev = rawMessages[i - 1];
+      const curr = rawMessages[i];
+      if (
+        curr.role === "assistant" &&
+        prev.role === "assistant" &&
+        curr.trace_id &&
+        curr.trace_id === prev.trace_id &&
+        curr.content === prev.content &&
+        curr.reasoning_content === prev.reasoning_content
+      ) {
+        continue;
+      }
+      validMessages.push(curr);
+    }
+  }
+  return resolveHitlCardsInHistory(validMessages.map(
+    (m: any, idx: number) => attachHitlCardsFromTimeline({
+      id: Date.now() + idx,
+      trace_id: m.trace_id,
+      role: m.role === "assistant" ? "agent" : m.role,
+      content: m.content as string,
+      reasoningContent: m.reasoning_content || undefined,
+      processTimeline: hydrateHistoryProcessTimeline(m.process_timeline, m.reasoning_content),
+      logs: [],
+      isThinking: false,
+      isHistory: true,
+      feedback: m.feedback,
+      agentName: m.agent_name || undefined,
+      agentDisplayName: m.agent_display_name || (String(m.agent_name || "").startsWith("sys_") ? "系统助手" : undefined),
+      agentType: m.agent_type || undefined,
+    }, m.process_timeline),
+  ));
+};
+
 const loadSessionHistory = async (id: string) => {
+  if (shouldSkipHistoryReplace(id)) return;
   try {
     const res = await axios.get(`/api/v1/chat/conversation/${id}`, {
       headers: { 'X-API-Key': localStorage.getItem('api_key') }
     });
     if (res.data?.data && Array.isArray(res.data.data.messages)) {
-      // Deduplicate: Filter out consecutive messages with same role and content
       const rawMessages = res.data.data.messages;
-      const validMessages: any[] = [];
-
-      if (rawMessages.length > 0) {
-        validMessages.push(rawMessages[0]);
-        for (let i = 1; i < rawMessages.length; i++) {
-          const prev = rawMessages[i-1];
-          const curr = rawMessages[i];
-          // Simple deduplication check
-          if (
-            curr.role === "assistant" &&
-            prev.role === "assistant" &&
-            curr.trace_id &&
-            curr.trace_id === prev.trace_id &&
-            curr.content === prev.content &&
-            curr.reasoning_content === prev.reasoning_content
-          ) {
-            continue; // Skip duplicate
-          }
-          validMessages.push(curr);
-        }
-      }
-
-      const historyMsg: Message[] = resolveHitlCardsInHistory(validMessages.map(
-        (m: any, idx: number) => attachHitlCardsFromTimeline({
-          id: Date.now() + idx,
-          trace_id: m.trace_id,
-          role: m.role === "assistant" ? "agent" : m.role,
-          content: m.content as string,
-          reasoningContent: m.reasoning_content || undefined,
-          processTimeline: hydrateHistoryProcessTimeline(m.process_timeline, m.reasoning_content),
-          logs: [],
-          isThinking: false,
-          isHistory: true, // Mark as history
-          feedback: m.feedback,
-          agentName: m.agent_name || undefined,
-          agentDisplayName: m.agent_display_name || (String(m.agent_name || '').startsWith('sys_') ? '系统助手' : undefined),
-          agentType: m.agent_type || undefined,
-        }, m.process_timeline),
-      ));
+      const historyMsg: Message[] = mapDebugConversationMessages(rawMessages);
       if (historyMsg.length > 0) {
         // Add Separator with Timestamp
         const lastMsg = res.data.data.messages[res.data.data.messages.length - 1];
@@ -698,10 +743,51 @@ const loadSessionHistory = async (id: string) => {
       }
     }
     // If empty or fail, load greeting
-    loadGreeting();
+    await loadGreeting();
   } catch (e) {
     console.warn("Failed to load session history", e);
-    loadGreeting();
+    await loadGreeting();
+  }
+};
+
+hydrateCompletedConversationRun = async (opts?: { retry?: number }) => {
+  const cid = conversationId.value;
+  if (!cid || remoteRunActive.value) return;
+  const retry = opts?.retry || 0;
+  const hadInflight = Boolean(peekInflightConversation(cid));
+  if (!hadInflight && !messageLooksIncomplete(lastNonSystemMessage(messages.value))) return;
+  try {
+    const res = await axios.get(`/api/v1/chat/conversation/${cid}`, {
+      headers: { "X-API-Key": localStorage.getItem("api_key") },
+    });
+    if (conversationId.value !== cid || remoteRunActive.value) return;
+    const rawMessages = Array.isArray(res.data?.data?.messages) ? res.data.data.messages : [];
+    const serverMessages = mapDebugConversationMessages(rawMessages);
+    const merged = mergeCompletedRunIntoMessages(messages.value, serverMessages);
+    if (merged.usedServer) {
+      messages.value = resolveHitlCardsInHistory(merged.messages);
+      discardInflightConversation(cid);
+      if (!historyHasActionableResumeCard(messages.value)) {
+        isProcessing.value = false;
+      }
+      nextTick(scrollToBottom);
+      return;
+    }
+  } catch (e) {
+    console.warn("Failed to hydrate completed conversation run", e);
+  }
+  if (retry < 1 && messageLooksIncomplete(lastNonSystemMessage(messages.value))) {
+    clearHydrateRetryTimer();
+    hydrateRetryTimer = setTimeout(() => {
+      if (conversationId.value === cid && !remoteRunActive.value) {
+        void hydrateCompletedConversationRun({ retry: retry + 1 });
+      }
+    }, 400);
+  } else {
+    discardInflightConversation(cid);
+    if (!historyHasActionableResumeCard(messages.value)) {
+      isProcessing.value = false;
+    }
   }
 };
 
@@ -759,7 +845,11 @@ onMounted(() => {
   const savedId = localStorage.getItem("agent_debug_conv_id");
   if (savedId) {
     conversationId.value = savedId;
-    loadSessionHistory(savedId);
+    if (restoreInflightConversation(savedId)) {
+      afterConversationActivated(savedId);
+    } else {
+      loadSessionHistory(savedId).then(() => afterConversationActivated(savedId));
+    }
   } else {
     // If no session, generate key
     generateNewConversation();
@@ -2367,6 +2457,82 @@ const activeTodoTimeline = computed(() => {
 const messagesContainer = ref<HTMLDivElement | null>(null);
 
 let abortController: AbortController | null = null;
+
+const buildGeneratingPlaceholder = (): Message => ({
+  id: Date.now() + Math.random(),
+  role: "agent",
+  content: "",
+  isThinking: true,
+  thinkingText: "正在生成回复…",
+  logs: [],
+});
+
+stashCurrentInflightIfNeeded = () => {
+  const cid = conversationId.value;
+  if (!cid || !lastNonSystemMessage(messages.value)) return;
+  stashInflightConversation(cid, {
+    messages: messages.value,
+    isProcessing: isProcessing.value || remoteRunActive.value,
+    abortController,
+  });
+  abortController = null;
+};
+
+restoreInflightConversation = (cid: string): boolean => {
+  const snap = peekInflightConversation<Message>(cid);
+  if (!snap) return false;
+  messages.value = snap.messages;
+  isProcessing.value = snap.isProcessing;
+  abortController = snap.abortController;
+  triggerRef(messages);
+  nextTick(scrollToBottom);
+  return true;
+};
+
+const ensureGeneratingPlaceholder = () => {
+  if (!needsGeneratingPlaceholder(messages.value, true)) return;
+  messages.value = [...messages.value, buildGeneratingPlaceholder()];
+  const cid = conversationId.value;
+  if (cid) {
+    if (peekInflightConversation(cid)) {
+      patchInflightConversation(cid, { messages: messages.value, isProcessing: true });
+    } else {
+      stashInflightConversation(cid, {
+        messages: messages.value,
+        isProcessing: true,
+        abortController,
+      });
+    }
+  }
+  triggerRef(messages);
+  nextTick(() => scrollToBottom(true));
+};
+
+const messagesOwningAgent = (msg: Message): Message[] =>
+  messages.value.includes(msg) ? messages.value : [msg];
+
+const syncProcessingForMessage = (msg: Message, cid: string, pendingHitl: boolean) => {
+  if (conversationId.value === cid && messages.value.includes(msg)) {
+    isProcessing.value = pendingHitl;
+    scrollToBottom();
+    return;
+  }
+  patchInflightConversation(cid, { isProcessing: pendingHitl });
+};
+
+afterConversationActivated = (cid: string) => {
+  void refreshCurrentRunStatus().then((active) => {
+    if (conversationId.value !== cid) return;
+    if (active) {
+      runStatusHydrateCid = cid;
+      isProcessing.value = true;
+      ensureGeneratingPlaceholder();
+      nextTick(() => scrollToBottom(true));
+      return;
+    }
+    void hydrateCompletedConversationRun();
+  });
+};
 let thoughtTimer: any = null;
 
 // Auto-scroll
@@ -2908,9 +3074,28 @@ const handleEscKey = (e: KeyboardEvent) => {
 
 const handleRunStatusVisibilityChange = () => {
   if (document.visibilityState === "visible") {
-    void refreshCurrentRunStatus();
+    const wasActive = remoteRunActive.value;
+    void refreshCurrentRunStatus().then((active) => {
+      if (!conversationId.value) return;
+      if (active) {
+        runStatusHydrateCid = conversationId.value;
+        isProcessing.value = true;
+        ensureGeneratingPlaceholder();
+        return;
+      }
+      if (
+        !wasActive
+        && (
+          peekInflightConversation(conversationId.value)
+          || messageLooksIncomplete(lastNonSystemMessage(messages.value))
+        )
+      ) {
+        void hydrateCompletedConversationRun();
+      }
+    });
   } else {
     stopRemoteRunPolling();
+    clearHydrateRetryTimer();
   }
 };
 
@@ -2922,6 +3107,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("keydown", handleEscKey);
   document.removeEventListener("visibilitychange", handleRunStatusVisibilityChange);
+  clearHydrateRetryTimer();
   disposePortalTimers();
 });
 
@@ -3266,6 +3452,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     chatInputRef.value.uploadedFiles = [];
   }
   isProcessing.value = true;
+  const streamConversationId = conversationId.value;
 
   // 2. Add Agent Placeholder
   const agentMsgId = Date.now() + 1;
@@ -3283,6 +3470,8 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     thinkingText: "南孜正在处理您的请求...",
   });
   messages.value.push(agentMsg.value);
+  const streamMessages = messages.value;
+  const isViewingStream = () => conversationId.value === streamConversationId;
 
   // Thinking Messages
   const THINKING_MESSAGES = [
@@ -3315,6 +3504,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
   // 3. Call Real API with SSE
   // SSE 可能因切后台/网络变化提前结束；在状态接口确认释放前继续阻止新一轮发送。
   remoteRunActive.value = true;
+  runStatusHydrateCid = streamConversationId;
   abortController = new AbortController();
   ragRetrievalMeta.value = null;
 
@@ -3442,16 +3632,18 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
               agentMsg.value.isThinking = false;
               (agentMsg.value as any).status = "duplicate_request";
               agentMsg.value.content = String(data.content || "相同发送请求已提交，请等待原任务完成。\n");
-              remoteRunActive.value = true;
-              void refreshCurrentRunStatus();
+              if (isViewingStream()) {
+                remoteRunActive.value = true;
+                void refreshCurrentRunStatus();
+              }
             } else if (data.type === "run_status") {
               agentMsg.value.isThinking = false;
-              markOutputCompleted();
+              if (isViewingStream()) markOutputCompleted();
               if (data.status === "success") {
                 (agentMsg.value as any).status = "success";
               } else if (data.status === "cancelled") {
                 (agentMsg.value as any).status = "cancelled";
-                cancelOpenTodosInMessages(messages.value);
+                cancelOpenTodosInMessages(streamMessages);
               }
             } else if (data.type === "log") {
               addRealLog(agentMsg.value, data);
@@ -3501,7 +3693,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
                 agentContext.value = { ...agentContext.value, ...data.data };
               }
             }
-            else if (dispatchAgentscopeStreamEvent(agentMsg.value, data, addRealLog, messages.value)) {
+            else if (dispatchAgentscopeStreamEvent(agentMsg.value, data, addRealLog, streamMessages)) {
               if (
                 (data.type === "permission_required" || (data.type === "retraction" && data.final !== false))
                 && thoughtTimer
@@ -3610,7 +3802,6 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     fetchHistory();
   } catch (error: any) {
     if (error.name === "AbortError") {
-      cancelOpenTodosInMessages(messages.value);
       return;
     }
 
@@ -3630,8 +3821,13 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
       });
     }
   } finally {
-    isProcessing.value = agentMsg.value.pendingPermission?.status === "pending" || agentMsg.value.pendingExternalExecution?.status === "pending";
-    void refreshCurrentRunStatus();
+    const pendingHitl = agentMsg.value.pendingPermission?.status === "pending" || agentMsg.value.pendingExternalExecution?.status === "pending";
+    if (conversationId.value === streamConversationId) {
+      isProcessing.value = pendingHitl;
+      void refreshCurrentRunStatus();
+    } else {
+      patchInflightConversation(streamConversationId, { isProcessing: pendingHitl });
+    }
     void refreshDebugContextUsage();
     void refreshDebugContextCompactions(true);
   }
@@ -3702,6 +3898,7 @@ const addRealLog = (msg: Message, data: any) => {
 const submitPendingExternalExecution = async (msg: Message) => {
   const pending = msg.pendingExternalExecution;
   if (!pending || pending.status !== "pending" || pending.isSubmitting) return;
+  const resumeCid = conversationId.value;
   pending.isSubmitting = true;
   isProcessing.value = true;
   msg.isThinking = true;
@@ -3724,7 +3921,7 @@ const submitPendingExternalExecution = async (msg: Message) => {
     msg.content += `\n[外部执行恢复失败: ${error.message || "Unknown error"}]`;
   } finally {
     pending.isSubmitting = false;
-    isProcessing.value = msg.pendingExternalExecution?.status === "pending" || msg.pendingPermission?.status === "pending";
+    const pendingHitl = msg.pendingExternalExecution?.status === "pending" || msg.pendingPermission?.status === "pending";
     msg.isThinking = false;
     if (thoughtTimer) {
       clearInterval(thoughtTimer);
@@ -3737,7 +3934,7 @@ const submitPendingExternalExecution = async (msg: Message) => {
         }
       });
     }
-    scrollToBottom();
+    syncProcessingForMessage(msg, resumeCid, pendingHitl);
   }
 };
 
@@ -3767,7 +3964,7 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
         data.status === "error" || data.status === "failed" ? "error" : "completed";
     }
     msg.isThinking = false;
-    markOutputCompleted();
+    if (messages.value.includes(msg)) markOutputCompleted();
     if (thoughtTimer) {
       clearInterval(thoughtTimer);
       thoughtTimer = null;
@@ -3776,13 +3973,13 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
       (msg as any).status = "success";
     } else if (data.status === "cancelled") {
       (msg as any).status = "cancelled";
-      cancelOpenTodosInMessages(messages.value);
+      cancelOpenTodosInMessages(messagesOwningAgent(msg));
     }
     return;
   }
 
   {
-    if (dispatchAgentscopeStreamEvent(msg, data, addRealLog, messages.value)) {
+    if (dispatchAgentscopeStreamEvent(msg, data, addRealLog, messagesOwningAgent(msg))) {
       if (data.type === "error") {
         if (msg.pendingPermission) msg.pendingPermission.status = "error";
         if (msg.pendingExternalExecution) msg.pendingExternalExecution.status = "error";
@@ -3966,6 +4163,7 @@ const submitUserQuestion = async (
 const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
   const pending = msg.pendingPermission;
   if (!pending || pending.status !== "pending" || pending.isSubmitting) return;
+  const resumeCid = conversationId.value;
   pending.isSubmitting = true;
   isProcessing.value = true;
   if (confirmed) {
@@ -3997,7 +4195,7 @@ const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
         if (dataStr === "[DONE]") continue;
         applyPermissionStreamEvent(msg, JSON.parse(dataStr));
       }
-      scrollToBottom();
+      if (conversationId.value === resumeCid) scrollToBottom();
     }
     for (const dataStr of parser.flush()) {
       if (dataStr !== "[DONE]") applyPermissionStreamEvent(msg, JSON.parse(dataStr));
@@ -4008,7 +4206,7 @@ const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
     msg.content += `\n[工具确认失败: ${error.message || "Unknown error"}]`;
   } finally {
     pending.isSubmitting = false;
-    isProcessing.value = msg.pendingPermission?.status === "pending";
+    const pendingHitl = msg.pendingPermission?.status === "pending";
     msg.isThinking = false;
     if (thoughtTimer) {
       clearInterval(thoughtTimer);
@@ -4021,6 +4219,7 @@ const confirmPendingPermission = async (msg: Message, confirmed: boolean) => {
         }
       });
     }
+    syncProcessingForMessage(msg, resumeCid, pendingHitl);
   }
 };
 

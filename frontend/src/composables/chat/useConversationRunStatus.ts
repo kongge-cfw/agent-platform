@@ -58,6 +58,7 @@ export function createConversationRunStatusController(
 
   const refresh = async (conversationId: string): Promise<boolean> => {
     const normalizedConversationId = String(conversationId || "").trim();
+    if (normalizedConversationId !== currentConversationId) outputCompleted = false;
     currentConversationId = normalizedConversationId;
     const sequence = ++requestSequence;
     if (!normalizedConversationId) {
