@@ -263,7 +263,7 @@ def enrich_confirmation_fields(
     for field in fields:
         next_field = dict(field)
         value_type = str(next_field.get("value_type") or "string")
-        if value_type in {"boolean", "number"}:
+        if value_type in {"boolean", "number", "date", "datetime"}:
             enriched.append(next_field)
             continue
         rewritten, matched = _rewrite_if_resolved_names(next_field.get("value"), id_map)

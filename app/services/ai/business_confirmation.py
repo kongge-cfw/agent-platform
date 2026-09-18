@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextvars import ContextVar
 from typing import Any
 
@@ -14,6 +15,41 @@ _cancel_gate_armed: ContextVar[bool] = ContextVar(
     "business_confirmation_cancel_gate",
     default=False,
 )
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$")
+_CN_DATE_RE = re.compile(r"^\d{4}年\d{1,2}月\d{1,2}日$")
+_DATETIME_RE = re.compile(
+    r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}[ T]\d{1,2}:\d{2}"
+    r"(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
+)
+_DECLARED_VALUE_TYPES = frozenset({"boolean", "number", "text", "date", "datetime"})
+
+
+def infer_confirmation_value_type(field: dict[str, Any] | None) -> str:
+    """只认声明的 value_type，或值本身已是日期/日期时间形态。"""
+    payload = field if isinstance(field, dict) else {}
+    declared = str(payload.get("value_type") or "string").strip().lower()
+    if declared in _DECLARED_VALUE_TYPES:
+        return declared
+    raw = payload.get("value")
+    text = "" if raw is None else str(raw).strip()
+    if _DATETIME_RE.match(text):
+        return "datetime"
+    if _DATE_ONLY_RE.match(text) or _CN_DATE_RE.match(text):
+        return "date"
+    return "string"
+
+
+def normalize_confirmation_field_types(fields: list[Any] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for field in fields or []:
+        if not isinstance(field, dict):
+            continue
+        next_field = dict(field)
+        next_field["value_type"] = infer_confirmation_value_type(next_field)
+        normalized.append(next_field)
+    return normalized
 
 
 def is_business_confirmation_cancel_message(text: str | None) -> bool:
@@ -110,7 +146,7 @@ def build_business_confirmation_sse(
         "confirmation_id": str(payload["confirmation_id"]),
         "title": str(ui.get("title") or "请确认以下信息"),
         "summary": str(ui.get("summary") or ""),
-        "fields": ui.get("fields") or [],
+        "fields": normalize_confirmation_field_types(ui.get("fields") or []),
         "confirm_label": str(ui.get("confirm_label") or "确定"),
         "cancel_label": str(ui.get("cancel_label") or "取消"),
         "risk_note": str(ui.get("risk_note") or ""),

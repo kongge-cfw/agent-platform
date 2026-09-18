@@ -174,3 +174,22 @@ async def test_cancel_gate_hard_blocks_tool_and_sse():
     )
     # Clear gate for other tests
     arm_cancel_confirmation_gate("普通用户消息")
+
+
+def test_infer_confirmation_value_type_uses_value_shape_not_field_name():
+    from app.services.ai.business_confirmation import infer_confirmation_value_type
+
+    assert (
+        infer_confirmation_value_type({"value": "2026-09-25", "value_type": "string"})
+        == "date"
+    )
+    assert infer_confirmation_value_type({"value": "9月12日车辆超速问题整改"}) == "string"
+    assert infer_confirmation_value_type({"value": "2026-09-18 09:30"}) == "datetime"
+    assert (
+        infer_confirmation_value_type(
+            {"key": "deadline", "label": "截止日期", "value": "", "value_type": "string"}
+        )
+        == "string"
+    )
+    assert infer_confirmation_value_type({"value": "", "value_type": "date"}) == "date"
+    assert infer_confirmation_value_type({"value": "2026年9月25日"}) == "date"

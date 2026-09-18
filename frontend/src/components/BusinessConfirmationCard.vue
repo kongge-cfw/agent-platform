@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import type {
-  BusinessConfirmationField,
-  BusinessConfirmationState,
+import {
+  confirmationDateInputValue,
+  confirmationDateTimeInputValue,
+  inferConfirmationValueType,
+  type BusinessConfirmationField,
+  type BusinessConfirmationState,
 } from '@/utils/businessConfirmation';
 
 const props = defineProps<{
@@ -29,7 +32,7 @@ function syncDraft(fields: BusinessConfirmationField[]) {
       label: field.label,
       value: field.value ?? '',
       editable: field.editable !== false,
-      value_type: field.value_type || 'string',
+      value_type: inferConfirmationValueType(field),
     })),
   );
 }
@@ -61,10 +64,27 @@ const locked = computed(
     props.payload.status === 'stale',
 );
 
+function isDateTimeField(field: BusinessConfirmationField): boolean {
+  return inferConfirmationValueType(field) === 'datetime';
+}
+
+function isDateField(field: BusinessConfirmationField): boolean {
+  return inferConfirmationValueType(field) === 'date';
+}
+
 function isMultilineField(field: BusinessConfirmationField): boolean {
+  if (isDateField(field) || isDateTimeField(field)) return false;
   if (field.value_type === 'text') return true;
   const value = field.value === null || field.value === undefined ? '' : String(field.value);
   return value.includes('\n') || value.length > 80;
+}
+
+function onDateChange(field: BusinessConfirmationField, raw: string) {
+  field.value = raw;
+}
+
+function onDateTimeChange(field: BusinessConfirmationField, raw: string) {
+  field.value = raw ? raw.replace('T', ' ') : '';
 }
 
 const statusLabel = computed(() => {
@@ -191,6 +211,22 @@ function submit(confirmed: boolean) {
                       :checked="Boolean(field.value)"
                       :disabled="locked || field.editable === false"
                       @change="onBooleanChange(field, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <input
+                      v-else-if="isDateTimeField(field)"
+                      type="datetime-local"
+                      :value="confirmationDateTimeInputValue(field.value)"
+                      class="w-full min-h-[1.75rem] rounded border border-sky-100 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:bg-gray-50 dark:border-sky-900/50 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-900/60 dark:[color-scheme:dark]"
+                      :disabled="locked || field.editable === false"
+                      @input="onDateTimeChange(field, ($event.target as HTMLInputElement).value)"
+                    />
+                    <input
+                      v-else-if="isDateField(field)"
+                      type="date"
+                      :value="confirmationDateInputValue(field.value)"
+                      class="w-full min-h-[1.75rem] rounded border border-sky-100 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:bg-gray-50 dark:border-sky-900/50 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-900/60 dark:[color-scheme:dark]"
+                      :disabled="locked || field.editable === false"
+                      @input="onDateChange(field, ($event.target as HTMLInputElement).value)"
                     />
                     <textarea
                       v-else-if="isMultilineField(field)"

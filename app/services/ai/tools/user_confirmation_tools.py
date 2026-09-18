@@ -12,7 +12,7 @@ from app.services.ai.tools.tool_compat import BaseTool
 
 logger = logging.getLogger(__name__)
 
-ValueType = Literal["string", "number", "boolean", "text"]
+ValueType = Literal["string", "number", "boolean", "text", "date", "datetime"]
 
 
 class ConfirmationField(BaseModel):
@@ -20,7 +20,10 @@ class ConfirmationField(BaseModel):
     label: str = Field(description="展示给用户的字段名")
     value: Any = Field(default="", description="当前字段值")
     editable: bool = Field(default=True, description="是否允许用户在确认卡中编辑")
-    value_type: ValueType = Field(default="string", description="值类型：string/number/boolean/text")
+    value_type: ValueType = Field(
+        default="string",
+        description="值类型：string/number/boolean/text/date/datetime；日历日期用 date（YYYY-MM-DD），含时刻用 datetime；空日期也要标 date/datetime",
+    )
 
     @field_validator("key", "label")
     @classmethod
@@ -74,6 +77,7 @@ class RequestUserConfirmationTool(BaseTool):
         from app.services.ai.business_confirmation import (
             cancel_gate_block_payload,
             is_cancel_confirmation_gate_armed,
+            normalize_confirmation_field_types,
         )
 
         if is_cancel_confirmation_gate_armed():
@@ -93,7 +97,9 @@ class RequestUserConfirmationTool(BaseTool):
             )
 
         confirmation_id = f"bc_{secrets.token_hex(8)}"
-        fields = [field.model_dump(mode="json") for field in args.fields]
+        fields = normalize_confirmation_field_types(
+            [field.model_dump(mode="json") for field in args.fields]
+        )
         try:
             from app.core.context import get_current_agent_context
             from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
@@ -108,7 +114,9 @@ class RequestUserConfirmationTool(BaseTool):
             if conversation_id:
                 store = await HitlContinuationStore.from_runtime()
                 continuation = await store.get(user_id=user_id, conversation_id=conversation_id)
-                fields = enrich_confirmation_fields(fields, continuation)
+                fields = normalize_confirmation_field_types(
+                    enrich_confirmation_fields(fields, continuation)
+                )
         except Exception:
             logger.warning(
                 "[request_user_confirmation] Failed to enrich confirmation fields",

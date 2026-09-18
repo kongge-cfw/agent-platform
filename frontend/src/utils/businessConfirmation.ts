@@ -1,6 +1,12 @@
 /** Business data confirmation card helpers (not tool-execution HITL). */
 
-export type BusinessConfirmationValueType = "string" | "number" | "boolean" | "text";
+export type BusinessConfirmationValueType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "text"
+  | "date"
+  | "datetime";
 
 export interface BusinessConfirmationField {
   key: string;
@@ -8,6 +14,76 @@ export interface BusinessConfirmationField {
   value: unknown;
   editable?: boolean;
   value_type?: BusinessConfirmationValueType;
+}
+
+const DATE_ONLY_RE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/;
+const CN_DATE_RE = /^(\d{4})年(\d{1,2})月(\d{1,2})日$/;
+const DATETIME_RE =
+  /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function parseConfirmationDateParts(value: unknown): {
+  y: number;
+  m: number;
+  d: number;
+  hh?: number;
+  mm?: number;
+} | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const datetime = text.match(DATETIME_RE);
+  if (datetime) {
+    return {
+      y: Number(datetime[1]),
+      m: Number(datetime[2]),
+      d: Number(datetime[3]),
+      hh: Number(datetime[4]),
+      mm: Number(datetime[5]),
+    };
+  }
+  const iso = text.match(DATE_ONLY_RE);
+  if (iso) {
+    return { y: Number(iso[1]), m: Number(iso[2]), d: Number(iso[3]) };
+  }
+  const cn = text.match(CN_DATE_RE);
+  if (cn) {
+    return { y: Number(cn[1]), m: Number(cn[2]), d: Number(cn[3]) };
+  }
+  return null;
+}
+
+export function confirmationDateInputValue(value: unknown): string {
+  const parsed = parseConfirmationDateParts(value);
+  if (!parsed) return "";
+  return `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}`;
+}
+
+export function confirmationDateTimeInputValue(value: unknown): string {
+  const parsed = parseConfirmationDateParts(value);
+  if (!parsed) return "";
+  return `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}T${pad2(parsed.hh ?? 0)}:${pad2(parsed.mm ?? 0)}`;
+}
+
+export function inferConfirmationValueType(
+  field: Pick<BusinessConfirmationField, "value" | "value_type">,
+): BusinessConfirmationValueType {
+  const declared = field.value_type;
+  if (
+    declared === "boolean" ||
+    declared === "number" ||
+    declared === "text" ||
+    declared === "date" ||
+    declared === "datetime"
+  ) {
+    return declared;
+  }
+  const text = field.value === null || field.value === undefined ? "" : String(field.value).trim();
+  if (DATETIME_RE.test(text)) return "datetime";
+  if (DATE_ONLY_RE.test(text) || CN_DATE_RE.test(text)) return "date";
+  return "string";
 }
 
 export interface BusinessConfirmationState {
@@ -47,13 +123,17 @@ function asFields(raw: unknown): BusinessConfirmationField[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-    .map((item) => ({
-      key: String(item.key || "").trim(),
-      label: String(item.label || item.key || "字段").trim(),
-      value: item.value ?? "",
-      editable: item.editable !== false,
-      value_type: (item.value_type as BusinessConfirmationValueType) || "string",
-    }))
+    .map((item) => {
+      const field: BusinessConfirmationField = {
+        key: String(item.key || "").trim(),
+        label: String(item.label || item.key || "字段").trim(),
+        value: item.value ?? "",
+        editable: item.editable !== false,
+        value_type: (item.value_type as BusinessConfirmationValueType) || "string",
+      };
+      field.value_type = inferConfirmationValueType(field);
+      return field;
+    })
     .filter((item) => item.key || item.label);
 }
 

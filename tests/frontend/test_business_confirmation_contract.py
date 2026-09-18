@@ -110,6 +110,10 @@ def test_business_confirmation_frontend_wiring_contract():
 
     assert "业务数据确认" in card or "请确认以下信息" in card
     assert "justify-end" in card
+    assert 'type="date"' in card
+    assert 'type="datetime-local"' in card
+    assert "isDateField" in card
+    assert "confirmationDateInputValue" in card
     assert card.find("@click=\"submit(false)\"") < card.find("@click=\"submit(true)\"")
     assert "emit('submit'" in card or 'emit("submit"' in card or "event: 'submit'" in card
     assert 'case "business_confirmation"' in handlers
@@ -135,6 +139,9 @@ def test_business_confirmation_frontend_wiring_contract():
     assert 'hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"' in debug
     assert "hideQuickButtons" in (ROOT / "frontend/src/components/MessageRenderer.vue").read_text(encoding="utf-8")
     assert "stripQuickButtons" in (ROOT / "frontend/src/utils/quickButtons.ts").read_text(encoding="utf-8")
+    assert "inferConfirmationValueType" in util
+    assert "date" in util
+    assert "datetime" in util
     grounding = (ROOT / "frontend/src/components/GroundingBlockedCard.vue").read_text(encoding="utf-8")
     assert "justify-end" in grounding
     assert "orderedActions" in grounding
@@ -162,3 +169,39 @@ return {
     assert result["stripped"].count("•") == 0
     assert result["classic"] == "结果已生成。"
     assert result["parsedHasBtn"] is True
+
+
+def test_business_confirmation_infers_date_fields_for_picker():
+    result = _run_typescript(
+        "frontend/src/utils/businessConfirmation.ts",
+        """
+const parsed = api.parseBusinessConfirmationEvent({
+  type: 'business_confirmation',
+  confirmation_id: 'bc_date',
+  title: '请确认下发内容',
+  fields: [
+    { key: 'task_name', label: '任务名称', value: '9月12日车辆超速问题整改', value_type: 'string' },
+    { key: 'due_date', label: '完成时限', value: '2026-09-25', value_type: 'string' },
+    { key: 'kickoff', label: '开始时间', value: '2026-09-18 09:30', value_type: 'string' },
+  ],
+});
+return {
+  nameType: parsed.fields[0].value_type,
+  dueType: parsed.fields[1].value_type,
+  kickoffType: parsed.fields[2].value_type,
+  dueInput: api.confirmationDateInputValue(parsed.fields[1].value),
+  kickoffInput: api.confirmationDateTimeInputValue(parsed.fields[2].value),
+  emptyHint: api.inferConfirmationValueType({ key: 'deadline', label: '截止日期', value: '', value_type: 'string' }),
+  declaredEmpty: api.inferConfirmationValueType({ key: 'any', label: '任意名称', value: '', value_type: 'date' }),
+  cnDate: api.inferConfirmationValueType({ value: '2026年9月25日', value_type: 'string' }),
+};
+""",
+    )
+    assert result["nameType"] == "string"
+    assert result["dueType"] == "date"
+    assert result["kickoffType"] == "datetime"
+    assert result["dueInput"] == "2026-09-25"
+    assert result["kickoffInput"] == "2026-09-18T09:30"
+    assert result["emptyHint"] == "string"
+    assert result["declaredEmpty"] == "date"
+    assert result["cnDate"] == "date"
