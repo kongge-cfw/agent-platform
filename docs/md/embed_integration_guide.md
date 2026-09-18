@@ -86,7 +86,7 @@ sequenceDiagram
 | `identity.extra_data` | object    | 否   | -               | 业务属性（如 data_scope、region_codes）。禁止传 `role` / `is_admin` / `permissions`。 |
 | `username`        | string       | 否   | 当前调用者      | **兼容旧代客模式**：目标南孜用户名。与 `identity` 同时传时以 `identity` 为准。 |
 | `user_id`         | integer      | 否   | -               | 目标南孜用户 ID。提供 `identity` 时忽略。                                   |
-| `agent_id`        | string       | 未绑定应用、或应用开启「锁定入口智能体」时必填 | - | 入口智能体 ID。应用锁定入口时写入会话并禁止 iframe 切换；未锁定时可选，iframe 可智能委派 / 切换角色授权范围内的智能体。 |
+| `agent_id`        | string       | 未绑定应用、或应用开启「锁定入口智能体」且未配置智能委派宿主时必填 | - | 入口智能体 ID。应用锁定入口时写入会话并禁止 iframe 切换；未锁定时可选，iframe 按应用「智能委派宿主」或用户偏好进入。未指定宿主则不能智能委派（单个专家直达，多个需手选）。 |
 | `app_key`         | string       | 否   | -               | **嵌入应用**标识。管理端登记时自动生成，Ticket 带上后按应用校验关联角色、域名、业务身份字段。 |
 | `allowed_origins` | list[string] | 否   | `[]` (不限制) | 限定允许嵌入该 Ticket 的前端域名。若绑定了应用，必须是应用域名白名单的子集。 |
 | `expires_in`      | integer      | 否   | `300`         | Ticket 兑换有效时长（秒），取值范围 60 ~ 1800 秒。                          |
@@ -101,7 +101,8 @@ sequenceDiagram
 | --- | --- |
 | 应用 Key | 登记时自动生成，宿主 Ticket 传此值；创建后不可改 |
 | 关联角色 | **必选**。iframe 可切换的智能体以该角色在「角色管理」中的资产为准；签发 Ticket 的服务账号须属于该角色 |
-| 锁定入口智能体 | 开启后 Ticket 必须传 `agent_id`，iframe 不能切换/智能委派。工作台场景建议关闭 |
+| 智能委派宿主 | 未锁定时 iframe 的智能委派主助手。可选平台主助手，也可选角色内其他智能体（如「主智能体dev」）作为替代宿主，由它 `sub_agent_call` 委派给其余专家。**未指定则不启用智能委派**，不会偷偷回落平台 Main；要用平台主助手委派必须在此选中它。用户自己保存的路由偏好优先于该默认值 |
+| 锁定入口智能体 | 开启后 iframe 不能切换/智能委派。Ticket 未传 `agent_id` 时使用「智能委派宿主」；两者都空则签发失败。工作台场景建议关闭 |
 | 允许的域名 | 兑换时 Origin 必须匹配；Ticket 不可扩大域名 |
 | 必须提交业务用户身份 | 打开后禁止旧 `username` 代客 |
 | 身份字段 | 管理端不再单独勾选。保存时固定接受 `subject`、`display_name`、`dept_code`、`org_path`、`tenant_id`、`extra_data` |

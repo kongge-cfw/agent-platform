@@ -312,6 +312,8 @@ async def get_current_user_info(
             days_until_next_change = password_expire_days - days_since_last_change
             is_expired = days_until_next_change <= 0
 
+    from app.schemas.embed_app import parse_shortcut_prompts
+
     return {
         "status": "success",
         "data": {
@@ -320,6 +322,9 @@ async def get_current_user_info(
             "user_name": user.get("user_name"),
             "real_name": user.get("real_name") or user.get("user_name"),
             "role": user.get("role"),
+            "app_key": user.get("embed_app_key") or user.get("app_key") or None,
+            "shortcut_prompts": parse_shortcut_prompts(user.get("shortcut_prompts")),
+            "default_entry_agent_id": str(user.get("default_entry_agent_id") or "").strip() or None,
             "dept_code": user.get("dept_code"),
             "org_path": user.get("org_path"),
             "extra_data": user.get("extra_data"),
@@ -511,6 +516,7 @@ async def validate_user_apikey(
             "role": user.get("role"),
             "app_key": user.get("embed_app_key") or user.get("app_key") or None,
             "shortcut_prompts": parse_shortcut_prompts(user.get("shortcut_prompts")),
+            "default_entry_agent_id": str(user.get("default_entry_agent_id") or "").strip() or None,
             "watermark": {
                 "enabled": watermark_enabled,
                 "style": watermark_style,

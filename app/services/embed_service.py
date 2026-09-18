@@ -535,6 +535,7 @@ class EmbedService:
             "isolate_datasets_by_tenant": ticket_data.get("isolate_datasets_by_tenant", "0"),
             "embed_role_id": ticket_data.get("embed_role_id", ""),
             "lock_entry_agent": ticket_data.get("lock_entry_agent", ""),
+            "default_entry_agent_id": ticket_data.get("default_entry_agent_id", ""),
             "shortcut_prompts": ticket_data.get("shortcut_prompts") or "[]",
         }
         await redis.hset(cache_key, mapping=user_session_data)
@@ -561,6 +562,7 @@ class EmbedService:
             "session_owner": ticket_data.get("session_owner") or None,
             "app_key": ticket_data.get("embed_app_key") or None,
             "shortcut_prompts": parse_shortcut_prompts(ticket_data.get("shortcut_prompts")),
+            "default_entry_agent_id": str(ticket_data.get("default_entry_agent_id") or "").strip() or None,
         }
         subject = str(ticket_data.get("external_subject") or "").strip()
         if subject:
@@ -573,6 +575,7 @@ class EmbedService:
             "user_info": user_info,
             "agent_id": (ticket_data.get("agent_id") or None) if lock_entry else None,
             "lock_entry_agent": lock_entry,
+            "default_entry_agent_id": str(ticket_data.get("default_entry_agent_id") or "").strip() or None,
             "shortcut_prompts": user_info.get("shortcut_prompts") or [],
         }
 

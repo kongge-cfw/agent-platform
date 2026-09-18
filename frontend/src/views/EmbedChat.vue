@@ -780,13 +780,15 @@
                           placeholder="在此粘贴客户端执行该工具后的输出结果..."
                           class="w-full rounded-md border border-sky-200 dark:border-sky-800 bg-white/90 dark:bg-gray-950/40 px-3 py-2 text-xs text-gray-700 dark:text-gray-200"
                         />
-                        <button
-                          @click="submitPendingExternalExecution(msg)"
-                          :disabled="msg.pendingExternalExecution.isSubmitting"
-                          class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          提交结果并继续
-                        </button>
+                        <div class="flex items-center justify-end">
+                          <button
+                            @click="submitPendingExternalExecution(msg)"
+                            :disabled="msg.pendingExternalExecution.isSubmitting"
+                            class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            提交结果并继续
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1170,6 +1172,8 @@
         :pin-shortcut-bar="true"
         :slash-commands="effectiveSlashCommands"
         :allowed-agents="allowedAgents"
+        :delegation-host-id="defaultEntryAgentId"
+        :strict-delegation-host="isEmbedDelegationSession"
         :current-user="currentUser"
         :window-width="windowWidth"
         :approval-mode="config.approvalMode"
@@ -1660,6 +1664,8 @@
       v-model:visible="showSettings"
       :config="config"
       :allowed-agents="allowedAgents"
+      :delegation-host-id="defaultEntryAgentId"
+      :strict-delegation-host="isEmbedDelegationSession"
       :routing-locked="isRoutingSettingsLocked"
       @set-theme="setTheme"
       @set-color="setColor"
@@ -2245,6 +2251,11 @@ import MyArtifactsDrawer from "@/components/embed/MyArtifactsDrawer.vue";
 import MemoryBrowserDrawer from "@/components/embed/MemoryBrowserDrawer.vue";
 import { useWorkbenchHome } from "@/composables/useWorkbenchHome";
 import { isEmbeddedInIframe } from "@/utils/embedHost";
+import {
+  catalogHasDelegationHost,
+  isDelegationHostAgent,
+  resolveDelegationHostAgent,
+} from "@/utils/delegationHost";
 import { resolveGeneratedFileHref } from "@/utils/generatedFileUrl";
 import { artifactApi } from "@/api/artifact";
 import {
@@ -2329,7 +2340,12 @@ import {
   type GroundingBlockedAction,
   type GroundingBlockedPayload,
 } from "@/utils/agentscopeSseHandlers";
-import { hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import { cancelOpenTodosInMessages, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import {
+  attachHitlCardsFromTimeline,
+  historyHasActionableResumeCard,
+  resolveHitlCardsInHistory,
+} from "@/utils/hitlHistory";
 import { normalizeSubagentTraceMeta, type SubagentTraceMeta } from "@/utils/subagentTrace";
 import {
   buildBusinessConfirmationUserMessage,
@@ -3476,6 +3492,15 @@ const switchToAuto = () => {
       showToast("当前链接已锁定指定智能体，无法切换到智能委派", "warning");
       return;
     }
+    if (!canSmartDelegate.value) {
+      showToast(
+        isEmbedDelegationSession.value
+          ? "当前嵌入应用未配置智能委派宿主，请选择一个专家"
+          : "请选择一个专家",
+        "warning",
+      );
+      return;
+    }
     config.routingMode = "auto";
     config.expertAgentId = "";
     void saveRoutingPreference("auto");
@@ -4370,6 +4395,64 @@ const hasCustomMessageBorderPreference = () =>
     localStorage.getItem("user_has_custom_border_preference") === "true";
 
 const allowedAgents = ref<any[]>([]);
+const defaultEntryAgentId = ref("");
+const isEmbedDelegationSession = computed(() => {
+  if (isEmbeddedInIframe()) return true;
+  const appKey = String(currentUser.value?.app_key || currentUser.value?.embed_app_key || "").trim();
+  if (appKey) return true;
+  return String(currentUser.value?.session_type || "").trim().toLowerCase() === "embed";
+});
+const embedHostMode = computed(() => ({ strict: isEmbedDelegationSession.value }));
+const isMainGeneralAgent = (agent: any) =>
+  isDelegationHostAgent(agent, defaultEntryAgentId.value, embedHostMode.value);
+const canSmartDelegate = computed(() =>
+  catalogHasDelegationHost(allowedAgents.value, defaultEntryAgentId.value, embedHostMode.value),
+);
+const roleHasMainAgent = canSmartDelegate;
+const applyDefaultEntryAgentId = (source: any) => {
+  if (!source || typeof source !== "object") return;
+  const nested = source.user_info && typeof source.user_info === "object" ? source.user_info : null;
+  if (!("default_entry_agent_id" in source) && !(nested && "default_entry_agent_id" in nested)) {
+    return;
+  }
+  defaultEntryAgentId.value = String(
+    source.default_entry_agent_id || nested?.default_entry_agent_id || "",
+  ).trim();
+};
+const applyUnlockedRoutingFromCatalog = (agents: any[]) => {
+  if (isRoutingSettingsLocked.value) return;
+  const catalog = Array.isArray(agents) ? agents : [];
+  const hostMode = embedHostMode.value;
+  const saved = savedRoutingPreference.value;
+  const savedAgentAllowed = Boolean(
+    saved.expert_agent_id
+    && catalog.some((agent: any) => String(agent.id) === saved.expert_agent_id),
+  );
+  if (saved.routing_configured && saved.routing_mode === "expert" && savedAgentAllowed) {
+    config.routingMode = "expert";
+    config.expertAgentId = saved.expert_agent_id;
+    return;
+  }
+  if (saved.routing_configured && saved.routing_mode === "auto" && catalogHasDelegationHost(catalog, defaultEntryAgentId.value, hostMode)) {
+    config.routingMode = "auto";
+    config.expertAgentId = "";
+    return;
+  }
+  const host = resolveDelegationHostAgent(catalog, defaultEntryAgentId.value, hostMode);
+  if (host) {
+    config.routingMode = "auto";
+    config.expertAgentId = "";
+    return;
+  }
+  const experts = catalog.filter((agent: any) => !isDelegationHostAgent(agent, defaultEntryAgentId.value, hostMode));
+  if (experts.length === 1) {
+    config.routingMode = "expert";
+    config.expertAgentId = String(experts[0].id || "");
+    return;
+  }
+  config.routingMode = "expert";
+  config.expertAgentId = "";
+};
 const isGeneralAgentMessage = (msg: Message): boolean => {
   if (msg.agentType) return msg.agentType === "GENERAL";
   const agent = allowedAgents.value.find(
@@ -4391,18 +4474,9 @@ const fetchAllowedAgents = async (force = false) => {
             allowedAgents.value = res.data; // Already filtered by backend
             hasFetchedAgents.value = true;
 
-            // 集成锁定优先于用户 Redis 偏好；普通 Embed 只应用当前用户有权限的默认智能体。
+            // 集成锁定优先于用户 Redis 偏好；未锁定时：角色含 Main 才默认智能委派。
             if (!isRoutingSettingsLocked.value) {
-                const saved = savedRoutingPreference.value;
-                const savedAgentAllowed = saved.expert_agent_id
-                    && res.data.some((agent: any) => String(agent.id) === saved.expert_agent_id);
-                if (saved.routing_configured && saved.routing_mode === "expert" && savedAgentAllowed) {
-                    config.routingMode = "expert";
-                    config.expertAgentId = saved.expert_agent_id;
-                } else {
-                    config.routingMode = "auto";
-                    config.expertAgentId = "";
-                }
+                applyUnlockedRoutingFromCatalog(res.data);
             }
             
             // 自动应用当前激活智能体推荐的排版风格
@@ -6089,6 +6163,7 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
         ?? sessionData.user_info?.shortcut_prompts
         ?? currentUser.value?.shortcut_prompts,
       );
+      applyDefaultEntryAgentId(sessionData);
       const lockEntryAgent =
         sessionData.lock_entry_agent === true
         || sessionData.lock_entry_agent === 1
@@ -6355,6 +6430,7 @@ const validateToken = async (options?: { strict?: boolean }): Promise<boolean> =
     accountInfo.value = data as typeof accountInfo.value;
     currentUser.value = data as typeof currentUser.value;
     applyEmbedShortcutPrompts(data.shortcut_prompts);
+    applyDefaultEntryAgentId(data);
   };
 
   const tryOnce = async (headers: Record<string, string>) => {
@@ -6494,9 +6570,11 @@ const initChat = async (options?: { skipAuth?: boolean }) => {
         if (config.routingMode === 'expert' && config.expertAgentId) {
             const isValid = allowedAgents.value.some(a => a.id === config.expertAgentId);
             if (!isValid) {
-                console.warn("[Init] Saved expert agent invalid/unauthorized. Downgrading to Auto.");
-                switchToAuto();
+                console.warn("[Init] Saved expert agent invalid/unauthorized. Reapplying catalog default.");
+                applyUnlockedRoutingFromCatalog(allowedAgents.value);
             }
+        } else if (config.routingMode === 'auto' && !roleHasMainAgent.value) {
+            applyUnlockedRoutingFromCatalog(allowedAgents.value);
         }
     }).catch(e => console.warn("Failed to preload agents", e));
     // 6. Workbench/host explicit resume wins; otherwise fetch the active conversation.
@@ -6572,7 +6650,7 @@ const mapServerConversationMessages = (rawMessages: any[], idOffset = 0): Messag
     }
     if (role !== "assistant" && role !== "agent") return;
     if (!(item.content || item.process_timeline || item.reasoning_content)) return;
-    batch.push({
+    batch.push(attachHitlCardsFromTimeline({
       id: Date.now() + idx * 2 + 1 + idOffset,
       trace_id: item.trace_id,
       role: "agent",
@@ -6596,9 +6674,9 @@ const mapServerConversationMessages = (rawMessages: any[], idOffset = 0): Messag
           }
         : undefined,
       timestamp: item.timestamp,
-    });
+    }, item.process_timeline));
   });
-  return batch;
+  return resolveHitlCardsInHistory(batch);
 };
 
 const fetchConversationHistory = async (
@@ -6649,7 +6727,10 @@ const fetchConversationHistory = async (
       ) return;
       if (isLoadMore) {
          // Prepend to messages (remove existing "History Start" separator if it exists)
-         messages.value = [...newHistoryBatch, ...messages.value.filter(m => m.role !== 'system' || m.content !== '以上是历史会话，可以重置会话清除')];
+         messages.value = resolveHitlCardsInHistory([
+           ...newHistoryBatch,
+           ...messages.value.filter(m => m.role !== 'system' || m.content !== '以上是历史会话，可以重置会话清除'),
+         ]);
          // Restore scroll position
          await nextTick();
          if (
@@ -6687,6 +6768,9 @@ const fetchConversationHistory = async (
           timestamp: timeStr,
         });
         messages.value = newHistoryBatch;
+        if (historyHasActionableResumeCard(newHistoryBatch)) {
+          isProcessing.value = true;
+        }
         nextTick(scrollToBottom);
       }
     } else if (!isLoadMore) {
@@ -6946,6 +7030,9 @@ const openModelCallStats = async (msg: any) => {
 
 const stopGeneration = () => {
   const lastMsg = messages.value.length > 0 ? messages.value[messages.value.length - 1] : null;
+  // SSE 会立刻被掐断，后端的 todo_update / run_status=cancelled 到不了前端。
+  // 必须在本地先把清单收尾，否则会一直转圈「进行中」。
+  cancelOpenTodosInMessages(messages.value);
   if (conversationId.value) {
     void cancelConversationRun(conversationId.value, {
       traceId: lastMsg?.trace_id,
@@ -6964,11 +7051,12 @@ const stopGeneration = () => {
     thoughtTimer = null;
   }
   // Mark last thinking message as stopped
-  if (lastMsg && lastMsg.isThinking) {
+  if (lastMsg && lastMsg.role === "agent") {
     lastMsg.isThinking = false;
+    (lastMsg as any).status = "cancelled";
     if (!lastMsg.content) {
       lastMsg.content = "[已停止生成]";
-    } else {
+    } else if (!lastMsg.content.includes("[已停止生成]") && !lastMsg.content.includes("[用户终止")) {
       lastMsg.content += "\n\n[用户终止生成]";
     }
   }
@@ -7616,6 +7704,9 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
     markOutputCompleted();
     if (data.status === "success") {
       (msg as any).status = "success";
+    } else if (data.status === "cancelled") {
+      (msg as any).status = "cancelled";
+      cancelOpenTodosInMessages(messages.value);
     }
     return;
   }
@@ -7753,6 +7844,7 @@ const submitBusinessConfirmation = async (
   card.fields = payload.fields.map((field) => ({ ...field }));
   card.status = "submitted";
   card.decision = payload.confirmed ? "confirmed" : "cancelled";
+  if (!payload.confirmed) cancelOpenTodosInMessages(messages.value);
   userInput.value = content;
   await sendMessage();
 };
@@ -7774,6 +7866,7 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
+  if (payload.cancelled) cancelOpenTodosInMessages(messages.value);
   userInput.value = content;
   await sendMessage();
 };
@@ -8006,6 +8099,20 @@ const sendMessage = async (overrides: ChatSendOverrides = {}) => runSendExclusiv
 const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
   const { content, files } = snapshot;
   if ((!content && files.length === 0) || isProcessing.value || remoteRunActive.value) return;
+
+  if (
+    !isRoutingSettingsLocked.value
+    && !canSmartDelegate.value
+    && !String(config.expertAgentId || config.overrideAgentId || config.agentId || "").trim()
+  ) {
+    showToast(
+      isEmbedDelegationSession.value
+        ? "当前嵌入应用未配置智能委派宿主，请先选择一个专家再提问"
+        : "请先选择一个专家再提问",
+      "warning",
+    );
+    return;
+  }
 
   // 尽早消费「强制查数智能体」标记，避免中途 return 后泄漏到下一轮普通提问
   const forcedDataAgentIdForTurn = forceDataQueryAgentOnce.value ? resolvePreferredDataQueryAgentId() : "";
@@ -8251,6 +8358,9 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
             markOutputCompleted();
             if (data.status === "success") {
               (agentMsg.value as any).status = "success";
+            } else if (data.status === "cancelled") {
+              (agentMsg.value as any).status = "cancelled";
+              cancelOpenTodosInMessages(messages.value);
             }
           } else if (data.type === "browser_session") {
             const targetSessionId = String(data.session_id || "").trim();
@@ -8411,7 +8521,10 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
   } catch (e: any) {
     flushContentBuffer();
     if (e.name === "AbortError") {
-      agentMsg.value.content += "\n[用户终止]";
+      cancelOpenTodosInMessages(messages.value);
+      if (!String(agentMsg.value.content || "").includes("[用户终止") && !String(agentMsg.value.content || "").includes("[已停止生成]")) {
+        agentMsg.value.content += "\n[用户终止]";
+      }
     } else if (document.visibilityState === "hidden") {
       console.log("[Stream] Client disconnected in background; awaiting background producer sync on resume.");
     } else {
@@ -8505,6 +8618,7 @@ const fetchUserInfo = async () => {
     if (res.data?.data) {
        currentUser.value = res.data.data;
        applyEmbedShortcutPrompts((res.data.data as any).shortcut_prompts);
+       applyDefaultEntryAgentId(res.data.data);
     }
     await refreshQuota();
   } catch (err) {
@@ -8658,6 +8772,8 @@ onMounted(() => {
               currentMsg.content = latestServerItem.summary;
               currentMsg.reasoningContent = latestServerItem.reasoning_content ?? currentMsg.reasoningContent;
               currentMsg.processTimeline = hydrateHistoryProcessTimeline(latestServerItem.process_timeline, latestServerItem.reasoning_content);
+              attachHitlCardsFromTimeline(currentMsg, latestServerItem.process_timeline);
+              resolveHitlCardsInHistory(messages.value);
               currentMsg.isThinking = false;
               if (isProcessing.value) {
                 isProcessing.value = false;
@@ -8670,7 +8786,7 @@ onMounted(() => {
           } else {
             const lastMsg = messages.value.length > 0 ? messages.value[messages.value.length - 1] : undefined;
             if (isProcessing.value || (lastMsg && lastMsg.role === 'user')) {
-              messages.value.push({
+              messages.value.push(attachHitlCardsFromTimeline({
                 id: Date.now(),
                 trace_id: latestServerItem.trace_id,
                 role: 'agent',
@@ -8687,7 +8803,8 @@ onMounted(() => {
                 completion_tokens: latestServerItem.completion_tokens ?? undefined,
                 total_tokens: latestServerItem.total_tokens ?? undefined,
                 timestamp: latestServerItem.created_at,
-              });
+              }, latestServerItem.process_timeline));
+              resolveHitlCardsInHistory(messages.value);
               isProcessing.value = false;
               clearVisibilitySyncTimer();
               await nextTick();

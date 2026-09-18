@@ -219,7 +219,7 @@ return {
 
     assert result["consumed"] is True
     assert result["kinds"] == ["todo"]
-    assert result["todo"]["counts"] == {"pending": 1, "in_progress": 1, "completed": 0}
+    assert result["todo"]["counts"] == {"pending": 1, "in_progress": 1, "completed": 0, "cancelled": 0}
 
 
 def test_agentscope_stream_dispatcher_clears_todo_card_on_empty_update():
@@ -309,6 +309,8 @@ def test_todo_card_follows_thought_timeline_on_both_chat_surfaces():
         todo_at = source.find("<ChatTodoCard")
         assert timeline_at >= 0
         assert todo_at > timeline_at
+        assert "cancelOpenTodosInMessages" in source
+        assert "data.status === \"cancelled\"" in source
 
 
 def test_todo_card_supports_collapse_close_and_auto_collapse_when_completed():
@@ -321,7 +323,9 @@ def test_todo_card_supports_collapse_close_and_auto_collapse_when_completed():
     assert "关闭任务清单" in source
     assert "watch(" in source
     assert "todo.value.counts" in source
-    assert "todo.value.counts?.completed === todo.value.todos.length" in source
+    assert "pending === 0 && in_progress === 0" in source
+    assert "已取消" in source
+    assert "item.status === 'cancelled'" in source
 
 
 def test_embed_chat_treats_every_parsed_sse_event_as_stream_activity():

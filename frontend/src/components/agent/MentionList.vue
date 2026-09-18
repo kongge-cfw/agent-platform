@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+import { isDelegationHostAgent } from '@/utils/delegationHost';
 
 interface AgentOption {
   id: string;
@@ -23,10 +24,16 @@ const props = withDefaults(
     /** 当前委派模式，用于高亮「智能委派 / 当前专家」 */
     routingMode?: string;
     expertAgentId?: string;
+    /** 嵌入应用指定的智能委派宿主；站内空则回落平台主助手 */
+    delegationHostId?: string;
+    /** 嵌入会话：空宿主不回落平台 Main */
+    strictDelegationHost?: boolean;
   }>(),
   {
     routingMode: 'auto',
     expertAgentId: '',
+    delegationHostId: '',
+    strictDelegationHost: false,
   },
 );
 
@@ -58,7 +65,11 @@ const filteredAgents = computed(() => {
   );
 });
 
+const isMainAgent = (agent: AgentOption) =>
+  isDelegationHostAgent(agent, props.delegationHostId, { strict: props.strictDelegationHost });
+
 const showAutoOption = computed(() => {
+  if (!props.agents.some(isMainAgent)) return false;
   const k = (props.keyword || '').trim().toLowerCase();
   if (!k) return true;
   return (

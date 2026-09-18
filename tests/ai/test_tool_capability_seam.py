@@ -162,8 +162,8 @@ async def test_assistant_resolves_main_subagent_through_provider(monkeypatch):
         lambda: [],
     )
     monkeypatch.setattr(
-        "app.services.ai.runners.assistant_agent_runner.is_main_general_agent",
-        lambda config: True,
+        "app.services.ai.runners.assistant_agent_runner.can_host_smart_delegation",
+        lambda config, user_info=None: True,
     )
 
     tools = await runner._resolve_runtime_tools_from_config()

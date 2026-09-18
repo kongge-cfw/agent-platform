@@ -309,6 +309,25 @@ def _finalize_todo_success(
     return event
 
 
+def _finalize_todo_cancelled(
+    state: Optional[List[Dict[str, Any]]],
+    *,
+    execution_status: str,
+) -> Optional[Dict[str, Any]]:
+    """用户取消/终止时，把未完成 Todo 标为 cancelled，避免清单停在「进行中」。"""
+    if execution_status != "cancelled":
+        return None
+    from app.services.ai.runtime.agentscope.process_timeline_snapshot import cancel_todo_items
+
+    event = cancel_todo_items(state)
+    if event:
+        logger.info(
+            "[Todo] Backend cancelled open checklist items: cancelled=%d",
+            int((event.get("counts") or {}).get("cancelled", 0)),
+        )
+    return event
+
+
 def _restore_todo_snapshot_from_pending(
     process_timeline_state: List[Dict[str, Any]],
     pending: Any,
@@ -1718,6 +1737,14 @@ class AgentService:
         )
 
         if not agent_config:
+            from app.services.embed_identity import is_embed_session, locked_agent_id
+
+            if (
+                is_embed_session(user_info)
+                and not locked_agent_id(user_info)
+                and not (agent_id or agent_name or version_id)
+            ):
+                return None, None, route_elapsed_ms, AgentServicePrompts.EMBED_SMART_DELEGATION_REQUIRES_MAIN
             return None, None, route_elapsed_ms, None
 
         if route_details and getattr(route_details, "provenance", None) == "router":
@@ -2333,14 +2360,14 @@ class AgentService:
             return accessible_resources
 
         async def _fetch_roster():
-            from app.services.ai.skill_resolver import is_main_general_agent
+            from app.services.embed_identity import can_host_smart_delegation
             has_subagent_tool = any(
                 (isinstance(t, str) and t in ("sub_agent_call", "sub_agent_batch_call"))
                 or (isinstance(t, dict) and t.get("name") in ("sub_agent_call", "sub_agent_batch_call"))
                 or (getattr(t, "name", None) in ("sub_agent_call", "sub_agent_batch_call"))
                 for t in (getattr(agent_config, "tools", None) or [])
             )
-            if not (is_main_general_agent(agent_config) or has_subagent_tool):
+            if not (can_host_smart_delegation(agent_config, user_info) or has_subagent_tool):
                 return None, 0, False, agent_system_prompt, None
 
             try:
@@ -2388,6 +2415,7 @@ class AgentService:
                     agent_config,
                     current_user_query=user_query,
                     turn_decision=turn_decision,
+                    user_info=user_info,
                 )
             except Exception as err:
                 logger.warning(f"Error in concurrent resolve_effective_prompt_tool_names_for_turn: {err}")

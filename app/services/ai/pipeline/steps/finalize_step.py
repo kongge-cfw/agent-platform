@@ -90,6 +90,7 @@ class FinalizeStep(BasePipelineStep):
             # 2. History persistence decision
             from app.services.ai.agent_service import (
                 _filter_current_turn_download_urls,
+                _finalize_todo_cancelled,
                 _finalize_todo_success,
                 _final_process_timeline,
                 _persist_assistant_message_and_summary,
@@ -109,6 +110,9 @@ class FinalizeStep(BasePipelineStep):
                 }
 
             todo_completion = _finalize_todo_success(
+                shared_state.get("process_timeline"),
+                execution_status=context.execution_status,
+            ) or _finalize_todo_cancelled(
                 shared_state.get("process_timeline"),
                 execution_status=context.execution_status,
             )

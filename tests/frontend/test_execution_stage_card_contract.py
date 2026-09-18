@@ -140,6 +140,7 @@ def test_tool_permission_card_exposes_decision_context_and_accessible_actions():
         "复制失败",
         "本次允许执行",
         "拒绝执行",
+        "sm:justify-end",
         "正在提交确认",
         "aria-live=\"polite\"",
         "aria-busy",
@@ -149,6 +150,7 @@ def test_tool_permission_card_exposes_decision_context_and_accessible_actions():
         "sm:flex-row",
     ):
         assert marker in card
+    assert card.find("拒绝执行") < card.find("本次允许执行")
 
 
 def test_tool_permission_card_uses_adaptive_compact_layout_for_single_commands():

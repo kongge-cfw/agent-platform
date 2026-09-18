@@ -1924,7 +1924,7 @@ async def test_general_runner_without_tools_intercepts_hallucination(chat_config
     with patch("app.services.ai.config.AgentConfigProvider.get_synthesis_llm", AsyncMock(return_value=FakeLLM())), \
          patch("app.services.ai.tools.registry.ToolRegistry.get_system_implicit_tools", return_value=[]), \
          patch(
-             "app.services.ai.runners.assistant_agent_runner.AgentManagerService.list_allowed_agents",
+             "app.services.ai.agent_roster.list_delegation_source_agents",
              AsyncMock(return_value=[data_agent]),
          ):
         events = []
@@ -1980,7 +1980,7 @@ async def test_general_runner_without_data_tool_intercepts_fake_chatbi_handoff(c
     with patch("app.services.ai.config.AgentConfigProvider.get_synthesis_llm", AsyncMock(return_value=FakeLLM())), \
          patch("app.services.ai.tools.registry.ToolRegistry.get_system_implicit_tools", return_value=[]), \
          patch(
-             "app.services.ai.runners.assistant_agent_runner.AgentManagerService.list_allowed_agents",
+             "app.services.ai.agent_roster.list_delegation_source_agents",
              AsyncMock(return_value=[data_agent]),
          ):
         events = []

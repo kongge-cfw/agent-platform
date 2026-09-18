@@ -18,6 +18,8 @@ def test_expert_cascade_menu_dual_tabs_and_search_contract():
     assert "filteredSystemAgents" in content
     assert "filteredCustomAgents" in content
     assert "shouldShowAutoCard" in content
+    assert "delegationHostId" in content
+    assert "if (!(props.allowedAgents || []).some(isMainAgent)) return false" in content
 
     # Conditional search bar (> 5 items or has query)
     assert "currentTabTotalCount" in content

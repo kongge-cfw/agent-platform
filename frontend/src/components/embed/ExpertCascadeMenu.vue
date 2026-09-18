@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { isEmbeddedInIframe } from '@/utils/embedHost'
+import { isDelegationHostAgent } from '@/utils/delegationHost'
 
 const props = withDefaults(
   defineProps<{
@@ -13,6 +14,10 @@ const props = withDefaults(
     fullWidth?: boolean
     /** 桌面侧栏浮层：高度铺满左侧加号菜单，上下对齐 */
     fillHeight?: boolean
+    /** 嵌入应用指定的智能委派宿主；站内空则回落平台主助手 */
+    delegationHostId?: string
+    /** 嵌入会话：空宿主不回落平台 Main */
+    strictDelegationHost?: boolean
   }>(),
   {
     routingMode: 'auto',
@@ -22,6 +27,8 @@ const props = withDefaults(
     compact: false,
     fullWidth: false,
     fillHeight: false,
+    delegationHostId: '',
+    strictDelegationHost: false,
   },
 )
 
@@ -40,14 +47,8 @@ const expertSearchQuery = ref('')
 /** 业务系统 iframe 只开放平台专家；自定义专家是个人资产，宿主用户不关心。 */
 const hideCustomExperts = isEmbeddedInIframe()
 
-const isMainAgent = (agent: any) => {
-  if (!agent) return false
-  if (typeof agent === 'string') return agent === 'sys-agent-chat' || agent === 'main'
-  return (
-    agent.id === 'sys-agent-chat' ||
-    ['main', 'assistant', 'general-chat'].includes(String(agent.name || '').trim().toLowerCase())
-  )
-}
+const isMainAgent = (agent: any) =>
+  isDelegationHostAgent(agent, props.delegationHostId, { strict: props.strictDelegationHost })
 
 const systemAgents = computed(() => {
   const sys = (props.allowedAgents || []).filter((agent) => agent.is_system || isMainAgent(agent))
@@ -80,6 +81,7 @@ const filteredSystemAgents = computed(() => filterList(systemAgents.value))
 const filteredCustomAgents = computed(() => filterList(customAgents.value))
 
 const shouldShowAutoCard = computed(() => {
+  if (!(props.allowedAgents || []).some(isMainAgent)) return false
   if (expertTab.value !== 'system') return false
   const q = expertSearchQuery.value.trim().toLowerCase()
   if (!q) return true

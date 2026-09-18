@@ -103,6 +103,8 @@ def test_stop_generation_cancels_backend_run_before_aborting_sse():
         stop_at = source.find("const stopGeneration")
         assert cancel_at > stop_at > 0
         assert abort_at > cancel_at
+        stop_body = source[stop_at:abort_at]
+        assert "cancelOpenTodosInMessages" in stop_body
 
 
 

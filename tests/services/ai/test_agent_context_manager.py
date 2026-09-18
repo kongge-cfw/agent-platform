@@ -1,8 +1,10 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from app.core.context import get_current_agent_context
 from app.schemas.agent import ChatConfig
 from app.services.ai.context_manager import AgentContextManager
-from app.core.context import get_current_agent_context
+from app.services.ai.turn_decision import TurnDecision
 
 pytestmark = pytest.mark.no_infrastructure
 
@@ -413,3 +415,345 @@ async def test_setup_context_admin_user():
         ID_DB_ALL_2,
     }
     mock_get.assert_awaited_once()
+
+
+def _embed_user_info():
+    return {
+        "session_type": "embed",
+        "embed_role_id": 12,
+        "lock_entry_agent": "0",
+        "created_by_user_id": 1,
+        "created_by_role": "admin",
+        "user_id": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_with_main_in_catalog_but_no_host_does_not_auto_route():
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(id="sys-agent-chat", name="main", is_enabled=True),
+        SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True),
+    ]
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=ChatConfig(
+            agent_id="sys-agent-chat",
+            agent_name="main",
+            model_name="DeepSeek",
+            temperature=0.7,
+            system_prompt="main",
+            tools=[],
+            capabilities=["general_chat"],
+        ),
+    ) as get_config, patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "你好"}],
+            user_info=_embed_user_info(),
+        )
+
+    assert config is None
+    assert decision is None
+    get_config.assert_not_awaited()
+    route_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_explicit_main_host_uses_delegation():
+    main_config = ChatConfig(
+        agent_id="sys-agent-chat",
+        agent_name="main",
+        model_name="DeepSeek",
+        temperature=0.7,
+        system_prompt="main prompt",
+        tools=[],
+        capabilities=["general_chat"],
+    )
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(id="sys-agent-chat", name="main", is_enabled=True),
+        SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True),
+    ]
+    user_info = {**_embed_user_info(), "default_entry_agent_id": "sys-agent-chat"}
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=main_config,
+    ), patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "你好"}],
+            user_info=user_info,
+        )
+
+    assert config is main_config
+    assert decision.provenance == "automatic_delegation"
+    route_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_single_role_agent_skips_main():
+    chatbi = ChatConfig(
+        agent_id="sys-agent-chatbi",
+        agent_name="chat-bi",
+        model_name="DeepSeek",
+        temperature=0.7,
+        system_prompt="bi",
+        tools=[],
+        capabilities=["data_query"],
+    )
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(
+            id="sys-agent-chatbi",
+            name="chat-bi",
+            display_name="数据分析",
+            is_enabled=True,
+        ),
+    ]
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=chatbi,
+    ), patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "查销售额"}],
+            user_info=_embed_user_info(),
+        )
+
+    assert config is chatbi
+    assert decision.provenance == "direct_agent_selection"
+    route_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_multiple_agents_without_main_does_not_auto_route():
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True),
+        SimpleNamespace(id="sys-agent-knowledge", name="knowledge-base", is_enabled=True),
+    ]
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=ChatConfig(
+            agent_id="sys-agent-chat",
+            agent_name="main",
+            model_name="DeepSeek",
+            temperature=0.7,
+            system_prompt="main",
+            tools=[],
+            capabilities=["general_chat"],
+        ),
+    ) as get_config, patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "请假流程怎么走"}],
+            user_info=_embed_user_info(),
+        )
+
+    assert config is None
+    assert decision is None
+    get_config.assert_not_awaited()
+    route_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_default_entry_without_main_uses_that_agent():
+    knowledge = ChatConfig(
+        agent_id="sys-agent-knowledge",
+        agent_name="knowledge-base",
+        model_name="DeepSeek",
+        temperature=0.7,
+        system_prompt="kb",
+        tools=[],
+        capabilities=["knowledge"],
+    )
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True),
+        SimpleNamespace(id="sys-agent-knowledge", name="knowledge-base", is_enabled=True),
+    ]
+    user_info = {**_embed_user_info(), "default_entry_agent_id": "sys-agent-knowledge"}
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=knowledge,
+    ), patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "制度怎么查"}],
+            user_info=user_info,
+        )
+
+    assert config is knowledge
+    assert decision.provenance == "automatic_delegation"
+    route_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unlocked_embed_default_entry_hosts_smart_delegation_instead_of_platform_main():
+    host_config = ChatConfig(
+        agent_id="sys-agent-chatbi",
+        agent_name="chat-bi",
+        model_name="DeepSeek",
+        temperature=0.7,
+        system_prompt="bi host",
+        tools=[],
+        capabilities=["data_query"],
+    )
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [
+        SimpleNamespace(id="sys-agent-chat", name="main", is_enabled=True),
+        SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True),
+    ]
+    user_info = {**_embed_user_info(), "default_entry_agent_id": "sys-agent-chatbi"}
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=host_config,
+    ), patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "你好"}],
+            user_info=user_info,
+        )
+
+    assert config is host_config
+    assert decision.provenance == "automatic_delegation"
+    route_query.assert_not_awaited()
+
+
+def test_can_host_embed_requires_explicit_host():
+    from app.services.embed_identity import can_host_smart_delegation
+
+    main = SimpleNamespace(agent_id="sys-agent-chat", agent_name="main")
+    alt = SimpleNamespace(agent_id="custom-host", agent_name="主智能体dev")
+    embed = _embed_user_info()
+    assert can_host_smart_delegation(main, embed) is False
+    assert can_host_smart_delegation(main, {**embed, "default_entry_agent_id": "sys-agent-chat"}) is True
+    assert can_host_smart_delegation(alt, {**embed, "default_entry_agent_id": "custom-host"}) is True
+    assert can_host_smart_delegation(main, {**embed, "default_entry_agent_id": "custom-host"}) is False
+
+
+def test_can_host_non_embed_uses_platform_main():
+    from app.services.embed_identity import can_host_smart_delegation
+
+    main = SimpleNamespace(agent_id="sys-agent-chat", agent_name="main")
+    expert = SimpleNamespace(agent_id="sys-agent-chatbi", agent_name="chat-bi")
+    assert can_host_smart_delegation(main, {"role": "user"}) is True
+    assert can_host_smart_delegation(expert, {"role": "user"}) is False
+
+
+@pytest.mark.asyncio
+async def test_locked_embed_loads_locked_agent_instead_of_platform_main():
+    locked_config = ChatConfig(
+        agent_id="sys-agent-chatbi",
+        agent_name="chat-bi",
+        model_name="DeepSeek",
+        temperature=0.7,
+        system_prompt="bi",
+        tools=[],
+        capabilities=["data_query"],
+    )
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = AsyncMock()
+    catalog = [SimpleNamespace(id="sys-agent-chatbi", name="chat-bi", is_enabled=True)]
+    user_info = {
+        **_embed_user_info(),
+        "lock_entry_agent": "1",
+        "agent_id": "sys-agent-chatbi",
+    }
+
+    with patch(
+        "app.services.ai.context_manager.AsyncSessionLocal",
+        return_value=session_context,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.list_allowed_agents",
+        new_callable=AsyncMock,
+        return_value=catalog,
+    ), patch(
+        "app.services.ai.context_manager.AgentManagerService.get_active_agent_config",
+        new_callable=AsyncMock,
+        return_value=locked_config,
+    ), patch(
+        "app.services.ai.router_service.router_service.route_query",
+        new_callable=AsyncMock,
+    ) as route_query:
+        config, decision = await AgentContextManager.resolve_agent_config(
+            messages=[{"role": "user", "content": "你好"}],
+            user_info=user_info,
+        )
+
+    assert config is locked_config
+    assert decision.provenance == "direct_agent_selection"
+    route_query.assert_not_awaited()

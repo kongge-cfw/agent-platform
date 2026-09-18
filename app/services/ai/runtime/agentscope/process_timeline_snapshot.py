@@ -4,7 +4,56 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 DETAILS_MAX_CHARS = 2000
-TODO_STATUSES = {"pending", "in_progress", "completed"}
+TODO_STATUSES = ("pending", "in_progress", "completed", "cancelled")
+OPEN_TODO_STATUSES = {"pending", "in_progress"}
+HITL_PAYLOAD_SKIP_KEYS = {
+    "agent_state",
+    "stream_state",
+    "runner_context",
+    "tools",
+    "native_model",
+}
+HITL_CARD_SPECS = {
+    "business_confirmation": {
+        "id_keys": ("confirmation_id",),
+        "log_title": "业务数据确认",
+        "log_details_keys": ("title", "summary"),
+        "category": "business_confirmation",
+        "log_id_prefix": "business_confirmation_",
+    },
+    "user_question": {
+        "id_keys": ("question_id",),
+        "log_title": "需要用户回答",
+        "log_details_keys": ("question",),
+        "category": "user_question",
+        "log_id_prefix": "user_question_",
+    },
+    "permission_required": {
+        "id_keys": ("permission_request_id",),
+        "log_title_key": "title",
+        "default_log_title": "工具调用需要确认",
+        "log_details_keys": ("details",),
+        "category": "permission",
+        "log_id_prefix": "permission_",
+    },
+    "external_execution_required": {
+        "id_keys": ("external_execution_request_id", "permission_request_id"),
+        "log_title_key": "title",
+        "default_log_title": "需要客户端执行工具",
+        "log_details_keys": ("details",),
+        "category": "external",
+        "log_id_prefix": "external_",
+    },
+    "grounding_blocked": {
+        "id_keys": (),
+        "fixed_id": "grounding_blocked",
+        "log_title_key": "title",
+        "default_log_title": "暂时无法验证事实",
+        "log_details_keys": ("message",),
+        "category": "grounding",
+        "log_id_prefix": "grounding_blocked_",
+    },
+}
 
 
 def _normalize_text(text: str, trim_boundary: bool = False) -> str:
@@ -97,7 +146,7 @@ def _find_subagent_container(
 
 def _is_tool_log(data: Dict[str, Any]) -> bool:
     category = str(data.get("category") or "").lower()
-    if category in {"permission", "external"}:
+    if category in {"permission", "external", "business_confirmation", "user_question", "grounding"}:
         return False
     if category in {"tool", "sql", "agent"}:
         return True
@@ -187,8 +236,11 @@ def _normalize_todo_update(chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         seen.add(normalized_content)
         todos.append({"content": normalized_content, "status": status})
 
-    counts = {status: sum(todo["status"] == status for todo in todos) for status in TODO_STATUSES}
-    return {"todos": todos, "counts": counts}
+    return {"todos": todos, "counts": _todo_counts(todos)}
+
+
+def _todo_counts(todos: List[Dict[str, str]]) -> Dict[str, int]:
+    return {status: sum(todo["status"] == status for todo in todos) for status in TODO_STATUSES}
 
 
 def _apply_todo_update(state: List[Dict[str, Any]], chunk: Dict[str, Any]) -> None:
@@ -232,14 +284,172 @@ def complete_todo_items(state: Optional[List[Dict[str, Any]]]) -> Optional[Dict[
             {"content": todo["content"], "status": "completed"}
             for todo in normalized["todos"]
         ]
-        counts = {
-            status: sum(todo["status"] == status for todo in todos)
-            for status in TODO_STATUSES
-        }
+        counts = _todo_counts(todos)
         item["todos"] = todos
         item["counts"] = counts
         return {"type": "todo_update", "todos": todos, "counts": counts}
     return None
+
+
+def cancel_todo_items(state: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    """将未完成 Todo 标为 cancelled，并返回实时更新事件。已完成项保持 completed。"""
+    for item in reversed(state or []):
+        if item.get("kind") != "todo":
+            continue
+        normalized = _normalize_todo_update(item)
+        if normalized is None or not normalized["todos"]:
+            return None
+        if not any(todo["status"] in OPEN_TODO_STATUSES for todo in normalized["todos"]):
+            return None
+
+        todos = [
+            {
+                "content": todo["content"],
+                "status": (
+                    "cancelled"
+                    if todo["status"] in OPEN_TODO_STATUSES
+                    else todo["status"]
+                ),
+            }
+            for todo in normalized["todos"]
+        ]
+        counts = _todo_counts(todos)
+        item["todos"] = todos
+        item["counts"] = counts
+        return {"type": "todo_update", "todos": todos, "counts": counts}
+    return None
+
+
+def last_todo_update_from_history(
+    history: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    """从最近一条助手消息的时间线取出任务清单，供取消轮恢复后收尾。"""
+    for message in reversed(history or []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        timeline = message.get("process_timeline")
+        if not isinstance(timeline, list):
+            continue
+        for item in reversed(timeline):
+            if not isinstance(item, dict) or item.get("kind") != "todo":
+                continue
+            normalized = _normalize_todo_update(item)
+            if normalized is None or not normalized["todos"]:
+                continue
+            return {"type": "todo_update", "todos": normalized["todos"], "counts": normalized["counts"]}
+    return None
+
+
+def _json_safe(value: Any, *, depth: int = 0) -> Any:
+    if depth > 8:
+        return None
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_json_safe(item, depth=depth + 1) for item in value[:200]]
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(item, depth=depth + 1)
+            for key, item in list(value.items())[:80]
+        }
+    return str(value)
+
+
+def _copy_hitl_payload(chunk: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        str(key): _json_safe(value)
+        for key, value in chunk.items()
+        if key not in HITL_PAYLOAD_SKIP_KEYS
+    }
+
+
+def _hitl_request_id(event_type: str, chunk: Dict[str, Any]) -> str:
+    spec = HITL_CARD_SPECS[event_type]
+    fixed_id = spec.get("fixed_id")
+    if fixed_id:
+        return str(fixed_id)
+    for key in spec.get("id_keys") or ():
+        value = str(chunk.get(key) or "").strip()
+        if value:
+            return value
+    return "current"
+
+
+def _hitl_item_id(event_type: str, request_id: str) -> str:
+    return f"{event_type}_{request_id}"
+
+
+def _hitl_log_title(spec: Dict[str, Any], chunk: Dict[str, Any]) -> str:
+    title_key = spec.get("log_title_key")
+    if title_key:
+        return str(chunk.get(title_key) or spec.get("default_log_title") or "待用户操作")
+    return str(spec.get("log_title") or spec.get("default_log_title") or "待用户操作")
+
+
+def _hitl_log_details(spec: Dict[str, Any], chunk: Dict[str, Any]) -> str:
+    for key in spec.get("log_details_keys") or ():
+        value = str(chunk.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _upsert_hitl_card(state: List[Dict[str, Any]], chunk: Dict[str, Any]) -> None:
+    event_type = str(chunk.get("type") or "")
+    spec = HITL_CARD_SPECS.get(event_type)
+    if spec is None:
+        return
+    request_id = _hitl_request_id(event_type, chunk)
+    item_id = _hitl_item_id(event_type, request_id)
+    payload = _copy_hitl_payload(chunk)
+    status = str(chunk.get("status") or payload.get("status") or "pending")
+    existing = next(
+        (
+            item
+            for item in state
+            if item.get("kind") == "hitl" and item.get("id") == item_id
+        ),
+        None,
+    )
+    if existing is not None:
+        existing["payload"] = payload
+        existing["status"] = status
+        existing["card_type"] = event_type
+        return
+    state.append({
+        "kind": "hitl",
+        "id": item_id,
+        "card_type": event_type,
+        "status": status,
+        "payload": payload,
+    })
+
+
+def _update_hitl_status(
+    state: List[Dict[str, Any]],
+    card_type: str,
+    request_id: str,
+    status: str,
+) -> None:
+    target = str(request_id or "").strip()
+    if not target:
+        return
+    for item in state:
+        if item.get("kind") != "hitl" or item.get("card_type") != card_type:
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        candidates = {
+            str(payload.get("permission_request_id") or ""),
+            str(payload.get("external_execution_request_id") or ""),
+            str(payload.get("confirmation_id") or ""),
+            str(payload.get("question_id") or ""),
+            str(item.get("id") or ""),
+        }
+        if target not in candidates and not str(item.get("id") or "").endswith(f"_{target}"):
+            continue
+        item["status"] = status
+        payload["status"] = status
+        item["payload"] = payload
 
 
 def apply_stream_chunk(state: List[Dict[str, Any]], chunk: Dict[str, Any]) -> None:
@@ -366,34 +576,51 @@ def apply_stream_chunk(state: List[Dict[str, Any]], chunk: Dict[str, Any]) -> No
         })
         return
 
-    if event_type == "user_question":
+    if event_type in HITL_CARD_SPECS:
+        spec = HITL_CARD_SPECS[event_type]
+        request_id = _hitl_request_id(event_type, chunk)
+        _upsert_hitl_card(state, chunk)
         apply_stream_chunk(state, {
             "type": "log",
-            "id": f"user_question_{chunk.get('question_id') or _next_id(state, 'question')}",
-            "title": "需要用户回答",
-            "details": str(chunk.get("question") or ""),
-            "status": "pending",
-            "category": "user_question",
+            "id": f"{spec['log_id_prefix']}{request_id}",
+            "title": _hitl_log_title(spec, chunk),
+            "details": _hitl_log_details(spec, chunk),
+            "status": "pending" if str(chunk.get("status") or "pending") == "pending" else str(chunk.get("status") or "success"),
+            "category": spec["category"],
         })
         return
 
     if event_type == "permission_result":
+        request_id = str(chunk.get("permission_request_id") or "")
+        _update_hitl_status(
+            state,
+            "permission_required",
+            request_id,
+            "rejected" if chunk.get("status") == "rejected" else "approved",
+        )
         apply_stream_chunk(state, {
             "type": "log",
-            "id": f"permission_{chunk.get('permission_request_id') or _next_id(state, 'permission')}",
+            "id": f"permission_{request_id or _next_id(state, 'permission')}",
             "title": "已拒绝工具调用" if chunk.get("status") == "rejected" else "已允许工具调用",
-            "details": f"确认请求: {chunk.get('permission_request_id') or ''}",
+            "details": f"确认请求: {request_id}",
             "status": "success",
             "category": "permission",
         })
         return
 
     if event_type == "external_execution_result":
+        request_id = str(chunk.get("external_execution_request_id") or "")
+        _update_hitl_status(
+            state,
+            "external_execution_required",
+            request_id,
+            "error" if chunk.get("status") == "error" else "completed",
+        )
         apply_stream_chunk(state, {
             "type": "log",
-            "id": f"external_result_{chunk.get('external_execution_request_id') or _next_id(state, 'external')}",
+            "id": f"external_result_{request_id or _next_id(state, 'external')}",
             "title": "外部执行失败" if chunk.get("status") == "error" else "外部执行结果已提交",
-            "details": str(chunk.get("external_execution_request_id") or ""),
+            "details": request_id,
             "status": "error" if chunk.get("status") == "error" else "success",
             "category": "external",
         })
@@ -534,6 +761,18 @@ def finalize_process_timeline(state: Optional[List[Dict[str, Any]]]) -> Optional
                 "title": str(item.get("title") or "任务清单"),
                 "todos": normalized["todos"],
                 "counts": normalized["counts"],
+            })
+            continue
+        if item.get("kind") == "hitl":
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            items.append({
+                "kind": "hitl",
+                "id": item.get("id"),
+                "card_type": str(item.get("card_type") or payload.get("type") or ""),
+                "status": str(item.get("status") or payload.get("status") or "pending"),
+                "payload": payload,
             })
             continue
         if item.get("kind") != "text":

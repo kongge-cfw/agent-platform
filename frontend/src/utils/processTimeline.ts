@@ -2,7 +2,7 @@ import type { SubagentTraceMeta } from "./subagentTrace";
 
 export type ProcessTimelineStatus = "pending" | "success" | "error" | "warning";
 export type ToolResolutionStatus = "disabled" | "missing" | "filtered";
-export type ProcessTimelineTodoStatus = "pending" | "in_progress" | "completed";
+export type ProcessTimelineTodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 export type FileToolMetadata = {
   operation: "read" | "write" | "edit" | "search";
@@ -77,7 +77,27 @@ export type ProcessTimelineTodoItem = {
   counts: Record<ProcessTimelineTodoStatus, number>;
 };
 
-export type ProcessTimelineItem = ProcessTimelineTextItem | ProcessTimelineLogItem | ProcessTimelineTodoItem;
+export type ProcessTimelineHitlItem = {
+  kind: "hitl";
+  id: string;
+  card_type: string;
+  status?: string;
+  payload?: Record<string, unknown>;
+};
+
+const HITL_LOG_CATEGORIES = new Set([
+  "business_confirmation",
+  "user_question",
+  "permission",
+  "external",
+  "grounding",
+]);
+
+export type ProcessTimelineItem =
+  | ProcessTimelineTextItem
+  | ProcessTimelineLogItem
+  | ProcessTimelineTodoItem
+  | ProcessTimelineHitlItem;
 
 export const PREPARATION_TIMELINE_PARENT_ID = "preparation:auth_context_capability";
 
@@ -144,6 +164,7 @@ export function formatTimelineTitle(title: unknown): string {
 
 export function timelineHasPending(items: ProcessTimelineItem[] | undefined): boolean {
   return (items || []).some((item) => {
+    if (item.kind === "hitl") return false;
     if (item.kind === "log") {
       if (item.status === "pending") return true;
       return (item.children || []).some((child) => child.status === "pending");
@@ -171,6 +192,7 @@ export function resolveTimelineCurrentStep(
   if (!active) return "";
 
   for (const item of [...(items || [])].reverse()) {
+    if (item.kind === "hitl") continue;
     if (item.kind === "log") {
       const pendingSub = [...(item.children || [])].reverse().find((child) => child.status === "pending");
       if (pendingSub) return `${formatTimelineTitle(pendingSub.title)} · 进行中`;
@@ -214,7 +236,15 @@ function normalizeTodoItems(rawTodos: unknown): ProcessTimelineTodo[] | undefine
     if (!rawTodo || typeof rawTodo !== "object") return undefined;
     const content = String((rawTodo as { content?: unknown }).content || "").trim();
     const status = (rawTodo as { status?: unknown }).status;
-    if (!content || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
+    if (
+      !content
+      || (
+        status !== "pending"
+        && status !== "in_progress"
+        && status !== "completed"
+        && status !== "cancelled"
+      )
+    ) {
       return undefined;
     }
     if (seen.has(content)) return undefined;
@@ -229,7 +259,44 @@ function todoCounts(todos: ProcessTimelineTodo[]): Record<ProcessTimelineTodoSta
     pending: todos.filter((todo) => todo.status === "pending").length,
     in_progress: todos.filter((todo) => todo.status === "in_progress").length,
     completed: todos.filter((todo) => todo.status === "completed").length,
+    cancelled: todos.filter((todo) => todo.status === "cancelled").length,
   };
+}
+
+function isOpenTodoStatus(status: ProcessTimelineTodoStatus): boolean {
+  return status === "pending" || status === "in_progress";
+}
+
+/** 取消/终止任务时，把当前清单里未完成项标为 cancelled。 */
+export function cancelOpenTodos(target: ProcessTimelineTarget): boolean {
+  const items = target.processTimeline;
+  if (!items?.length) return false;
+  const index = [...items].reverse().findIndex((item) => item.kind === "todo");
+  if (index < 0) return false;
+  const itemIndex = items.length - 1 - index;
+  const current = items[itemIndex];
+  if (!current || current.kind !== "todo") return false;
+  if (!current.todos.some((todo) => isOpenTodoStatus(todo.status))) return false;
+  const todos = current.todos.map((todo) => ({
+    ...todo,
+    status: isOpenTodoStatus(todo.status) ? "cancelled" as const : todo.status,
+  }));
+  items[itemIndex] = {
+    ...current,
+    todos,
+    counts: todoCounts(todos),
+  };
+  target.processTimeline = [...items];
+  return true;
+}
+
+/** 从最新消息往前找一份仍在进行的任务清单并取消。 */
+export function cancelOpenTodosInMessages(messages: ProcessTimelineTarget[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message && cancelOpenTodos(message)) return true;
+  }
+  return false;
 }
 
 /** Replace the current main-agent checklist while keeping it as a timeline sibling. */
@@ -871,6 +938,7 @@ export function countTimelineSteps(items: ProcessTimelineItem[]): number {
         return nestedCount + 1;
       }, 0);
     }
+    if (item.kind === "hitl") return count;
     return count + 1;
   }, 0);
 }
@@ -958,6 +1026,10 @@ function reorganizeSubagentItems(items: ProcessTimelineItem[]): ProcessTimelineI
   let activeNarration: ProcessTimelineTextItem | undefined = undefined;
 
   for (const item of items) {
+    if (item.kind === "hitl") {
+      result.push(item);
+      continue;
+    }
     if (item.kind === "text") {
       if (item.children?.length) {
         const newChildren: ProcessTimelineLogItem[] = [];
@@ -1091,7 +1163,14 @@ export function hydrateHistoryProcessTimeline(
         counts: todoCounts(todos),
       } satisfies ProcessTimelineTodoItem;
     }
-    return mapLog(item);
+    if (item.kind === "hitl") {
+      return null;
+    }
+    const hydratedLog = mapLog(item);
+    if (HITL_LOG_CATEGORIES.has(String(hydratedLog.category || "")) && hydratedLog.status === "pending") {
+      return { ...hydratedLog, status: "success" };
+    }
+    return hydratedLog;
   }).filter((item): item is ProcessTimelineItem => item !== null);
 
   const items = reorganizeSubagentItems(rawItems);

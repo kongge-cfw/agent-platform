@@ -41,6 +41,7 @@ def parse_embed_app_row(app: SysEmbedApp) -> dict[str, Any]:
         "name": app.name,
         "role_id": parsed_role_id,
         "lock_entry_agent": bool(app.lock_entry_agent),
+        "default_entry_agent_id": str(app.default_entry_agent_id or "").strip() or None,
         "allowed_origins": [str(item).strip() for item in parse_json_list(app.allowed_origins)],
         "require_identity": bool(app.require_identity),
         "claim_keys": [str(item).strip() for item in parse_json_list(app.claim_keys)],
@@ -85,6 +86,55 @@ async def agent_allowed_by_role(db: AsyncSession, role_id: int, agent_key: str) 
     if agent is None:
         return False
     return str(agent.id or "").strip() in allowed or str(agent.name or "").strip() in allowed
+
+
+async def list_role_agent_options(db: AsyncSession, role_id: int) -> list[dict[str, Any]]:
+    from app.models.agent import AIAgent
+    from app.services.ai.agent_manager import MAIN_GENERAL_AGENT_ID, MAIN_GENERAL_AGENT_NAMES
+    from sqlalchemy import case, or_
+
+    allowed = await get_role_agent_ids(db, int(role_id))
+    if not allowed:
+        return []
+    keys = {str(item).strip() for item in allowed if str(item).strip()}
+    main_first = case(
+        (or_(AIAgent.id == MAIN_GENERAL_AGENT_ID, AIAgent.name.in_(tuple(MAIN_GENERAL_AGENT_NAMES))), 0),
+        else_=1,
+    )
+    stmt = (
+        select(AIAgent)
+        .where(
+            AIAgent.is_enabled == True,
+            or_(AIAgent.id.in_(keys), AIAgent.name.in_(keys)),
+        )
+        .order_by(main_first, AIAgent.sort_order.desc(), AIAgent.display_name)
+    )
+    agents = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": str(agent.id or "").strip(),
+            "name": str(agent.name or "").strip(),
+            "display_name": str(agent.display_name or agent.name or agent.id or "").strip(),
+            "is_system": bool(agent.is_system),
+        }
+        for agent in agents
+        if str(getattr(agent, "id", "") or "").strip()
+    ]
+
+
+async def ensure_default_entry_allowed(
+    db: AsyncSession,
+    *,
+    role_id: Optional[int],
+    agent_id: Optional[str],
+) -> None:
+    key = str(agent_id or "").strip()
+    if not key:
+        return
+    if role_id is None:
+        raise ValueError("必须先关联角色，才能指定默认入口智能体")
+    if not await agent_allowed_by_role(db, int(role_id), key):
+        raise ValueError("默认入口智能体不在关联角色的授权范围内")
 
 
 async def operator_has_embed_role(
@@ -201,6 +251,7 @@ async def resolve_ticket_app_policy(
             "shortcut_prompts": [],
             "role_id": None,
             "lock_entry_agent": False,
+            "default_entry_agent_id": None,
         }
 
     app = await get_embed_app_by_key(db, key)
@@ -215,6 +266,9 @@ async def resolve_ticket_app_policy(
         raise ValueError("该嵌入应用要求提交 identity（业务用户 claims）")
     if identity is None and policy["require_identity"]:
         raise ValueError("该嵌入应用要求提交 identity（业务用户 claims）")
+    default_entry = str(policy.get("default_entry_agent_id") or "").strip()
+    if policy["lock_entry_agent"] and not agent_key and default_entry:
+        agent_key = default_entry
     if policy["lock_entry_agent"] and not agent_key:
         raise ValueError("该嵌入应用已锁定入口智能体，必须指定 agent_id")
     role_id = policy.get("role_id")
@@ -238,6 +292,7 @@ async def resolve_ticket_app_policy(
         "shortcut_prompts": list(policy.get("shortcut_prompts") or []),
         "role_id": role_id,
         "lock_entry_agent": bool(policy["lock_entry_agent"]),
+        "default_entry_agent_id": default_entry or None,
     }
 
 
@@ -257,6 +312,9 @@ def dump_policy_session_fields(policy: Mapping[str, Any]) -> dict[str, str]:
             lock_entry = bool(app.get("lock_entry_agent"))
         fields["embed_role_id"] = str(role_id or "")
         fields["lock_entry_agent"] = "1" if lock_entry else "0"
+        fields["default_entry_agent_id"] = str(
+            policy.get("default_entry_agent_id") or app.get("default_entry_agent_id") or ""
+        )
     return fields
 
 
@@ -270,6 +328,7 @@ def policy_from_user_info(user_info: Optional[Mapping[str, Any]]) -> dict[str, A
             "embed_app_key": "",
             "embed_role_id": "",
             "lock_entry_agent": False,
+            "default_entry_agent_id": "",
         }
     return {
         "create_shadow_user": _truthy(user_info.get("create_shadow_user")),
@@ -282,4 +341,5 @@ def policy_from_user_info(user_info: Optional[Mapping[str, Any]]) -> dict[str, A
         "embed_app_key": str(user_info.get("embed_app_key") or "").strip(),
         "embed_role_id": str(user_info.get("embed_role_id") or "").strip(),
         "lock_entry_agent": _truthy(user_info.get("lock_entry_agent")),
+        "default_entry_agent_id": str(user_info.get("default_entry_agent_id") or "").strip(),
     }

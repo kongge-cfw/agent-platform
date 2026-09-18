@@ -111,6 +111,7 @@ class PromptAssemblyInput:
     quick_suggestions_forbidden: bool = False
     runtime_tool_names: Optional[Iterable[str]] = None
     turn_decision: Optional[TurnDecision] = None
+    user_info: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self) -> None:
         if self.prompt_layout_mode is not None:
@@ -124,6 +125,7 @@ def resolve_effective_prompt_tool_names(
     *,
     current_user_query: str | None = None,
     turn_decision: TurnDecision | None = None,
+    user_info: Optional[Mapping[str, Any]] = None,
 ) -> set[str]:
     """Build the tool inventory shown to the model for the current turn.
 
@@ -161,9 +163,9 @@ def resolve_effective_prompt_tool_names(
         pass
 
     try:
-        from app.services.ai.skill_resolver import is_main_general_agent
+        from app.services.embed_identity import can_host_smart_delegation
 
-        if is_main_general_agent(agent_config):
+        if can_host_smart_delegation(agent_config, user_info):
             names.add("sub_agent_call")
             names.add("sub_agent_batch_call")
             names.add("todo_write")
@@ -178,9 +180,10 @@ async def resolve_effective_prompt_tool_names_for_turn(
     *,
     current_user_query: str,
     turn_decision: TurnDecision,
+    user_info: Optional[Mapping[str, Any]] = None,
 ) -> set[str]:
     """Resolve prompt names for the turn directly from configured and implicit tools."""
-    names = resolve_effective_prompt_tool_names(agent_config)
+    names = resolve_effective_prompt_tool_names(agent_config, user_info=user_info)
     if str(getattr(turn_decision, "reusable_result_mode", "none") or "none").strip().lower() == "reuse":
         from app.services.ai.session_tool_artifact import REUSABLE_RESULT_ACQUISITION_TOOLS
 
@@ -324,6 +327,7 @@ def _platform_global_only(params: PromptAssemblyInput) -> str:
         agent_config=params.agent_config,
         quick_suggestions_forbidden=params.quick_suggestions_forbidden,
         runtime_tool_names=params.runtime_tool_names,
+        user_info=params.user_info,
     ).strip()
 
 
@@ -342,6 +346,7 @@ def _enabled_prompt_plan(params: PromptAssemblyInput) -> PromptPlan:
             agent_config=params.agent_config,
             quick_suggestions_forbidden=params.quick_suggestions_forbidden,
             runtime_tool_names=params.runtime_tool_names,
+            user_info=params.user_info,
         )
 
     skills_block = _skills_or_discovery_block(
@@ -507,6 +512,7 @@ def assemble_system_prompt(params: PromptAssemblyInput) -> AssembledSystemPrompt
                 agent_config=params.agent_config,
                 quick_suggestions_forbidden=params.quick_suggestions_forbidden,
                 runtime_tool_names=params.runtime_tool_names,
+                user_info=params.user_info,
             )
     else:
         full_text = stack_without_platform

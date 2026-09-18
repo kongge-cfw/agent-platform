@@ -49,7 +49,7 @@ def test_clicking_default_agent_tab_waits_for_explicit_agent_selection():
         "return;", 1
     )[1]
     assert "saveAndClose();" not in expert_branch
-    assert "v-if=\"routingMode === 'expert'\"" in source
+    assert 'v-if="routingMode === \'expert\' || !hasMainAgent"' in source
 
 
 def test_clicking_auto_routing_keeps_settings_open_for_further_choice():
@@ -57,10 +57,8 @@ def test_clicking_auto_routing_keeps_settings_open_for_further_choice():
     routing_handler = source.split("const handleSetRoutingMode", 1)[1].split(
         "const handleSetExpertAgent", 1
     )[0]
-    auto_branch = routing_handler.split("if (mode === 'auto')", 1)[1].split(
-        "return;", 1
-    )[0]
-
+    auto_branch = routing_handler.split("if (mode === 'auto')", 1)[1]
+    assert "hasMainAgent.value" in auto_branch
     assert "routingMode.value = 'auto'" in auto_branch
     assert "emit('switch-to-auto')" in auto_branch
     assert "saveAndClose();" not in auto_branch
@@ -91,18 +89,32 @@ def test_routing_mode_help_text_explains_latency_and_delegation():
     assert "主专家仍可按任务需要调用其他智能体" in source
 
 
-def test_unconfigured_routing_defaults_to_auto_without_selecting_main():
+def test_unconfigured_routing_defaults_to_auto_only_when_role_has_main():
     source = EMBED.read_text(encoding="utf-8")
 
-    preference_segment = source.split("const saved = savedRoutingPreference.value", 1)[1].split(
-        "// 自动应用当前激活智能体推荐的排版风格", 1
+    assert "applyUnlockedRoutingFromCatalog" in source
+    assert "roleHasMainAgent" in source
+    assert "isMainGeneralAgent" in source
+    assert "isEmbedDelegationSession" in source
+    assert "strict-delegation-host" in source
+    helper = source.split("const applyUnlockedRoutingFromCatalog", 1)[1].split(
+        "const isGeneralAgentMessage",
+        1,
     )[0]
-    assert "saved.routing_configured" in preference_segment
-    assert "const mainAgent = res.data.find" not in preference_segment
-    assert 'agentId === "main" || agentName === "main"' not in preference_segment
-    assert "!saved.routing_configured && mainAgent" not in preference_segment
-    assert 'config.routingMode = "auto"' in preference_segment
-    assert 'config.expertAgentId = ""' in preference_segment
+    assert "saved.routing_configured" in helper
+    assert "catalogHasDelegationHost" in helper
+    assert "resolveDelegationHostAgent" in helper
+    assert "defaultEntryAgentId" in helper
+    assert "hostMode" in helper
+    assert "canSmartDelegate" in source
+    host_util = (ROOT / "frontend/src/utils/delegationHost.ts").read_text(encoding="utf-8")
+    assert "mode?.strict" in host_util
+    assert "不回落平台 Main" in host_util
+    assert 'config.routingMode = "auto"' in helper
+    assert 'config.routingMode = "expert"' in helper
+    assert "experts.length === 1" in helper
+    assert "当前嵌入应用未配置智能委派宿主，请选择一个专家" in source
+    assert "请先选择一个专家再提问" in source
 
 
 def test_integration_agent_lock_covers_all_host_entry_points():
@@ -145,6 +157,18 @@ def test_embed_apps_binds_role_instead_of_agent_whitelist():
     assert "关联角色" in view
     assert "请选择角色" in view
     assert "请选择关联角色" in view
+    assert "关联角色" in view
+    assert "请选择角色" in view
+    assert "请选择关联角色" in view
+    assert "智能委派宿主" in view
+    assert "可作为替代主助手" in view
+    assert "未指定（不启用智能委派）" in view
+    assert "请在此选中它" in view
+    assert "角色含平台主助手则由其委派" not in view
+    assert "role-agent-options" in source
+    assert "default_entry_agent_id" in view
+    assert "default_entry_agent_id" in source
+    assert "fetchRoleAgentOptions" in view
     assert "不绑定" not in view
     assert "签发人权限" not in view
     assert "role-options" in source

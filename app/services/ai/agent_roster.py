@@ -39,21 +39,32 @@ def inject_agent_roster(system_prompt: Optional[str], roster_markdown: str) -> s
     return system_prompt.replace(AGENT_ROSTER_PLACEHOLDER, roster)
 
 
+async def list_delegation_source_agents(
+    session: Any,
+    user_info: Optional[dict] = None,
+) -> List[Any]:
+    """委派花名册/候选源：嵌入只看角色目录，站内仍是全站智能体。"""
+    from app.services.ai.agent_manager import AgentManagerService
+    from app.services.embed_identity import is_embed_session
+
+    if is_embed_session(user_info):
+        return await AgentManagerService.list_allowed_agents(session, user_info)
+    return await AgentManagerService.list_agents(session)
+
+
 async def resolve_delegable_system_agents_for_user(
     session: Any,
     *,
     user_info: Optional[dict],
     current_agent_id: Optional[str],
 ) -> List[Any]:
-    from app.services.ai.agent_manager import AgentManagerService
     from app.services.ai.tools.agent_delegate_tool import resolve_runnable_delegable_system_agents
+    from app.services.embed_identity import operator_is_admin, platform_acl_user_id
 
-    active_agents = await AgentManagerService.list_agents(session)
+    active_agents = await list_delegation_source_agents(session, user_info)
     raw_user_id = None
     is_admin = False
     if user_info:
-        from app.services.embed_identity import operator_is_admin, platform_acl_user_id
-
         raw_user_id = platform_acl_user_id(user_info)
         is_admin = operator_is_admin(user_info)
     return await resolve_runnable_delegable_system_agents(

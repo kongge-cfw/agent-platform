@@ -109,6 +109,8 @@ def test_business_confirmation_frontend_wiring_contract():
     util = (ROOT / "frontend/src/utils/businessConfirmation.ts").read_text(encoding="utf-8")
 
     assert "业务数据确认" in card or "请确认以下信息" in card
+    assert "justify-end" in card
+    assert card.find("@click=\"submit(false)\"") < card.find("@click=\"submit(true)\"")
     assert "emit('submit'" in card or 'emit("submit"' in card or "event: 'submit'" in card
     assert 'case "business_confirmation"' in handlers
     assert "handleBusinessConfirmation" in handlers
@@ -117,6 +119,8 @@ def test_business_confirmation_frontend_wiring_contract():
     assert "shouldSuppressBusinessConfirmation" in util
     assert "BusinessConfirmationCard" in embed
     assert "submitBusinessConfirmation" in embed
+    assert "attachHitlCardsFromTimeline" in embed
+    assert "attachHitlCardsFromTimeline" in debug
     assert embed.index("MessageRenderer") < embed.index("<BusinessConfirmationCard") or embed.rfind("BusinessConfirmationCard") > embed.find('v-if="msg.content && !msg.groundingBlocked"')
     # 确认卡应出现在主正文区块之后（避免排在 AI 消息前面）
     content_marker = 'v-if="msg.content && !msg.groundingBlocked"'
@@ -131,6 +135,9 @@ def test_business_confirmation_frontend_wiring_contract():
     assert 'hide-quick-buttons="!!msg.businessConfirmation || !!msg.userQuestion"' in debug
     assert "hideQuickButtons" in (ROOT / "frontend/src/components/MessageRenderer.vue").read_text(encoding="utf-8")
     assert "stripQuickButtons" in (ROOT / "frontend/src/utils/quickButtons.ts").read_text(encoding="utf-8")
+    grounding = (ROOT / "frontend/src/components/GroundingBlockedCard.vue").read_text(encoding="utf-8")
+    assert "justify-end" in grounding
+    assert "orderedActions" in grounding
 
 
 def test_strip_quick_buttons_removes_quick_markdown():

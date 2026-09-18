@@ -19,6 +19,7 @@ _EMBED_ALLOWED = (
     ("*", "/api/v1/sandbox/*/workspace/*"),
     ("GET", "/api/portal/auth/me"),
     ("GET", "/api/portal/auth/user_apikey"),
+    ("GET", "/api/portal/quota/me"),
     ("GET", "/api/portal/agents/allowed"),
     ("GET", "/api/portal/agents/*/welcome-cards"),
     ("GET", "/api/portal/agents/*/embed-access"),

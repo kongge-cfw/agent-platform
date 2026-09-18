@@ -80,7 +80,7 @@
           :key="item.content"
           class="flex items-start gap-2 text-[11px] leading-relaxed transition-colors"
           :class="{
-            'text-slate-400 dark:text-slate-500': item.status === 'completed',
+            'text-slate-400 dark:text-slate-500': item.status === 'completed' || item.status === 'cancelled',
             'font-medium text-slate-800 dark:text-slate-100': item.status === 'in_progress',
             'text-slate-500 dark:text-slate-400': item.status === 'pending',
           }"
@@ -89,6 +89,10 @@
             <!-- 已完成：绿色勾选 -->
             <svg v-if="item.status === 'completed'" class="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="m5 13 4 4L19 7" />
+            </svg>
+            <!-- 已取消：灰色叉 -->
+            <svg v-else-if="item.status === 'cancelled'" class="h-3.5 w-3.5 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18 18 6M6 6l12 12" />
             </svg>
             <!-- 进行中：蓝色旋转图标 -->
             <svg v-else-if="item.status === 'in_progress'" class="h-3.5 w-3.5 animate-spin text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,7 +103,10 @@
               <circle cx="12" cy="12" r="9" stroke-width="2" />
             </svg>
           </span>
-          <span class="min-w-0 flex-1 break-words" :class="item.status === 'completed' ? 'line-through decoration-slate-300 dark:decoration-slate-600' : ''">
+          <span
+            class="min-w-0 flex-1 break-words"
+            :class="item.status === 'completed' || item.status === 'cancelled' ? 'line-through decoration-slate-300 dark:decoration-slate-600' : ''"
+          >
             {{ item.content }}
           </span>
           <span
@@ -107,6 +114,12 @@
             class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-950/60 dark:text-blue-400"
           >
             进行中
+          </span>
+          <span
+            v-else-if="item.status === 'cancelled'"
+            class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+          >
+            已取消
           </span>
         </div>
       </div>
@@ -131,16 +144,17 @@ const todo = computed<ProcessTimelineTodoItem | undefined>(() =>
 
 const expanded = ref(true);
 
-const isAllCompleted = computed(() => {
+const isAllSettled = computed(() => {
   if (!todo.value || !todo.value.todos.length) return false;
-  return todo.value.counts?.completed === todo.value.todos.length;
+  const { pending = 0, in_progress = 0 } = todo.value.counts || {};
+  return pending === 0 && in_progress === 0;
 });
 
-// 全部完成时自动折叠为单行
+// 全部完成或取消后自动折叠为单行
 watch(
-  isAllCompleted,
-  (allDone) => {
-    if (allDone) {
+  isAllSettled,
+  (allSettled) => {
+    if (allSettled) {
       expanded.value = false;
     }
   },
@@ -183,17 +197,27 @@ const isDismissed = computed(() => {
 
 const statusSummary = computed(() => {
   if (!todo.value || !todo.value.todos.length) return "";
-  const { completed = 0, in_progress = 0, pending = 0 } = todo.value.counts || {};
+  const { completed = 0, in_progress = 0, pending = 0, cancelled = 0 } = todo.value.counts || {};
   const total = todo.value.todos.length;
 
   if (completed === total) {
     return `${completed} 已完成`;
+  }
+  if (cancelled === total) {
+    return `${cancelled} 已取消`;
+  }
+  if (pending === 0 && in_progress === 0) {
+    const parts: string[] = [];
+    if (completed > 0) parts.push(`${completed} 已完成`);
+    if (cancelled > 0) parts.push(`${cancelled} 已取消`);
+    return parts.join(" · ");
   }
 
   const parts: string[] = [];
   if (in_progress > 0) parts.push(`${in_progress} 进行中`);
   if (pending > 0) parts.push(`${pending} 待处理`);
   if (completed > 0) parts.push(`${completed} 已完成`);
+  if (cancelled > 0) parts.push(`${cancelled} 已取消`);
 
   return parts.join(" · ") || `${completed}/${total} 已完成`;
 });

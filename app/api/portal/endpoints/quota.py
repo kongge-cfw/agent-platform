@@ -6,6 +6,7 @@ from app.core.orm import get_db_session
 from app.models.permission import Role
 from app.models.user import User
 from app.schemas.quota import QuotaPolicyResponse, QuotaPolicyUpdate, QuotaStatusResponse
+from app.services.embed_identity import platform_acl_user_id, platform_acl_user_name
 from app.services.quota_service import QuotaService
 
 router = APIRouter()
@@ -16,10 +17,13 @@ async def get_my_quota(
     user: dict = Depends(require_api_key),
     db: AsyncSession = Depends(get_db_session),
 ):
+    user_id = platform_acl_user_id(user)
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="无法解析额度所属用户")
     service = QuotaService(db)
     return await service.get_user_quota_status(
-        int(user["user_id"]),
-        user["user_name"],
+        user_id,
+        platform_acl_user_name(user) or str(user.get("user_name") or ""),
     )
 
 

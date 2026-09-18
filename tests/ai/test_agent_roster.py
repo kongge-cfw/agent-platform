@@ -41,3 +41,14 @@ def test_inject_agent_roster_replaces_placeholder():
 def test_inject_agent_roster_noop_without_placeholder():
     prompt = "无占位符"
     assert inject_agent_roster(prompt, "x") == prompt
+
+
+def test_delegation_source_splits_embed_catalog_from_platform_list():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[2] / "app/services/ai/agent_roster.py"
+    text = source.read_text(encoding="utf-8")
+    assert "def list_delegation_source_agents" in text
+    assert "is_embed_session(user_info)" in text
+    assert "list_allowed_agents(session, user_info)" in text
+    assert "return await AgentManagerService.list_agents(session)" in text

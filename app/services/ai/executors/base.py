@@ -113,6 +113,20 @@ class BaseExecutor(ABC):
             except Exception:
                 pass
         user_dims["extra_data"] = extra_data
+        for key in (
+            "session_type",
+            "embed_role_id",
+            "agent_id",
+            "lock_entry_agent",
+            "default_entry_agent_id",
+            "created_by_user_id",
+            "created_by_user_name",
+            "created_by_role",
+            "platform_user_id",
+            "platform_user_name",
+        ):
+            if key in self.user_info:
+                user_dims[key] = self.user_info.get(key)
         return {
             "u_id_val": u_id_val,
             "is_admin_val": is_admin_val,

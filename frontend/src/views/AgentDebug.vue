@@ -69,7 +69,12 @@ import {
   type GroundingBlockedAction,
   type GroundingBlockedPayload,
 } from "@/utils/agentscopeSseHandlers";
-import { hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import { cancelOpenTodosInMessages, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import {
+  attachHitlCardsFromTimeline,
+  historyHasActionableResumeCard,
+  resolveHitlCardsInHistory,
+} from "@/utils/hitlHistory";
 import { normalizeSubagentTraceMeta, type SubagentTraceMeta } from "@/utils/subagentTrace";
 import {
   buildBusinessConfirmationUserMessage,
@@ -644,8 +649,8 @@ const loadSessionHistory = async (id: string) => {
         }
       }
 
-      const historyMsg: Message[] = validMessages.map(
-        (m: any, idx: number) => ({
+      const historyMsg: Message[] = resolveHitlCardsInHistory(validMessages.map(
+        (m: any, idx: number) => attachHitlCardsFromTimeline({
           id: Date.now() + idx,
           trace_id: m.trace_id,
           role: m.role === "assistant" ? "agent" : m.role,
@@ -659,8 +664,8 @@ const loadSessionHistory = async (id: string) => {
           agentName: m.agent_name || undefined,
           agentDisplayName: m.agent_display_name || (String(m.agent_name || '').startsWith('sys_') ? '系统助手' : undefined),
           agentType: m.agent_type || undefined,
-        })
-      );
+        }, m.process_timeline),
+      ));
       if (historyMsg.length > 0) {
         // Add Separator with Timestamp
         const lastMsg = res.data.data.messages[res.data.data.messages.length - 1];
@@ -685,6 +690,9 @@ const loadSessionHistory = async (id: string) => {
         });
 
         messages.value = historyMsg;
+        if (historyHasActionableResumeCard(historyMsg)) {
+          isProcessing.value = true;
+        }
         nextTick(scrollToBottom);
         return;
       }
@@ -3071,6 +3079,9 @@ const handleFeedback = async (msg: Message, type: "up" | "down") => {
 
 const stopGeneration = () => {
   const lastMsg = messages.value.length > 0 ? messages.value[messages.value.length - 1] : null;
+  // SSE 会立刻被掐断，后端的 todo_update / run_status=cancelled 到不了前端。
+  // 必须在本地先把清单收尾，否则会一直转圈「进行中」。
+  cancelOpenTodosInMessages(messages.value);
   if (conversationId.value) {
     void cancelConversationRun(conversationId.value, {
       traceId: lastMsg?.trace_id,
@@ -3090,10 +3101,14 @@ const stopGeneration = () => {
     thoughtTimer = null;
   }
 
-  // Update last message status if needed
-  if (lastMsg && lastMsg.role === 'agent' && lastMsg.isThinking) {
+  if (lastMsg && lastMsg.role === "agent") {
     lastMsg.isThinking = false;
-    lastMsg.content += "\n[用户终止生成]";
+    (lastMsg as any).status = "cancelled";
+    if (!lastMsg.content) {
+      lastMsg.content = "[已停止生成]";
+    } else if (!lastMsg.content.includes("[已停止生成]") && !lastMsg.content.includes("[用户终止")) {
+      lastMsg.content += "\n[用户终止生成]";
+    }
   }
 };
 
@@ -3434,6 +3449,9 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
               markOutputCompleted();
               if (data.status === "success") {
                 (agentMsg.value as any).status = "success";
+              } else if (data.status === "cancelled") {
+                (agentMsg.value as any).status = "cancelled";
+                cancelOpenTodosInMessages(messages.value);
               }
             } else if (data.type === "log") {
               addRealLog(agentMsg.value, data);
@@ -3591,7 +3609,10 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     // Refresh history sidebar
     fetchHistory();
   } catch (error: any) {
-    if (error.name === "AbortError") return;
+    if (error.name === "AbortError") {
+      cancelOpenTodosInMessages(messages.value);
+      return;
+    }
 
     agentMsg.value.content += `\n[异常中断: ${error.message}]`;
     agentMsg.value.isThinking = false;
@@ -3753,6 +3774,9 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
     }
     if (data.status === "success") {
       (msg as any).status = "success";
+    } else if (data.status === "cancelled") {
+      (msg as any).status = "cancelled";
+      cancelOpenTodosInMessages(messages.value);
     }
     return;
   }
@@ -3912,6 +3936,7 @@ const submitBusinessConfirmation = async (
   card.fields = payload.fields.map((field) => ({ ...field }));
   card.status = "submitted";
   card.decision = payload.confirmed ? "confirmed" : "cancelled";
+  if (!payload.confirmed) cancelOpenTodosInMessages(messages.value);
   userInput.value = content;
   await sendMessage();
 };
@@ -3933,6 +3958,7 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
+  if (payload.cancelled) cancelOpenTodosInMessages(messages.value);
   userInput.value = content;
   await sendMessage();
 };
@@ -4701,13 +4727,15 @@ onUnmounted(() => {
                           placeholder="在此粘贴客户端执行该工具后的输出结果..."
                           class="w-full rounded-md border border-sky-200 bg-white/90 px-3 py-2 text-xs text-gray-700"
                         />
-                        <button
-                          @click="submitPendingExternalExecution(msg)"
-                          :disabled="msg.pendingExternalExecution.isSubmitting"
-                          class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          提交结果并继续
-                        </button>
+                        <div class="flex items-center justify-end">
+                          <button
+                            @click="submitPendingExternalExecution(msg)"
+                            :disabled="msg.pendingExternalExecution.isSubmitting"
+                            class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            提交结果并继续
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

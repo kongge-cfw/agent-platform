@@ -66,6 +66,15 @@ def test_parse_shortcut_prompts_caps_and_requires_label_command():
     assert parse_shortcut_prompts(None) == []
 
 
+def test_parse_optional_agent_id_treats_blank_as_unset():
+    from app.schemas.embed_app import parse_optional_agent_id
+
+    assert parse_optional_agent_id(None) is None
+    assert parse_optional_agent_id("") is None
+    assert parse_optional_agent_id("0") is None
+    assert parse_optional_agent_id(" sys-agent-chat ") == "sys-agent-chat"
+
+
 def test_slash_command_scope_binds_to_embed_app():
     from app.services.slash_command_service import (
         resolve_slash_command_app_key,
@@ -121,6 +130,23 @@ def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "mcp_only"}) is True
     assert skip_sql_row_rewrite({"session_type": "embed", "data_permission_mode": "nanzi_sql_rewrite"}) is False
     assert embed_path_allowed("GET", "/api/portal/auth/me") is True
+    assert embed_path_allowed("GET", "/api/portal/quota/me") is True
+    assert embed_path_allowed("GET", "/api/portal/quota/system") is False
+    assert embed_path_allowed("GET", "/api/portal/quota/users/1") is False
+    from app.core.app_prefix import inferred_root_path, strip_root_from_path
+
+    prefixed = "/zhiyuan/api/portal/quota/me"
+    assert embed_path_allowed(
+        "GET",
+        strip_root_from_path(prefixed, inferred_root_path(prefixed)),
+    ) is True
+    from pathlib import Path
+
+    quota_src = (Path(__file__).resolve().parents[3] / "app/api/portal/endpoints/quota.py").read_text(
+        encoding="utf-8"
+    )
+    assert "platform_acl_user_id" in quota_src
+    assert 'int(user["user_id"])' not in quota_src.split("async def get_system_quota")[0]
     assert embed_path_allowed("GET", "/api/portal/skills") is True
     assert embed_path_allowed("GET", "/api/portal/skills/personal") is True
     assert embed_path_allowed("GET", "/api/portal/agents/sys-agent-chat/active-config") is False
@@ -486,6 +512,7 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         name="CRM",
         role_id=role.id,
         lock_entry_agent=False,
+        default_entry_agent_id=agent.id,
         allowed_origins=json.dumps(["https://crm.example.com"]),
         require_identity=True,
         claim_keys=json.dumps(["subject", "display_name", "tenant_id", "extra_data.data_scope"]),
@@ -508,7 +535,20 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         data_permission_mode="mcp_only",
         is_active=True,
     )
-    db_session.add_all([app, locked_app])
+    locked_default_app = SysEmbedApp(
+        id=str(uuid.uuid4()),
+        app_key=f"crmd_{suffix}"[:32],
+        name="CRM锁定默认入口",
+        role_id=role.id,
+        lock_entry_agent=True,
+        default_entry_agent_id=agent.id,
+        allowed_origins=json.dumps(["https://crm.example.com"]),
+        require_identity=True,
+        claim_keys=json.dumps(["subject", "tenant_id"]),
+        data_permission_mode="mcp_only",
+        is_active=True,
+    )
+    db_session.add_all([app, locked_app, locked_default_app])
     await db_session.commit()
 
     missing_identity = await client.post(
@@ -527,6 +567,26 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
         headers={"X-API-Key": admin_key},
     )
     assert missing_locked_agent.status_code == 400
+
+    locked_default_ticket = await client.post(
+        "/api/v1/embed/tickets",
+        json={
+            "app_key": locked_default_app.app_key,
+            "identity": {"subject": f"crm:lockd_{suffix}", "tenant_id": "t_1"},
+        },
+        headers={"X-API-Key": admin_key},
+    )
+    assert locked_default_ticket.status_code == 200
+    locked_default_exchange = await client.post(
+        "/api/v1/embed/tickets/exchange",
+        json={"ticket": locked_default_ticket.json()["data"]["ticket"]},
+        headers={"Origin": "https://crm.example.com"},
+    )
+    assert locked_default_exchange.status_code == 200
+    locked_default_session = locked_default_exchange.json()["data"]
+    assert locked_default_session.get("lock_entry_agent") is True
+    assert locked_default_session.get("agent_id") == agent.id
+    assert locked_default_session.get("default_entry_agent_id") == agent.id
 
     other_agent = await client.post(
         "/api/v1/embed/tickets",
@@ -568,6 +628,8 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
     session = exchange_resp.json()["data"]
     assert session.get("agent_id") in (None, "")
     assert session.get("lock_entry_agent") is False
+    assert session.get("default_entry_agent_id") == agent.id
+    assert session.get("user_info", {}).get("default_entry_agent_id") == agent.id
     assert session.get("shortcut_prompts") == [{"label": "对账", "command": "帮我核对本月账单"}]
     assert session.get("user_info", {}).get("shortcut_prompts") == [
         {"label": "对账", "command": "帮我核对本月账单"}

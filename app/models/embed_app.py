@@ -16,6 +16,7 @@ class SysEmbedApp(Base):
     description = Column(Text, nullable=True)
     role_id = Column(BigInteger, nullable=True)
     lock_entry_agent = Column(Boolean, nullable=False, default=False)
+    default_entry_agent_id = Column(String(64), nullable=True)
     allowed_origins = Column(Text, nullable=False, default="[]")
     require_identity = Column(Boolean, nullable=False, default=True)
     claim_keys = Column(Text, nullable=False, default="[]")

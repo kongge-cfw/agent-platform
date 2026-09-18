@@ -3,6 +3,8 @@ import {
   hydrateHistoryProcessTimeline,
   timelineHasPending,
   upsertTimelineTodo,
+  cancelOpenTodos,
+  cancelOpenTodosInMessages,
   upsertTimelineLog,
   formatTimelineTitle,
   type ProcessTimelineTarget,
@@ -43,7 +45,7 @@ function testTodoTimelineSiblingAndReplacement() {
   assert.equal(todo?.kind, "todo");
   assert.equal(todo?.todos[0].status, "completed");
   assert.equal(todo?.todos[1].status, "in_progress");
-  assert.deepEqual(todo?.counts, { pending: 0, in_progress: 1, completed: 1 });
+  assert.deepEqual(todo?.counts, { pending: 0, in_progress: 1, completed: 1, cancelled: 0 });
 
   upsertTimelineTodo(target, { todos: [] });
   assert.equal(target.processTimeline?.length, 1);
@@ -72,6 +74,35 @@ function testTodoHistoryRemainsIndependent() {
   assert.equal(hydrated[0].kind, "todo");
   assert.equal(hydrated[1].kind, "text");
   assert.equal(timelineHasPending(hydrated), false);
+}
+
+function testCancelOpenTodosMarksRemainingItemsCancelled() {
+  const previous: ProcessTimelineTarget = {
+    processTimeline: [
+      {
+        kind: "todo",
+        id: "todo_current",
+        title: "任务清单",
+        todos: [
+          { content: "已完成步骤", status: "completed" },
+          { content: "进行中步骤", status: "in_progress" },
+          { content: "待处理步骤", status: "pending" },
+        ],
+        counts: { pending: 1, in_progress: 1, completed: 1, cancelled: 0 },
+      },
+    ],
+  };
+  const current: ProcessTimelineTarget = { processTimeline: [] };
+
+  assert.equal(cancelOpenTodosInMessages([previous, current]), true);
+  const todo = previous.processTimeline?.[0];
+  assert.equal(todo?.kind, "todo");
+  assert.equal(todo?.todos[0].status, "completed");
+  assert.equal(todo?.todos[1].status, "cancelled");
+  assert.equal(todo?.todos[2].status, "cancelled");
+  assert.deepEqual(todo?.counts, { pending: 0, in_progress: 0, completed: 1, cancelled: 2 });
+  assert.equal(timelineHasPending(previous.processTimeline), false);
+  assert.equal(cancelOpenTodos(previous), false);
 }
 
 function testSubagentNesting() {
@@ -349,3 +380,4 @@ testHydrateHistoryReorganization();
 testSubagentToolAndLifecycleDeduplication();
 testTodoTimelineSiblingAndReplacement();
 testTodoHistoryRemainsIndependent();
+testCancelOpenTodosMarksRemainingItemsCancelled();

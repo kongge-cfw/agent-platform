@@ -25,7 +25,7 @@ def test_expert_selector_uses_smart_delegation_copy():
         assert "全能助手 (自动)" not in source
         assert "智能调度最合适的专家处理" not in source
 
-    assert 'return "智能委派";' in chat_input
+    assert 'return hasMain ? "智能委派" : "选择专家";' in chat_input
     assert "智能委派" in chat_input
     assert "全能助手（自动路由）" not in chat_input
 

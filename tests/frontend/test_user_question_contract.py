@@ -83,7 +83,11 @@ def test_user_question_frontend_wiring_is_independent_from_business_confirmation
     assert "handleUserQuestion" in handlers
     assert "UserQuestionCard" in embed
     assert "UserQuestionCard" in debug
+    assert "attachHitlCardsFromTimeline" in embed
+    assert "attachHitlCardsFromTimeline" in debug
     assert "取消提问" in card
+    assert "justify-end" in card
+    assert card.find("取消提问") < card.find("提交回答并继续")
     assert "cancelled" in card
     assert "BusinessConfirmationCard" not in card
 
@@ -139,4 +143,6 @@ def test_cards_collapsible_and_toggle_contract():
     assert "msg.pendingExternalExecution.expanded" in embed
     assert "msg.pendingPermission.expanded" in debug
     assert "msg.pendingExternalExecution.expanded" in debug
+    assert 'class="flex items-center justify-end"' in embed
+    assert 'class="flex items-center justify-end"' in debug
 

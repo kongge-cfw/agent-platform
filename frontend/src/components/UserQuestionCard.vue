@@ -247,15 +247,7 @@ async function cancel() {
           />
 
           <!-- Action buttons -->
-          <div v-if="payload.status === 'pending'" class="flex items-center gap-2 pt-0.5">
-            <button
-              type="button"
-              class="inline-flex items-center rounded-md bg-violet-600 px-3 py-1 text-xs font-semibold text-white shadow-xs hover:bg-violet-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 transition-all"
-              :disabled="locked || isSubmitting || (!selectedOptionIds.length && !customInput.trim())"
-              @click="submit"
-            >
-              提交回答并继续
-            </button>
+          <div v-if="payload.status === 'pending'" class="flex items-center justify-end gap-2 pt-0.5">
             <button
               type="button"
               class="inline-flex items-center rounded-md border border-violet-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 dark:border-violet-800 dark:bg-gray-900/40 dark:text-violet-200 dark:hover:bg-violet-900/40 transition-all"
@@ -263,6 +255,14 @@ async function cancel() {
               @click="cancel"
             >
               取消提问
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center rounded-md bg-violet-600 px-3 py-1 text-xs font-semibold text-white shadow-xs hover:bg-violet-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 transition-all"
+              :disabled="locked || isSubmitting || (!selectedOptionIds.length && !customInput.trim())"
+              @click="submit"
+            >
+              提交回答并继续
             </button>
           </div>
         </div>

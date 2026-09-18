@@ -562,6 +562,26 @@ def test_effective_prompt_tool_names_exposes_configured_tools():
     assert "Bash" in names
 
 
+def test_effective_prompt_tool_names_embed_empty_host_skips_delegation_tools():
+    config = SimpleNamespace(agent_id="sys-agent-chat", agent_name="main", tools=[])
+    names = resolve_effective_prompt_tool_names(
+        config,
+        user_info={"session_type": "embed", "embed_role_id": 1},
+    )
+    assert "sub_agent_call" not in names
+    assert "sub_agent_batch_call" not in names
+
+
+def test_effective_prompt_tool_names_embed_host_includes_delegation_tools():
+    config = SimpleNamespace(agent_id="custom-host", agent_name="dev_main", tools=[])
+    names = resolve_effective_prompt_tool_names(
+        config,
+        user_info={"session_type": "embed", "default_entry_agent_id": "custom-host"},
+    )
+    assert "sub_agent_call" in names
+    assert "sub_agent_batch_call" in names
+
+
 @pytest.mark.asyncio
 async def test_effective_prompt_tool_names_filters_acquisition_tools_on_reuse():
     config = SimpleNamespace(

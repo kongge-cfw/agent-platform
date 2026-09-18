@@ -4,14 +4,16 @@ import uuid
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_permission
 from app.core.orm import get_db_session
+from app.models.agent import AIAgent
 from app.models.embed_app import SysEmbedApp
 from app.models.permission import Role
 from app.schemas.embed_app import (
+    EmbedRoleAgentOption,
     EmbedRoleOption,
     SysEmbedAppCreate,
     SysEmbedAppResponse,
@@ -19,7 +21,12 @@ from app.schemas.embed_app import (
     dump_json_list,
     dump_shortcut_prompts,
 )
-from app.services.embed_app_service import ensure_embed_role_exists, generate_embed_app_key
+from app.services.embed_app_service import (
+    ensure_default_entry_allowed,
+    ensure_embed_role_exists,
+    generate_embed_app_key,
+    list_role_agent_options,
+)
 
 router = APIRouter()
 
@@ -59,10 +66,46 @@ async def _role_names(db: AsyncSession, role_ids: set[int]) -> dict[int, str]:
     return {int(row.id): str(row.name or row.code or "") for row in rows}
 
 
-def _to_response(app: SysEmbedApp, role_names: dict[int, str]) -> SysEmbedAppResponse:
+async def _agent_display_names(db: AsyncSession, agent_keys: set[str]) -> dict[str, str]:
+    keys = {str(key).strip() for key in agent_keys if str(key or "").strip()}
+    if not keys:
+        return {}
+    rows = (
+        await db.execute(select(AIAgent).where(or_(AIAgent.id.in_(keys), AIAgent.name.in_(keys))))
+    ).scalars().all()
+    names: dict[str, str] = {}
+    for row in rows:
+        display = str(row.display_name or row.name or row.id)
+        names[str(row.id)] = display
+        names[str(row.name)] = display
+    return names
+
+
+def _to_response(
+    app: SysEmbedApp,
+    role_names: dict[int, str],
+    agent_names: dict[str, str] | None = None,
+) -> SysEmbedAppResponse:
     payload = SysEmbedAppResponse.model_validate(app)
     role_id = int(app.role_id) if app.role_id not in (None, "") else None
-    return payload.model_copy(update={"role_name": role_names.get(role_id) if role_id else None})
+    host_id = str(getattr(app, "default_entry_agent_id", None) or "").strip()
+    names = agent_names or {}
+    return payload.model_copy(
+        update={
+            "role_name": role_names.get(role_id) if role_id else None,
+            "default_entry_agent_name": names.get(host_id) if host_id else None,
+        }
+    )
+
+
+async def _app_response(db: AsyncSession, app: SysEmbedApp) -> SysEmbedAppResponse:
+    role_ids = {int(app.role_id)} if app.role_id not in (None, "") else set()
+    host_id = str(getattr(app, "default_entry_agent_id", None) or "").strip()
+    return _to_response(
+        app,
+        await _role_names(db, role_ids),
+        await _agent_display_names(db, {host_id} if host_id else set()),
+    )
 
 
 @router.get("/role-options", response_model=List[EmbedRoleOption])
@@ -78,6 +121,22 @@ async def list_embed_app_role_options(
     ]
 
 
+@router.get("/role-agent-options", response_model=List[EmbedRoleAgentOption])
+async def list_embed_app_role_agent_options(
+    role_id: int,
+    db: AsyncSession = Depends(get_db_session),
+    user: Dict = Depends(require_permission("menu", "menu:embed_apps")),
+):
+    del user
+    if role_id <= 0:
+        raise HTTPException(status_code=400, detail="role_id 无效")
+    try:
+        await ensure_embed_role_exists(db, role_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [EmbedRoleAgentOption(**item) for item in await list_role_agent_options(db, role_id)]
+
+
 @router.get("", response_model=List[SysEmbedAppResponse])
 async def list_embed_apps(
     db: AsyncSession = Depends(get_db_session),
@@ -87,8 +146,14 @@ async def list_embed_apps(
     result = await db.execute(select(SysEmbedApp).order_by(SysEmbedApp.updated_at.desc()))
     apps = result.scalars().all()
     role_ids = {int(app.role_id) for app in apps if app.role_id not in (None, "")}
+    host_keys = {
+        str(getattr(app, "default_entry_agent_id", None) or "").strip()
+        for app in apps
+        if str(getattr(app, "default_entry_agent_id", None) or "").strip()
+    }
     names = await _role_names(db, role_ids)
-    return [_to_response(app, names) for app in apps]
+    agent_names = await _agent_display_names(db, host_keys)
+    return [_to_response(app, names, agent_names) for app in apps]
 
 
 @router.post("", response_model=SysEmbedAppResponse)
@@ -100,6 +165,11 @@ async def create_embed_app(
     data = _dump_lists(app_in.model_dump())
     try:
         await ensure_embed_role_exists(db, data.get("role_id"))
+        await ensure_default_entry_allowed(
+            db,
+            role_id=data.get("role_id"),
+            agent_id=data.get("default_entry_agent_id"),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     data["app_key"] = await _allocate_app_key(db, app_in.app_key)
@@ -107,8 +177,7 @@ async def create_embed_app(
     db.add(app)
     await db.commit()
     await db.refresh(app)
-    names = await _role_names(db, {int(app.role_id)} if app.role_id not in (None, "") else set())
-    return _to_response(app, names)
+    return await _app_response(db, app)
 
 
 @router.put("/{app_id}", response_model=SysEmbedAppResponse)
@@ -132,11 +201,18 @@ async def update_embed_app(
         setattr(app, field, value)
     if app.role_id in (None, ""):
         raise HTTPException(status_code=400, detail="必须关联角色")
+    try:
+        await ensure_default_entry_allowed(
+            db,
+            role_id=int(app.role_id),
+            agent_id=getattr(app, "default_entry_agent_id", None),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     app.updated_by = _actor_id(user)
     await db.commit()
     await db.refresh(app)
-    names = await _role_names(db, {int(app.role_id)} if app.role_id not in (None, "") else set())
-    return _to_response(app, names)
+    return await _app_response(db, app)
 
 
 @router.delete("/{app_id}")

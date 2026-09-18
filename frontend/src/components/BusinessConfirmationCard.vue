@@ -213,15 +213,7 @@ function submit(confirmed: boolean) {
             风险提示：{{ payload.risk_note }}
           </p>
 
-          <div v-if="payload.status === 'pending'" class="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="locked"
-              @click="submit(true)"
-            >
-              {{ payload.confirm_label || '确定' }}
-            </button>
+          <div v-if="payload.status === 'pending'" class="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
               class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -229,6 +221,14 @@ function submit(confirmed: boolean) {
               @click="submit(false)"
             >
               {{ payload.cancel_label || '取消' }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="locked"
+              @click="submit(true)"
+            >
+              {{ payload.confirm_label || '确定' }}
             </button>
           </div>
         </div>

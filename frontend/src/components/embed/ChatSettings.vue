@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import GroundingHelpPopover from '@/components/GroundingHelpPopover.vue';
 import Switch from '@/components/Switch.vue';
 import { useToast } from '@/composables/useToast';
 import axios from '@/utils/axios';
+import { catalogHasDelegationHost } from '@/utils/delegationHost';
 
 const props = defineProps<{
   visible: boolean;
   config: any;
   allowedAgents: any[];
   routingLocked?: boolean;
+  delegationHostId?: string;
+  strictDelegationHost?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +32,11 @@ const router = useRouter();
 const { showToast } = useToast();
 type RoutingMode = 'auto' | 'expert';
 const routingMode = ref<RoutingMode>(props.config.routingMode === 'expert' ? 'expert' : 'auto');
+const hasMainAgent = computed(() =>
+  catalogHasDelegationHost(props.allowedAgents, props.delegationHostId, {
+    strict: Boolean(props.strictDelegationHost),
+  }),
+);
 const activeColor = ref("#1677ff");
 const presetColors = [
   "#1677ff",
@@ -46,7 +54,7 @@ const close = () => emit('update:visible', false);
 
 watch(() => props.visible, (visible) => {
   if (visible) {
-    routingMode.value = props.config.routingMode === 'expert' ? 'expert' : 'auto';
+    routingMode.value = (!hasMainAgent.value || props.config.routingMode === 'expert') ? 'expert' : 'auto';
   }
 });
 
@@ -72,6 +80,10 @@ const handleColorInput = (e: any) => {
 const handleSetRoutingMode = (mode: 'auto' | 'expert') => {
     if (props.routingLocked) return;
     if (mode === 'auto') {
+        if (!hasMainAgent.value) {
+            showToast('当前嵌入应用未配置智能委派宿主，请选择一个专家', 'warning');
+            return;
+        }
         routingMode.value = 'auto';
         emit('switch-to-auto');
         return;
@@ -494,6 +506,7 @@ const handleLogout = () => {
 
             <div class="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
               <button
+                v-if="hasMainAgent"
                 type="button"
                 @click="handleSetRoutingMode('auto')"
                 class="flex-1 py-1.5 text-xs rounded-md font-medium transition-all"
@@ -507,7 +520,7 @@ const handleLogout = () => {
                 type="button"
                 @click="handleSetRoutingMode('expert')"
                 class="flex-1 py-1.5 text-xs rounded-md font-medium transition-all"
-                :class="routingMode === 'expert'
+                :class="routingMode === 'expert' || !hasMainAgent
                   ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400 shadow-sm font-black'
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'"
               >
@@ -515,11 +528,14 @@ const handleLogout = () => {
               </button>
             </div>
 
-            <p v-if="routingMode === 'auto'" class="text-[9.5px] text-gray-400 dark:text-gray-500 leading-normal">
+            <p v-if="routingMode === 'auto' && hasMainAgent" class="text-[9.5px] text-gray-400 dark:text-gray-500 leading-normal">
               未指定专家时，默认由主专家直接回答，或按任务需要自动委派其他智能体，统一流程并减少额外判断耗时。
             </p>
+            <p v-else-if="!hasMainAgent" class="text-[9.5px] text-gray-400 dark:text-gray-500 leading-normal">
+              当前会话未启用智能委派。请选择一个默认智能体；嵌入应用若需要智能委派，请管理员显式指定宿主（要用平台主助手也须选中它）。
+            </p>
 
-            <div v-if="routingMode === 'expert'" class="space-y-1.5">
+            <div v-if="routingMode === 'expert' || !hasMainAgent" class="space-y-1.5">
               <label class="block text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-wider">选择默认智能体</label>
               <select
                 :value="config.expertAgentId"

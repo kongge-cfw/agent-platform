@@ -84,6 +84,48 @@ def embed_role_id(user_info: Optional[Mapping[str, Any]]) -> Optional[int]:
     return parsed if parsed > 0 else None
 
 
+def default_entry_agent_id(user_info: Optional[Mapping[str, Any]]) -> str:
+    if not isinstance(user_info, Mapping):
+        return ""
+    return str(user_info.get("default_entry_agent_id") or "").strip()
+
+
+def _user_info_for_delegation_host(user_info: Optional[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    if isinstance(user_info, Mapping):
+        return user_info
+    try:
+        from app.core.context import get_current_agent_context
+
+        ctx = get_current_agent_context()
+        dims = getattr(ctx, "user_dimensions", None) if ctx is not None else None
+        if isinstance(dims, Mapping):
+            return dims
+    except Exception:
+        return None
+    return None
+
+
+def can_host_smart_delegation(agent_config: Any, user_info: Optional[Mapping[str, Any]] = None) -> bool:
+    """本会话的委派宿主才能挂载智能委派。
+
+    嵌入：只认 ``default_entry_agent_id``（空=不智能委派，不回落平台 Main）。
+    非嵌入：只认平台主助手 ``is_main_general_agent``。
+    """
+    if agent_config is None:
+        return False
+    info = _user_info_for_delegation_host(user_info)
+    agent_id = getattr(agent_config, "agent_id", None) or getattr(agent_config, "id", None)
+    agent_name = getattr(agent_config, "agent_name", None) or getattr(agent_config, "name", None)
+    if is_embed_session(info):
+        host = default_entry_agent_id(info)
+        if not host:
+            return False
+        return agent_config_matches_lock(agent_id, agent_name, host)
+    from app.services.ai.skill_resolver import is_main_general_agent
+
+    return is_main_general_agent(agent_config)
+
+
 def agent_matches_lock(agent: Any, locked_key: str) -> bool:
     key = str(locked_key or "").strip()
     if not key or agent is None:
@@ -144,7 +186,9 @@ def operator_is_admin(user_info: Optional[Mapping[str, Any]]) -> bool:
     if not isinstance(user_info, Mapping):
         return False
     if is_embed_session(user_info):
-        return str(user_info.get("created_by_role") or "").strip().lower() == "admin"
+        return str(
+            user_info.get("created_by_role") or user_info.get("platform_role") or ""
+        ).strip().lower() == "admin"
     return str(user_info.get("role") or "").strip().lower() == "admin"
 
 

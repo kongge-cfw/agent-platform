@@ -2,7 +2,10 @@ import pytest
 
 from app.services.ai.runtime.agentscope.process_timeline_snapshot import (
     apply_stream_chunk,
+    cancel_todo_items,
+    complete_todo_items,
     finalize_process_timeline,
+    last_todo_update_from_history,
 )
 
 
@@ -231,7 +234,12 @@ def test_todo_update_keeps_only_the_latest_complete_checklist():
     assert len(todo_items) == 1
     assert todo_items[0]["todos"][0]["status"] == "completed"
     assert todo_items[0]["todos"][1]["status"] == "in_progress"
-    assert todo_items[0]["counts"] == {"pending": 0, "in_progress": 1, "completed": 1}
+    assert todo_items[0]["counts"] == {
+        "pending": 0,
+        "in_progress": 1,
+        "completed": 1,
+        "cancelled": 0,
+    }
 
 
 def test_empty_todo_update_removes_the_current_checklist():
@@ -288,3 +296,148 @@ def test_history_persistence_contract_covers_redis_audit_and_api():
     assert "process_timeline" in audit
     assert '"process_timeline"' in chat or "process_timeline" in chat
     assert "process_timeline" in memory
+
+
+def test_hitl_cards_persist_full_payload_and_result_updates_status():
+    fields = [
+        {"key": "supplier_name", "label": "供应商名称", "value": "北京神马科技有限公司"},
+        {"key": "note", "label": "备注", "value": "新供应商"},
+    ]
+    items = _run(
+        [
+            {
+                "type": "business_confirmation",
+                "confirmation_id": "bc_1",
+                "title": "请确认供应商",
+                "summary": "即将写入主数据",
+                "fields": fields,
+                "confirm_label": "确定",
+                "cancel_label": "取消",
+                "status": "pending",
+            },
+            {
+                "type": "user_question",
+                "question_id": "uq_1",
+                "question": "按什么维度统计？",
+                "options": [{"id": "daily", "label": "按天"}, {"id": "monthly", "label": "按月"}],
+                "is_multi_select": False,
+                "allow_custom_input": True,
+                "status": "pending",
+            },
+            {
+                "type": "permission_required",
+                "permission_request_id": "perm_1",
+                "title": "需要确认工具调用: bash",
+                "details": "参数: {\"command\": \"ls\"}",
+                "tool_call": {"id": "call_1", "name": "bash", "args": {"command": "ls"}},
+                "status": "pending",
+            },
+            {
+                "type": "external_execution_required",
+                "external_execution_request_id": "ext_1",
+                "title": "需要外部执行工具: browser",
+                "details": "参数: {}",
+                "tool_call": {"id": "call_2", "name": "browser", "args": {}},
+                "status": "pending",
+            },
+            {
+                "type": "grounding_blocked",
+                "title": "暂时无法验证事实",
+                "message": "缺少可引用的来源",
+                "actions": [{"id": "retry", "label": "重新检索", "style": "primary", "kind": "grounding_retry"}],
+                "status": "pending",
+            },
+            {
+                "type": "permission_result",
+                "permission_request_id": "perm_1",
+                "status": "success",
+            },
+        ]
+    )
+
+    hitl = {item["card_type"]: item for item in items if item.get("kind") == "hitl"}
+    assert set(hitl) == {
+        "business_confirmation",
+        "user_question",
+        "permission_required",
+        "external_execution_required",
+        "grounding_blocked",
+    }
+    assert hitl["business_confirmation"]["payload"]["fields"] == fields
+    assert hitl["user_question"]["payload"]["options"][1]["id"] == "monthly"
+    assert hitl["permission_required"]["status"] == "approved"
+    assert hitl["permission_required"]["payload"]["tool_call"]["name"] == "bash"
+    assert hitl["external_execution_required"]["status"] == "pending"
+    assert hitl["grounding_blocked"]["payload"]["actions"][0]["id"] == "retry"
+    assert any(item.get("category") == "business_confirmation" for item in items if item.get("kind") == "log")
+
+
+def test_cancel_todo_items_keeps_completed_and_marks_open_items_cancelled():
+    state = [{
+        "kind": "todo",
+        "id": "todo_current",
+        "title": "任务清单",
+        "todos": [
+            {"content": "已完成步骤", "status": "completed"},
+            {"content": "进行中步骤", "status": "in_progress"},
+            {"content": "待处理步骤", "status": "pending"},
+        ],
+        "counts": {"pending": 1, "in_progress": 1, "completed": 1, "cancelled": 0},
+    }]
+
+    event = cancel_todo_items(state)
+
+    assert event["type"] == "todo_update"
+    assert event["todos"] == [
+        {"content": "已完成步骤", "status": "completed"},
+        {"content": "进行中步骤", "status": "cancelled"},
+        {"content": "待处理步骤", "status": "cancelled"},
+    ]
+    assert event["counts"] == {
+        "pending": 0,
+        "in_progress": 0,
+        "completed": 1,
+        "cancelled": 2,
+    }
+    assert complete_todo_items(state) is None
+    assert cancel_todo_items(state) is None
+
+
+def test_last_todo_update_from_history_reads_latest_assistant_checklist():
+    event = last_todo_update_from_history(
+        [
+            {
+                "role": "assistant",
+                "process_timeline": [
+                    {
+                        "kind": "todo",
+                        "todos": [{"content": "旧任务", "status": "completed"}],
+                    }
+                ],
+            },
+            {"role": "user", "content": "继续"},
+            {
+                "role": "assistant",
+                "process_timeline": [
+                    {
+                        "kind": "log",
+                        "title": "提问",
+                        "status": "success",
+                    },
+                    {
+                        "kind": "todo",
+                        "todos": [
+                            {"content": "当前任务", "status": "in_progress"},
+                            {"content": "后续任务", "status": "pending"},
+                        ],
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert event["todos"][0]["content"] == "当前任务"
+    assert event["counts"]["in_progress"] == 1
+    assert event["counts"]["pending"] == 1
+    assert last_todo_update_from_history([]) is None
+    assert last_todo_update_from_history([{"role": "user", "content": "hi"}]) is None

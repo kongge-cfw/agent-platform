@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from app.services.ai.turn_decision import TurnDecision
 
@@ -324,6 +324,12 @@ class AgentServicePrompts:
         "3. **Visuals**: Rich ECharts visualizations and multi-column data are welcome."
     )
 
+    EMBED_SMART_DELEGATION_REQUIRES_MAIN = (
+        "当前嵌入应用未配置智能委派宿主，无法使用智能委派。\n\n"
+        "请先选择一个专家再提问；若需要智能委派，请管理员在嵌入应用中指定替代主助手，"
+        "或把平台主助手加入该应用关联角色。"
+    )
+
     @staticmethod
     def permission_denied(agent_name: str) -> str:
         """智能体访问被拒绝时的回复。"""
@@ -483,6 +489,7 @@ class AgentServicePrompts:
         *,
         quick_suggestions_forbidden: bool = False,
         runtime_tool_names: Optional[Iterable[str]] = None,
+        user_info: Optional[Mapping[str, Any]] = None,
     ) -> str:
         """返回仅依赖本轮可用能力的动态平台规则。"""
         return AgentServicePrompts.prepend_platform_global_system_prompt(
@@ -490,6 +497,7 @@ class AgentServicePrompts:
             agent_config=agent_config,
             quick_suggestions_forbidden=quick_suggestions_forbidden,
             runtime_tool_names=runtime_tool_names,
+            user_info=user_info,
             _include_fixed=False,
         )
 
@@ -500,6 +508,7 @@ class AgentServicePrompts:
         *,
         quick_suggestions_forbidden: bool = False,
         runtime_tool_names: Optional[Iterable[str]] = None,
+        user_info: Optional[Mapping[str, Any]] = None,
         _include_fixed: bool = True,
     ) -> str:
         """将平台全局守则置于 system_prompt 最前（在所有编排层 prepend 之后调用），并根据绑定的工具进行动态瘦身。
@@ -529,11 +538,11 @@ class AgentServicePrompts:
                     tool_names.update(t.name for t in system_tools)
             except Exception:
                 pass
-            # 主助手运行时隐式挂载 sub_agent_call，与 AssistantAgentRunner 门控对齐
+            # 主助手 / 嵌入替代宿主运行时隐式挂载 sub_agent_call
             try:
-                from app.services.ai.skill_resolver import is_main_general_agent
+                from app.services.embed_identity import can_host_smart_delegation
 
-                if is_main_general_agent(agent_config):
+                if can_host_smart_delegation(agent_config, user_info):
                     tool_names.add("sub_agent_call")
                     tool_names.add("sub_agent_batch_call")
                     tool_names.add("todo_write")

@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type {
   GroundingBlockedAction,
   GroundingBlockedPayload,
 } from '@/utils/agentscopeSseHandlers';
 
-defineProps<{
+const props = defineProps<{
   payload: GroundingBlockedPayload;
   disabled?: boolean;
 }>();
@@ -12,6 +13,15 @@ defineProps<{
 const emit = defineEmits<{
   (event: 'action', action: GroundingBlockedAction): void;
 }>();
+
+const orderedActions = computed(() => {
+  const actions = props.payload.actions || [];
+  return [...actions].sort((left, right) => {
+    const leftPrimary = left.style === 'primary' ? 1 : 0;
+    const rightPrimary = right.style === 'primary' ? 1 : 0;
+    return leftPrimary - rightPrimary;
+  });
+});
 </script>
 
 <template>
@@ -30,9 +40,9 @@ const emit = defineEmits<{
         <p class="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">
           {{ payload.message }}
         </p>
-        <div v-if="payload.actions.length" class="mt-3 flex flex-wrap gap-2">
+        <div v-if="orderedActions.length" class="mt-3 flex flex-wrap justify-end gap-2">
           <button
-            v-for="action in payload.actions"
+            v-for="action in orderedActions"
             :key="action.id"
             type="button"
             :disabled="disabled"

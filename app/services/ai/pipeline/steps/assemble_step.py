@@ -339,6 +339,7 @@ class AssembleStep(BasePipelineStep):
             runtime_tool_names=effective_prompt_tool_names,
             turn_decision=turn_decision,
             prompt_layout_mode=effective_layout_mode,
+            user_info=user_info,
         )
         assembled_prompt = assemble_system_prompt(assembly_input)
 

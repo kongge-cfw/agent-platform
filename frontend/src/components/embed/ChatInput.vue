@@ -12,6 +12,7 @@ import type { ContextCompactionRecord } from "@/api/agent";
 import ContextCompactionTimeline from "@/components/chat/ContextCompactionTimeline.vue";
 import { formatContextTokens, type ContextUsage } from "@/composables/useContextUsage";
 import { isImageAttachment } from "@/utils/attachmentImages";
+import { catalogHasDelegationHost } from "@/utils/delegationHost";
 import { DATASET_PORTAL_SYSTEM_COMMAND_ID } from "@/constants/datasetPortalCommand";
 import { getTemperatureGuidance } from "@/utils/temperatureGuidance";
 import {
@@ -125,6 +126,10 @@ const props = defineProps<{
   isLoadingAgents?: boolean;
   /** URL agent_id 深链锁定：隐藏专家切换/@，禁止切自动路由 */
   lockExpertAgent?: boolean;
+  /** 嵌入应用指定的智能委派宿主；站内空则回落平台主助手 */
+  delegationHostId?: string;
+  /** 嵌入会话：空宿主不回落平台 Main */
+  strictDelegationHost?: boolean;
   /** 是否开放「新建/删除个人快捷指令」（默认开放；应用入口提示词不可删） */
   allowManageShortcuts?: boolean;
   /** 快捷指令条固定在输入框上方：不提供上移/折叠，系统胶囊仅保留新会话与历史 */
@@ -146,6 +151,10 @@ const props = defineProps<{
   /** 沙箱后端：docker | k8s（决定浮标术语与「操作」菜单项） */
   sandboxBackend?: "docker" | "k8s";
 }>();
+
+const delegationHostMode = computed(() => ({
+  strict: Boolean(props.strictDelegationHost),
+}));
 
 const textareaPaddingRightClass = computed(() => {
   const hasContext = Boolean(props.contextUsage && props.contextUsage.physical_window);
@@ -1436,7 +1445,12 @@ const expertCapsuleLabel = computed(() => {
       || currentExpertAgent.value?.name
       || "专家";
   }
-  return "智能委派";
+  const hasMain = catalogHasDelegationHost(
+    props.allowedAgents,
+    props.delegationHostId,
+    delegationHostMode.value,
+  );
+  return hasMain ? "智能委派" : "选择专家";
 });
 
 const approvalCapsuleLabel = computed(() => activeApprovalLabel.value);
@@ -1484,6 +1498,12 @@ const toggleExpertSelector = () => {
 
 const selectAutoRouting = () => {
   if (props.lockExpertAgent) return;
+  const hasMain = catalogHasDelegationHost(
+    props.allowedAgents,
+    props.delegationHostId,
+    delegationHostMode.value,
+  );
+  if (!hasMain) return;
   emit("switch-to-auto");
   showExpertSelector.value = false;
   showExpertCascade.value = false;
@@ -2559,6 +2579,8 @@ defineExpose({
                                     :routing-mode="routingMode"
                                     :expert-agent-id="expertAgentId"
                                     :allowed-agents="allowedAgents"
+                                    :delegation-host-id="delegationHostId"
+                                    :strict-delegation-host="strictDelegationHost"
                                     :is-loading-agents="isLoadingAgents"
                                     @select-auto="selectAutoRouting"
                                     @select-expert="selectExpertAgent"
@@ -2700,6 +2722,8 @@ defineExpose({
                               :routing-mode="routingMode"
                               :expert-agent-id="expertAgentId"
                               :allowed-agents="allowedAgents"
+                                    :delegation-host-id="delegationHostId"
+                                    :strict-delegation-host="strictDelegationHost"
                               :is-loading-agents="isLoadingAgents"
                               @select-auto="selectAutoRouting"
                               @select-expert="selectExpertAgent"
@@ -2717,7 +2741,7 @@ defineExpose({
                     <button
                       type="button"
                       :disabled="isInteractionLocked"
-                      :title="isExpertMode ? `当前专家：${expertCapsuleLabel}` : '智能委派：由主助手处理或委派其他专家'"
+                      :title="isExpertMode ? `当前专家：${expertCapsuleLabel}` : (expertCapsuleLabel === '选择专家' ? '请选择专家' : '智能委派：由主助手处理或委派其他专家')"
                       class="flex h-8 sm:h-7 items-center gap-0.5 sm:gap-0.5 rounded-full px-1.5 sm:px-2 text-xs font-semibold leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-w-[5.25rem] sm:max-w-[11rem]"
                       :class="isExpertMode
                         ? 'bg-primary/10 text-primary hover:bg-primary/15 dark:bg-primary/20 dark:hover:bg-primary/25'
@@ -2793,6 +2817,8 @@ defineExpose({
                               :routing-mode="routingMode"
                               :expert-agent-id="expertAgentId"
                               :allowed-agents="allowedAgents"
+                                    :delegation-host-id="delegationHostId"
+                                    :strict-delegation-host="strictDelegationHost"
                               :is-loading-agents="isLoadingAgents"
                               @select-auto="selectAutoRouting"
                               @select-expert="selectExpertAgent"
@@ -2813,6 +2839,8 @@ defineExpose({
                               :routing-mode="routingMode"
                               :expert-agent-id="expertAgentId"
                               :allowed-agents="allowedAgents"
+                                    :delegation-host-id="delegationHostId"
+                                    :strict-delegation-host="strictDelegationHost"
                               :is-loading-agents="isLoadingAgents"
                               @select-auto="selectAutoRouting"
                               @select-expert="selectExpertAgent"
@@ -3461,6 +3489,8 @@ defineExpose({
         :position="mentionPosition"
         :routing-mode="routingMode"
         :expert-agent-id="expertAgentId"
+        :delegation-host-id="delegationHostId"
+        :strict-delegation-host="strictDelegationHost"
         @select="handleMentionSelect"
         @select-auto="handleMentionSelectAuto"
         @close="showMentionList = false"

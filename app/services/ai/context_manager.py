@@ -29,6 +29,127 @@ def select_data_query_agent_id(agents: List[Any]) -> Optional[str]:
     return None
 
 
+async def _unlocked_embed_agent_catalog(
+    session: Any,
+    user_info: Optional[Dict[str, Any]],
+) -> Optional[List[Any]]:
+    """未锁定的嵌入会话：返回角色授权目录；非嵌入/已锁定返回 None。"""
+    from app.services.embed_identity import embed_role_id, is_embed_session, locked_agent_id
+
+    if not is_embed_session(user_info):
+        return None
+    if locked_agent_id(user_info):
+        return None
+    if not embed_role_id(user_info):
+        return None
+    return await AgentManagerService.list_allowed_agents(session, user_info)
+
+
+def _catalog_agent_by_key(agents: List[Any], agent_key: str) -> Optional[Any]:
+    key = str(agent_key or "").strip()
+    if not key:
+        return None
+    for agent in agents:
+        current_id = str(getattr(agent, "id", "") or "").strip()
+        current_name = str(getattr(agent, "name", "") or "").strip()
+        if key in {current_id, current_name}:
+            return agent
+    return None
+
+
+async def _load_agent_config_from_catalog(
+    session: Any,
+    agents: List[Any],
+    *,
+    agent_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
+) -> Optional[ChatConfig]:
+    wanted_id = str(agent_id or "").strip()
+    wanted_name = str(agent_name or "").strip()
+    for agent in agents:
+        current_id = str(getattr(agent, "id", "") or "").strip()
+        current_name = str(getattr(agent, "name", "") or "").strip()
+        if wanted_id or wanted_name:
+            keys = {current_id, current_name}
+            if wanted_id and wanted_id not in keys and (not wanted_name or wanted_name not in keys):
+                continue
+            if not wanted_id and wanted_name not in keys:
+                continue
+        if current_id:
+            config = await AgentManagerService.get_active_agent_config(session, agent_id=current_id)
+            if config:
+                return config
+        if current_name:
+            config = await AgentManagerService.get_active_agent_config(session, agent_name=current_name)
+            if config:
+                return config
+    return None
+
+
+async def _resolve_embed_entry_agent(
+    session: Any,
+    user_info: Optional[Dict[str, Any]],
+) -> tuple:
+    """嵌入入口：只认配置的智能委派宿主；空或不在目录则不回落平台 Main。"""
+    from app.services.embed_identity import default_entry_agent_id, locked_agent_id
+
+    locked = locked_agent_id(user_info)
+    if locked:
+        visible = await AgentManagerService.list_allowed_agents(session, user_info)
+        locked_agent = _catalog_agent_by_key(visible or [], locked)
+        agent_config = await _load_agent_config_from_catalog(
+            session, [locked_agent] if locked_agent is not None else [],
+            agent_id=locked,
+            agent_name=locked,
+        )
+        if agent_config is None:
+            agent_config = await AgentManagerService.get_active_agent_config(session, agent_id=locked)
+            if agent_config is None:
+                agent_config = await AgentManagerService.get_active_agent_config(
+                    session, agent_name=locked
+                )
+        if agent_config is None:
+            logger.warning("Locked embed entry agent is not loadable: %s", locked)
+            return None, None
+        from app.services.embed_identity import agent_config_matches_lock
+
+        host_key = default_entry_agent_id(user_info)
+        if host_key and agent_config_matches_lock(
+            getattr(agent_config, "agent_id", None),
+            getattr(agent_config, "agent_name", None),
+            host_key,
+        ):
+            return agent_config, TurnDecision.for_default_main_delegation(agent_config)
+        return agent_config, TurnDecision.for_direct_agent_selection(agent_config)
+
+    embed_visible = await _unlocked_embed_agent_catalog(session, user_info)
+    if not embed_visible:
+        logger.warning("Unlocked embed catalog is empty; skip platform Main fallback")
+        return None, None
+    host_agent = _catalog_agent_by_key(embed_visible, default_entry_agent_id(user_info))
+    if host_agent is not None:
+        agent_config = await _load_agent_config_from_catalog(session, [host_agent])
+        if agent_config is None:
+            logger.warning("Unlocked embed delegation host is not loadable")
+            return None, None
+        logger.info(
+            "Resolved unlocked embed delegation host: %s",
+            getattr(agent_config, "agent_name", None),
+        )
+        return agent_config, TurnDecision.for_default_main_delegation(agent_config)
+    if len(embed_visible) == 1:
+        agent_config = await _load_agent_config_from_catalog(session, embed_visible)
+        if agent_config is None:
+            return None, None
+        logger.info(
+            "Resolved unlocked embed sole expert without host: %s",
+            getattr(agent_config, "agent_name", None),
+        )
+        return agent_config, TurnDecision.for_direct_agent_selection(agent_config)
+    logger.warning("Unlocked embed has no delegation host; require explicit expert")
+    return None, None
+
+
 def _normalize_rag_params(engine_config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """将 engine_config 中的扁平 RAG 字段归一化到 rag_params。"""
     if not engine_config:
@@ -102,6 +223,11 @@ class AgentContextManager:
                     logger.warning("No enabled data-query agent available for quick-result follow-up")
                     return None, None
             else:
+                from app.services.embed_identity import is_embed_session
+
+                if is_embed_session(user_info):
+                    # 嵌入只认配置宿主；空或不在目录则立刻返回，禁止再走平台 Main / 合成配置。
+                    return await _resolve_embed_entry_agent(session, user_info)
                 agent_config = await AgentManagerService.get_active_agent_config(
                     session, agent_id=DEFAULT_MAIN_AGENT_ID
                 )
@@ -241,6 +367,13 @@ class AgentContextManager:
                 "dept_code": user_info.get("dept_code"),
                 "org_path": user_info.get("org_path"),
                 "session_type": user_info.get("session_type") or "",
+                "embed_role_id": user_info.get("embed_role_id") or "",
+                "agent_id": user_info.get("agent_id") or "",
+                "lock_entry_agent": user_info.get("lock_entry_agent") or "",
+                "default_entry_agent_id": user_info.get("default_entry_agent_id") or "",
+                "created_by_user_id": user_info.get("created_by_user_id") or "",
+                "created_by_user_name": user_info.get("created_by_user_name") or "",
+                "created_by_role": user_info.get("created_by_role") or "",
                 "platform_user_id": user_info.get("created_by_user_id") or "",
                 "platform_user_name": user_info.get("created_by_user_name") or "",
                 "platform_role": user_info.get("created_by_role") or "",

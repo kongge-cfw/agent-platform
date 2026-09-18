@@ -651,11 +651,31 @@ async def sub_agent_call(
     # 2. 校验目标智能体是否存在并加载配置
     target_config = None
     async with AsyncSessionLocal() as session:
-        from app.models.agent import AIAgent
-        from sqlalchemy import select
-        # 强制只查询启用的系统内置智能体 (is_system = True)
-        stmt = select(AIAgent).where(AIAgent.is_enabled == True, AIAgent.is_system == True)
-        all_active_system = (await session.execute(stmt)).scalars().all()
+        user_info = None
+        if main_ctx:
+            user_info = dict(main_ctx.user_dimensions or {})
+            user_info["user_id"] = main_ctx.user_id
+            user_info["id"] = user_info.get("id") or main_ctx.user_id
+            user_info["role"] = "admin" if main_ctx.is_admin else "user"
+            user_info["api_key"] = main_ctx.api_key
+            if not user_info.get("user_name"):
+                user_info["user_name"] = user_info.get("username")
+        from app.services.ai.agent_roster import list_delegation_source_agents
+        from app.services.embed_identity import is_embed_session, operator_is_admin, platform_acl_user_id
+
+        if is_embed_session(user_info):
+            source_agents = await list_delegation_source_agents(session, user_info)
+            all_active_system = [
+                agent
+                for agent in (source_agents or [])
+                if getattr(agent, "is_enabled", False) and getattr(agent, "is_system", False)
+            ]
+        else:
+            from app.models.agent import AIAgent
+            from sqlalchemy import select
+
+            stmt = select(AIAgent).where(AIAgent.is_enabled == True, AIAgent.is_system == True)
+            all_active_system = (await session.execute(stmt)).scalars().all()
         for a in all_active_system:
             if str(getattr(a, "id", "") or "") == str(main_ctx.agent_id) and _matches_requested_agent(a, agent_name):
                 return SubAgentResult(
@@ -668,18 +688,20 @@ async def sub_agent_call(
                     error_code="self_delegation",
                 ).to_tool_text()
 
+        delegable_user_id = platform_acl_user_id(user_info) if user_info else main_ctx.user_id
+        delegable_is_admin = operator_is_admin(user_info) if user_info else bool(main_ctx.is_admin)
         permitted_agents = await filter_delegable_system_agents(
             session,
             all_active_system,
-            user_id=main_ctx.user_dimensions.get("platform_user_id") or main_ctx.user_id,
-            is_admin=bool(main_ctx.is_admin),
+            user_id=delegable_user_id,
+            is_admin=delegable_is_admin,
             current_agent_id=main_ctx.agent_id,
         )
         delegable_agents = await resolve_runnable_delegable_system_agents(
             session,
             permitted_agents,
-            user_id=main_ctx.user_dimensions.get("platform_user_id") or main_ctx.user_id,
-            is_admin=bool(main_ctx.is_admin),
+            user_id=delegable_user_id,
+            is_admin=delegable_is_admin,
             current_agent_id=main_ctx.agent_id,
         )
 

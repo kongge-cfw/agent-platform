@@ -5,6 +5,7 @@ import pytest
 from app.services.ai.agent_service import (
     _accumulate_reasoning_content,
     _accumulate_stream_content,
+    _finalize_todo_cancelled,
     _finalize_todo_success,
     _final_process_timeline,
     _should_persist_turn_history,
@@ -171,7 +172,7 @@ def test_todo_update_reaches_agent_service_timeline_without_becoming_model_conte
             {"content": "检索知识库", "status": "completed"},
             {"content": "整理答案", "status": "in_progress"},
         ],
-        "counts": {"pending": 0, "in_progress": 1, "completed": 1},
+        "counts": {"pending": 0, "in_progress": 1, "completed": 1, "cancelled": 0},
     }]
 
 
@@ -195,12 +196,13 @@ def test_success_finalization_completes_remaining_todos_and_returns_update_event
             {"content": "已完成步骤", "status": "completed"},
             {"content": "遗漏步骤", "status": "completed"},
         ],
-        "counts": {"pending": 0, "in_progress": 0, "completed": 2},
+        "counts": {"pending": 0, "in_progress": 0, "completed": 2, "cancelled": 0},
     }
     assert _final_process_timeline(state)[0]["counts"] == {
         "pending": 0,
         "in_progress": 0,
         "completed": 2,
+        "cancelled": 0,
     }
 
 
@@ -215,7 +217,7 @@ def test_success_finalization_does_not_duplicate_already_completed_todos():
 
 @pytest.mark.parametrize(
     "execution_status",
-    ["error", "cancelled", "awaiting_permission", "awaiting_external_execution", "awaiting_user"],
+    ["error", "awaiting_permission", "awaiting_external_execution", "awaiting_user"],
 )
 def test_non_success_finalization_preserves_todo_status(execution_status):
     state = [{
@@ -224,7 +226,26 @@ def test_non_success_finalization_preserves_todo_status(execution_status):
     }]
 
     assert _finalize_todo_success(state, execution_status=execution_status) is None
+    assert _finalize_todo_cancelled(state, execution_status=execution_status) is None
     assert state[0]["todos"][0]["status"] == "in_progress"
+
+
+def test_cancelled_finalization_marks_open_todos_cancelled():
+    state = [{
+        "kind": "todo",
+        "todos": [
+            {"content": "已完成步骤", "status": "completed"},
+            {"content": "未完成步骤", "status": "in_progress"},
+        ],
+    }]
+
+    event = _finalize_todo_cancelled(state, execution_status="cancelled")
+
+    assert event["todos"][1]["status"] == "cancelled"
+    assert event["counts"]["cancelled"] == 1
+    assert event["counts"]["completed"] == 1
+    assert state[0]["todos"][1]["status"] == "cancelled"
+    assert _finalize_todo_success(state, execution_status="cancelled") is None
 
 
 def test_todo_snapshot_is_restored_when_a_pending_execution_resumes():
@@ -248,7 +269,7 @@ def test_todo_snapshot_is_restored_when_a_pending_execution_resumes():
         "id": "todo_current",
         "title": "任务清单",
         "todos": [{"content": "等待确认后继续", "status": "in_progress"}],
-        "counts": {"pending": 0, "in_progress": 1, "completed": 0},
+        "counts": {"pending": 0, "in_progress": 1, "completed": 0, "cancelled": 0},
     }]
 
 

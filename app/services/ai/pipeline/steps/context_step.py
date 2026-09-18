@@ -234,12 +234,27 @@ class ContextStep(BasePipelineStep):
 
         if context.user_question_cancelled:
             from app.services.ai.agent_service import _final_process_timeline
+            from app.services.ai.runtime.agentscope.process_timeline_snapshot import (
+                cancel_todo_items,
+                last_todo_update_from_history,
+            )
             import asyncio
 
             cancellation_message = "已取消本次提问，本次任务已停止。"
             context.full_response_content = cancellation_message
             context.execution_status = "cancelled"
             context.shared_state["execution_status"] = "cancelled"
+            timeline_state = context.shared_state.setdefault("process_timeline", [])
+            if isinstance(timeline_state, list) and not any(
+                isinstance(item, dict) and item.get("kind") == "todo"
+                for item in timeline_state
+            ):
+                previous_todos = last_todo_update_from_history(
+                    context.shared_state.get("context_source_history")
+                )
+                if previous_todos:
+                    _track_process_timeline(timeline_state, previous_todos)
+            todo_cancellation = cancel_todo_items(timeline_state)
             resolved_agent_name = "sys_question_cancel"
             resolved_display_name = "系统助手"
             if conversation_id:
@@ -253,9 +268,7 @@ class ContextStep(BasePipelineStep):
                         agent_name=resolved_agent_name,
                         agent_type="system",
                         agent_display_name=resolved_display_name,
-                        process_timeline=_final_process_timeline(
-                            context.shared_state.get("process_timeline")
-                        ),
+                        process_timeline=_final_process_timeline(timeline_state),
                     )
                 )
             yield {
@@ -269,4 +282,6 @@ class ContextStep(BasePipelineStep):
                 "status": "success",
                 "trace_id": trace_id,
             }
+            if todo_cancellation:
+                yield todo_cancellation
             return

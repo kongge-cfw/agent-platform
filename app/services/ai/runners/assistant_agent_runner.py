@@ -43,7 +43,7 @@ from app.services.ai.intent_service import (
     looks_like_strong_business_data_request,
     looks_like_web_search_query,
 )
-from app.services.ai.skill_resolver import is_main_general_agent
+from app.services.embed_identity import can_host_smart_delegation
 from app.services.ai.request_decision import (
     RequestCapability,
     RequestDecision,
@@ -514,7 +514,7 @@ class AssistantAgentRunner(BaseExecutor):
 
     def _should_run_data_hallucination_guard(self, user_query: str) -> bool:
         """仅主助手自动委派链路 + 明确查数诉求时启用，防止无 DB 连接时编造业务数据。"""
-        if not is_main_general_agent(self.config):
+        if not can_host_smart_delegation(self.config, self.user_info):
             return False
         if self._is_direct_agent_selection():
             return False
@@ -618,7 +618,7 @@ class AssistantAgentRunner(BaseExecutor):
         }
 
     async def _resolve_available_sub_agent_delegation_info(self) -> tuple[Optional[Set[str]], Dict[str, List[str]]]:
-        if not is_main_general_agent(self.config):
+        if not can_host_smart_delegation(self.config, self.user_info):
             return None, {}
         try:
             from app.services.ai.tools.agent_delegate_tool import (
@@ -634,7 +634,9 @@ class AssistantAgentRunner(BaseExecutor):
                 raw_user_id = platform_acl_user_id(self.user_info)
                 is_admin = operator_is_admin(self.user_info)
             async with AsyncSessionLocal() as session:
-                agents = await AgentManagerService.list_agents(session)
+                from app.services.ai.agent_roster import list_delegation_source_agents
+
+                agents = await list_delegation_source_agents(session, self.user_info)
                 delegable_agents = await resolve_runnable_delegable_system_agents(
                     session,
                     agents,
@@ -3117,7 +3119,7 @@ class AssistantAgentRunner(BaseExecutor):
             evidence_attacher=ToolRegistry._attach_evidence_metadata,
         )
         system_tools = list(ToolRegistry.get_system_implicit_tools())
-        if is_main_general_agent(self.config):
+        if can_host_smart_delegation(self.config, self.user_info):
             sub_agent_tool = await provider.get_implicit_tool("sub_agent_call")
             if sub_agent_tool:
                 system_tools.append(sub_agent_tool)

@@ -154,6 +154,9 @@ def _mock_system_agents_session(agents):
     with patch(
         "app.services.ai.tools.agent_delegate_tool.AsyncSessionLocal",
         return_value=mock_session_context,
+    ), patch(
+        "app.services.ai.tools.agent_delegate_tool.AgentManagerService.list_allowed_agents",
+        AsyncMock(return_value=agents),
     ):
         yield
 

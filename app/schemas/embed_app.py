@@ -94,11 +94,23 @@ def parse_required_role_id(value: Any) -> int:
     return parsed
 
 
+def parse_optional_agent_id(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text or text == "0":
+        return None
+    if len(text) > 64:
+        raise ValueError("default_entry_agent_id 过长")
+    return text
+
+
 class SysEmbedAppBase(BaseModel):
     name: str
     description: Optional[str] = None
     role_id: Optional[int] = None
     lock_entry_agent: bool = False
+    default_entry_agent_id: Optional[str] = None
     allowed_origins: list[str] = Field(default_factory=list)
     require_identity: bool = True
     claim_keys: list[str] = Field(default_factory=list)
@@ -118,6 +130,11 @@ class SysEmbedAppBase(BaseModel):
     @classmethod
     def _role_id(cls, value: Any) -> Optional[int]:
         return parse_optional_role_id(value)
+
+    @field_validator("default_entry_agent_id", mode="before")
+    @classmethod
+    def _default_entry_agent_id(cls, value: Any) -> Optional[str]:
+        return parse_optional_agent_id(value)
 
     @field_validator("data_permission_mode")
     @classmethod
@@ -183,6 +200,7 @@ class SysEmbedAppUpdate(BaseModel):
     description: Optional[str] = None
     role_id: Optional[int] = None
     lock_entry_agent: Optional[bool] = None
+    default_entry_agent_id: Optional[str] = None
     allowed_origins: Optional[list[str]] = None
     require_identity: Optional[bool] = None
     claim_keys: Optional[list[str]] = None
@@ -206,6 +224,13 @@ class SysEmbedAppUpdate(BaseModel):
         if value is None:
             return None
         return parse_required_role_id(value)
+
+    @field_validator("default_entry_agent_id", mode="before")
+    @classmethod
+    def _default_entry_agent_id(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return parse_optional_agent_id(value)
 
     @field_validator("data_permission_mode")
     @classmethod
@@ -236,6 +261,7 @@ class SysEmbedAppResponse(SysEmbedAppBase):
     id: str
     app_key: str
     role_name: Optional[str] = None
+    default_entry_agent_name: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
     created_at: datetime
@@ -258,3 +284,10 @@ class EmbedRoleOption(BaseModel):
     id: int
     code: str
     name: str
+
+
+class EmbedRoleAgentOption(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    is_system: bool = False
