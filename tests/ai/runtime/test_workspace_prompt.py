@@ -38,6 +38,8 @@ def test_workspace_prompt_mentions_common_container_commands():
     assert "`npm`" in prompt
     assert "`command -v <cmd>`" in prompt
     assert "不要凭记忆断言未安装" in prompt
+    assert "read_skill_instruction(skill_id, file)" in prompt
+    assert "禁止用 Read/Glob 读会话或 `/workspace/skills/` 副本" in prompt
 
 
 def test_workspace_prompt_distinguishes_tool_paths_from_user_delivery_paths():

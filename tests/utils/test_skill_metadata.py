@@ -36,7 +36,9 @@ def test_build_skill_attachment_hint_with_override():
         meta_override={"name": "my-skill", "description": "技能描述"},
     )
     assert "展示名" in hint
-    assert "/app/data/skills/my-skill/SKILL.md" in hint
+    assert 'skill_id=`my-skill`' in hint
+    assert "read_skill_instruction" in hint
+    assert "/app/data/skills/my-skill/SKILL.md" not in hint
     assert "skills meta 为：name: my-skill, description: 技能描述" in hint
 
 
@@ -58,8 +60,7 @@ def test_enrich_messages_with_skill_meta(tmp_path, monkeypatch):
             "role": "user",
             "content": (
                 "\n\n---\n\n"
-                "用户本轮已调用生态技能工作流：自动技能，对应的物理描述文件绝对路径是："
-                "/app/data/skills/auto-skill/SKILL.md。"
+                "用户本轮已调用生态技能工作流：自动技能，skill_id=`auto-skill`。"
             ),
             "files": [{"type": "skill", "url": "auto-skill", "filename": "自动技能 (技能)"}],
         }

@@ -453,11 +453,11 @@ async def list_accessible_directories() -> str:
                 "permission": "read_only",
                 "category": "platform_global_skills",
                 "description": (
-                    "平台全局公共技能库。包含所有预置的专业 Agent 技能与工作流模板，"
-                    "Docker 模式下通过当前用户工作区内的 /workspace/skills 预置副本访问，"
-                    "不是直接挂载 /app/data/skills。"
+                    "平台全局公共技能库。包含所有预置的专业 Agent 技能与工作流模板。"
+                    "执行技能流程时用 read_skill_instruction 读取 SKILL.md 与同目录附属文件，"
+                    "不要用 Read 拼会话 skills/ 或 /workspace/skills 副本。"
                 ),
-                "recommended_for": ["读取系统公共技能指令", "查看内置工作流"],
+                "recommended_for": ["通过 read_skill_instruction 读取公共技能"],
             },
             {
                 "directory_name": "branding",

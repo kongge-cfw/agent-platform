@@ -107,10 +107,11 @@ def _as_dict(value: Any) -> dict[str, Any] | None:
 def parse_confirmation_tool_output(tool_output: Any) -> dict[str, Any] | None:
     """Parse successful tool output into a confirmation payload dict."""
     payload = _as_dict(tool_output)
-    if not payload:
-        # Nested text/data_blocks shape from some runners
-        if isinstance(tool_output, dict) and "text" in tool_output:
-            payload = _as_dict(tool_output.get("text"))
+    if not payload and isinstance(tool_output, dict):
+        for key in ("text", "raw"):
+            payload = _as_dict(tool_output.get(key))
+            if payload:
+                break
     if not payload:
         return None
     if payload.get("status") != "awaiting_user":

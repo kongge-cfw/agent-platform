@@ -123,6 +123,55 @@ def test_question_payload_builds_sse_event_and_validated_receipt():
     assert event["tool_call_id"] == "call_1"
     assert event["purpose"] == "chatbi_dataset_selection"
 
+    wrapped = parse_user_question_tool_output({"raw": raw})
+    assert wrapped is not None
+    assert wrapped["question_id"] == "uq_test"
+
+
+def test_hitl_observation_keeps_full_question_payload_for_sse():
+    from app.services.ai.runtime.agentscope.hitl_tool_result import (
+        prepare_runtime_tool_observation_text,
+        reset_pending_hitl_ui_payloads,
+        take_pending_hitl_ui_payload,
+    )
+
+    reset_pending_hitl_ui_payloads()
+    full = json.dumps(
+        {
+            "status": "awaiting_user",
+            "interaction_type": "question",
+            "question_id": "uq_oversize",
+            "question": "请选择执行口径",
+            "options": [
+                {"id": "a", "label": "口径 A", "description": "D" * 80},
+                {"id": "b", "label": "口径 B", "description": "E" * 80},
+            ],
+            "context": "背景 " + ("详" * 4500),
+        },
+        ensure_ascii=False,
+    )
+    assert len(full) > 4000
+
+    observation = prepare_runtime_tool_observation_text(USER_QUESTION_TOOL_NAME, full)
+    compact = json.loads(observation)
+    assert compact["status"] == "awaiting_user"
+    assert compact["question_id"] == "uq_oversize"
+    assert compact["option_count"] == 2
+    assert "options" not in compact
+    assert "输出已截断" not in observation
+
+    stashed = take_pending_hitl_ui_payload(USER_QUESTION_TOOL_NAME)
+    assert stashed == full
+    event = build_user_question_sse(
+        tool_name=USER_QUESTION_TOOL_NAME,
+        tool_output=stashed,
+        tool_call_id="call_full",
+    )
+    assert event is not None
+    assert event["question"] == "请选择执行口径"
+
+
+def test_build_user_question_receipt_keeps_selected_ids():
     receipt = build_user_question_receipt(
         question_id="uq_test",
         selected_option_ids=["monthly"],

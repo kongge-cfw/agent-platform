@@ -555,6 +555,33 @@ def _preseed_session_skills(workdir: str, skill_paths: list[str]) -> None:
         existing_dir_names.add(dir_name)
         updated = True
 
+        source_dir_name = os.path.basename(os.path.abspath(skill_path))
+        if (
+            source_dir_name
+            and source_dir_name != dir_name
+            and re.match(r"^[a-zA-Z0-9_-]+$", source_dir_name)
+            and source_dir_name not in existing_dir_names
+        ):
+            alias_path = os.path.join(skills_dir, source_dir_name)
+            if os.path.realpath(alias_path).startswith(
+                os.path.realpath(skills_dir) + os.sep,
+            ) and not os.path.exists(alias_path):
+                try:
+                    shutil.copytree(
+                        skill_path,
+                        alias_path,
+                        copy_function=_hardlink_or_copy2,
+                        dirs_exist_ok=False,
+                    )
+                    existing_dir_names.add(source_dir_name)
+                except Exception as exc:
+                    logger.warning(
+                        "[workspace] Pre-seed alias %s -> %s failed: %s",
+                        source_dir_name,
+                        dir_name,
+                        exc,
+                    )
+
     if updated:
         try:
             mtime = os.stat(skills_dir).st_mtime

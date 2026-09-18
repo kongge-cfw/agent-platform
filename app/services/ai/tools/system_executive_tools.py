@@ -185,18 +185,26 @@ def list_available_skills() -> str:
 
 
 @tool
-def read_skill_instruction(skill_id: str) -> str:
+def read_skill_instruction(skill_id: str, file: str = "SKILL.md") -> str:
     """
-    读取指定技能的 SKILL.md 指令内容。调用前应先使用 list_available_skills 确认技能存在且适用。
+    读取指定技能目录内的文件。缺省读取 SKILL.md；同目录附属文件传相对路径 file。
+    调用前应先使用 list_available_skills 确认技能存在且适用。
     仅允许读取当前会话可见技能（含自定义白名单过滤后的公共技能与个人技能）。
+    禁止用通用 Read 拼会话工作区 skills/ 路径。
 
     Args:
-        skill_id: 技能唯一 ID，仅允许英文、数字、中划线及下划线。
+        skill_id: 技能唯一 ID（目录名），仅允许英文、数字、中划线及下划线。
+        file: 技能目录内相对路径，缺省 SKILL.md。例如 tools.md、cards.md。
     """
     try:
         from app.core.context import get_current_agent_context
         from app.utils.context import current_user_info
-        from app.services.ai.skill_resolver import list_skill_metas
+        from app.services.ai.skill_resolver import (
+            format_skill_dir_file_footer,
+            list_skill_dir_files,
+            list_skill_metas,
+            resolve_skill_relative_file,
+        )
 
         safe_skill_id = _validate_skill_id(skill_id)
         user_info = current_user_info.get()
@@ -227,7 +235,6 @@ def read_skill_instruction(skill_id: str) -> str:
         if not skill_md_path or not os.path.exists(skill_md_path):
             return f"错误：技能 {safe_skill_id} 缺少 SKILL.md。"
 
-        # 路径安全：限制在全局 SKILLS_DIR 或个人 skills 根目录下
         abs_md = os.path.abspath(skill_md_path)
         allowed_roots: list[str] = []
         try:
@@ -253,10 +260,23 @@ def read_skill_instruction(skill_id: str) -> str:
         ):
             return "错误：技能路径越界。"
 
-        with open(abs_md, "r", encoding="utf-8", errors="ignore") as f:
+        abs_target, path_error, rel_file = resolve_skill_relative_file(abs_md, file)
+        dir_files = list_skill_dir_files(abs_md)
+        footer = format_skill_dir_file_footer(safe_skill_id, dir_files)
+        if path_error:
+            return f"{path_error}{footer}"
+        if not abs_target or not os.path.isfile(abs_target):
+            return (
+                f"错误：技能 {safe_skill_id} 中不存在文件 {rel_file}。{footer}"
+            )
+
+        with open(abs_target, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read(262144)
         scope = matched.get("scope") or "global"
-        return f"[技能读取成功: {safe_skill_id}/SKILL.md · scope={scope}]\n{content}"
+        return (
+            f"[技能读取成功: {safe_skill_id}/{rel_file} · scope={scope}]\n"
+            f"{content}{footer}"
+        )
     except ValueError as e:
         return f"错误：非法技能 ID，{str(e)}"
     except Exception as e:

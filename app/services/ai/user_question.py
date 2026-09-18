@@ -24,8 +24,11 @@ def _as_dict(value: Any) -> dict[str, Any] | None:
 def parse_user_question_tool_output(tool_output: Any) -> dict[str, Any] | None:
     """Parse a valid `ask_user_question` result into a UI payload."""
     payload = _as_dict(tool_output)
-    if not payload and isinstance(tool_output, dict) and "text" in tool_output:
-        payload = _as_dict(tool_output.get("text"))
+    if not payload and isinstance(tool_output, dict):
+        for key in ("text", "raw"):
+            payload = _as_dict(tool_output.get(key))
+            if payload:
+                break
     if not payload or payload.get("status") != "awaiting_user":
         return None
     if payload.get("interaction_type") != "question":

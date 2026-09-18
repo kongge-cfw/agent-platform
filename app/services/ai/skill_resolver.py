@@ -254,6 +254,77 @@ def merge_skill_filters(filters: Optional[List[Dict[str, Any]]] = None) -> Dict[
     return {"skills_custom": True, "allowed_global_skills": union}
 
 
+_DEFAULT_SKILL_FILE = "SKILL.md"
+
+
+def normalize_skill_relative_file(file: Optional[str]) -> str:
+    """把 read_skill_instruction 的 file 参数收成技能目录内相对路径，缺省 SKILL.md。"""
+    raw = str(file or "").strip().replace("\\", "/")
+    return raw or _DEFAULT_SKILL_FILE
+
+
+def list_skill_dir_files(skill_md_path: Optional[str]) -> List[str]:
+    """列出技能根目录下一层普通文件名（不含隐藏项与子目录）。"""
+    if not skill_md_path:
+        return []
+    skill_dir = os.path.dirname(os.path.abspath(skill_md_path))
+    if not os.path.isdir(skill_dir):
+        return []
+    names: List[str] = []
+    try:
+        for name in sorted(os.listdir(skill_dir)):
+            if not name or name.startswith("."):
+                continue
+            path = os.path.join(skill_dir, name)
+            if os.path.isfile(path):
+                names.append(name)
+    except OSError:
+        return []
+    return names
+
+
+def resolve_skill_relative_file(
+    skill_md_path: str,
+    file: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], str]:
+    """把 file 解析到技能目录内的绝对路径。
+
+    返回 (abs_path, error, normalized_rel)。越界或穿越时 abs_path 为空。
+    """
+    rel = normalize_skill_relative_file(file)
+    if os.path.isabs(rel) or rel.startswith("/"):
+        return None, "错误：file 必须是技能目录内的相对路径。", rel
+    parts = [part for part in rel.split("/") if part and part != "."]
+    if not parts or any(part == ".." for part in parts):
+        return None, "错误：file 不得包含路径穿越。", rel
+    skill_dir = os.path.dirname(os.path.abspath(skill_md_path))
+    abs_target = os.path.abspath(os.path.join(skill_dir, *parts))
+    if not _is_path_under_root(abs_target, skill_dir):
+        return None, "错误：file 越出技能目录。", rel
+    return abs_target, None, "/".join(parts)
+
+
+def format_skill_dir_file_footer(skill_id: str, files: List[str]) -> str:
+    """成功或找不到文件时附加的同目录文件名清单（不含正文）。"""
+    if not files:
+        return (
+            f"\n\n[技能目录文件] skill_id=`{skill_id}` 同目录暂无其它文件。"
+            f"附属文件必须 read_skill_instruction(skill_id=\"{skill_id}\", file=\"相对路径\")，"
+            "禁止用 Read/Glob 拼会话工作区 skills/ 路径。"
+        )
+    listed = ", ".join(f"`{name}`" for name in files)
+    return (
+        f"\n\n[技能目录文件] skill_id=`{skill_id}` 同目录：{listed}。"
+        f"读取须 read_skill_instruction(skill_id=\"{skill_id}\", file=\"文件名\")，"
+        "禁止用 Read/Glob 拼会话工作区 skills/ 路径。"
+    )
+
+
+def is_skill_md_relative_file(file: Optional[str]) -> bool:
+    rel = normalize_skill_relative_file(file)
+    return os.path.basename(rel.replace("\\", "/")) == _DEFAULT_SKILL_FILE
+
+
 def _is_path_under_root(path: str, root: str) -> bool:
     try:
         abs_path = os.path.abspath(path)

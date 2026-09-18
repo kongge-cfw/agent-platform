@@ -193,3 +193,113 @@ def test_infer_confirmation_value_type_uses_value_shape_not_field_name():
     )
     assert infer_confirmation_value_type({"value": "", "value_type": "date"}) == "date"
     assert infer_confirmation_value_type({"value": "2026年9月25日"}) == "date"
+
+
+def _awaiting_confirmation_payload(*, field_value: str = "预览") -> dict:
+    return {
+        "status": "awaiting_user",
+        "confirmation_id": "bc_oversize",
+        "message": "等待用户确认",
+        "ui": {
+            "title": "确认立即下发",
+            "summary": "向已匹配企业下发整改",
+            "fields": [
+                {
+                    "key": "item_preview",
+                    "label": "下发预览",
+                    "value": field_value,
+                    "editable": False,
+                    "value_type": "string",
+                }
+            ],
+            "confirm_label": "确定",
+            "cancel_label": "取消",
+            "risk_note": "",
+        },
+    }
+
+
+def test_parse_confirmation_tool_output_accepts_raw_wrapper():
+    raw = json.dumps(_awaiting_confirmation_payload(), ensure_ascii=False)
+    parsed = parse_confirmation_tool_output({"raw": raw})
+    assert parsed is not None
+    assert parsed["confirmation_id"] == "bc_oversize"
+
+
+def test_truncated_confirmation_json_does_not_parse():
+    raw = json.dumps(_awaiting_confirmation_payload(field_value="X" * 5000), ensure_ascii=False)
+    truncated = raw[:4000] + "\n… [输出已截断]"
+    assert parse_confirmation_tool_output(truncated) is None
+    assert (
+        build_business_confirmation_sse(
+            tool_name=BUSINESS_CONFIRMATION_TOOL_NAME,
+            tool_output=truncated,
+            tool_call_id="call_trunc",
+        )
+        is None
+    )
+
+
+def test_hitl_observation_keeps_full_confirmation_payload_for_sse():
+    from app.services.ai.runtime.agentscope.hitl_tool_result import (
+        prepare_runtime_tool_observation_text,
+        reset_pending_hitl_ui_payloads,
+        take_pending_hitl_ui_payload,
+    )
+
+    reset_pending_hitl_ui_payloads()
+    full = json.dumps(_awaiting_confirmation_payload(field_value="企业预览 " + ("详" * 4500)), ensure_ascii=False)
+    assert len(full) > 4000
+
+    observation = prepare_runtime_tool_observation_text(BUSINESS_CONFIRMATION_TOOL_NAME, full)
+    compact = json.loads(observation)
+    assert compact["status"] == "awaiting_user"
+    assert compact["confirmation_id"] == "bc_oversize"
+    assert compact["ui"]["field_count"] == 1
+    assert "fields" not in compact["ui"]
+    assert "输出已截断" not in observation
+
+    stashed = take_pending_hitl_ui_payload(BUSINESS_CONFIRMATION_TOOL_NAME)
+    assert stashed == full
+    event = build_business_confirmation_sse(
+        tool_name=BUSINESS_CONFIRMATION_TOOL_NAME,
+        tool_output=stashed,
+        tool_call_id="call_full",
+    )
+    assert event is not None
+    assert event["title"] == "确认立即下发"
+    assert event["fields"][0]["value"].startswith("企业预览")
+
+
+@pytest.mark.asyncio
+async def test_runtime_tool_wrapper_does_not_truncate_confirmation_card_payload():
+    from agentscope.message import ToolResultState
+
+    from app.services.ai.runtime.agentscope.hitl_tool_result import (
+        reset_pending_hitl_ui_payloads,
+        take_pending_hitl_ui_payload,
+    )
+    from app.services.ai.runtime.agentscope.tools import AgentScopeRuntimeTool, RuntimeToolSpec
+
+    reset_pending_hitl_ui_payloads()
+    full = json.dumps(_awaiting_confirmation_payload(field_value="Y" * 5000), ensure_ascii=False)
+
+    async def confirmation_tool() -> str:
+        return full
+
+    spec = RuntimeToolSpec(
+        name=BUSINESS_CONFIRMATION_TOOL_NAME,
+        description="Show confirmation card",
+        parameters_schema={"type": "object", "properties": {}},
+        source_type="system",
+        callable=confirmation_tool,
+        permission_scope="read",
+    )
+    wrapped = AgentScopeRuntimeTool(spec, approval_mode="allow")
+    chunk = await wrapped()
+
+    assert chunk.state == ToolResultState.SUCCESS
+    observation = chunk.content[0].text
+    assert "输出已截断" not in observation
+    assert json.loads(observation)["ui"]["field_count"] == 1
+    assert take_pending_hitl_ui_payload(BUSINESS_CONFIRMATION_TOOL_NAME) == full

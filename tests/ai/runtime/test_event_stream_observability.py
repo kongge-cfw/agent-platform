@@ -101,6 +101,81 @@ async def test_map_standard_agentscope_event_records_tool_result_state():
 
 
 @pytest.mark.asyncio
+async def test_tool_result_end_restores_full_hitl_payload_for_sse():
+    import json
+
+    from app.services.ai.business_confirmation import BUSINESS_CONFIRMATION_TOOL_NAME
+    from app.services.ai.runtime.agentscope.hitl_tool_result import (
+        prepare_runtime_tool_observation_text,
+        reset_pending_hitl_ui_payloads,
+    )
+
+    reset_pending_hitl_ui_payloads()
+    full = json.dumps(
+        {
+            "status": "awaiting_user",
+            "confirmation_id": "bc_stream",
+            "message": "等待用户确认",
+            "ui": {
+                "title": "确认立即下发",
+                "summary": "摘要",
+                "fields": [
+                    {
+                        "key": "item_preview",
+                        "label": "预览",
+                        "value": "Z" * 5000,
+                        "editable": False,
+                        "value_type": "string",
+                    }
+                ],
+            },
+        },
+        ensure_ascii=False,
+    )
+    state = new_native_stream_state()
+    observation = prepare_runtime_tool_observation_text(
+        BUSINESS_CONFIRMATION_TOOL_NAME,
+        full,
+    )
+    async for _ in map_standard_agentscope_event(
+        SimpleNamespace(
+            type="TOOL_CALL_START",
+            tool_call_id="bc-1",
+            tool_call_name=BUSINESS_CONFIRMATION_TOOL_NAME,
+        ),
+        state=state,
+        emit_observability=False,
+    ):
+        pass
+    async for _ in map_standard_agentscope_event(
+        SimpleNamespace(
+            type="TOOL_RESULT_TEXT_DELTA",
+            tool_call_id="bc-1",
+            delta=observation,
+        ),
+        state=state,
+        emit_observability=False,
+    ):
+        pass
+    assert "fields" not in json.loads(state["tool_outputs"]["bc-1"]).get("ui", {})
+
+    async for _ in map_standard_agentscope_event(
+        SimpleNamespace(
+            type="TOOL_RESULT_END",
+            tool_call_id="bc-1",
+            state="success",
+        ),
+        state=state,
+        emit_observability=False,
+    ):
+        pass
+
+    restored = json.loads(state["tool_outputs"]["bc-1"])
+    assert restored["confirmation_id"] == "bc_stream"
+    assert restored["ui"]["fields"][0]["value"] == "Z" * 5000
+
+
+@pytest.mark.asyncio
 async def test_tool_call_start_preserves_inline_arguments_for_completion_metadata():
     state = new_native_stream_state()
     event = SimpleNamespace(

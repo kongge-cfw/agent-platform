@@ -688,6 +688,25 @@ def test_skill_prompt_keeps_workflow_below_platform_permissions():
 
     assert "不扩大平台权限" in prompt
     assert "工具门禁" in prompt
+    assert "file 参数" in prompt
+
+
+def test_skill_injection_block_lists_sidecar_names_without_bodies():
+    block = AgentServicePrompts.skill_full_instruction_block(
+        "演示流程",
+        "demo-skill",
+        "演示描述",
+        "# 完整流程\n只注入 SKILL.md。\n",
+        sidecar_files=["SKILL.md", "tools.md", "cards.md"],
+    )
+
+    assert "同目录文件" in block
+    assert "`tools.md`" in block
+    assert "`cards.md`" in block
+    assert 'file="相对路径"' in block
+    assert "sessions/.../skills/" in block
+    assert "只注入 SKILL.md" in block
+    assert "enterprise_resolve" not in block
 
 
 def test_prompt_includes_normalized_turn_context_without_replacing_agent_prompt():

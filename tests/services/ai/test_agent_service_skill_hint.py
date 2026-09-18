@@ -119,6 +119,7 @@ async def test_inject_skills_preloads_full_instruction_for_mounted_skill(tmp_pat
         "先提取本周完成事项，再整理风险与下周计划。\n",
         encoding="utf-8",
     )
+    (skill_dir / "tools.md").write_text("# 周报工具\nUNIQUE_SIDECAR_BODY_SHOULD_NOT_INJECT\n", encoding="utf-8")
     agent_config = ChatConfig(
         agent_id="agent-1",
         agent_name="helper",
@@ -148,6 +149,9 @@ async def test_inject_skills_preloads_full_instruction_for_mounted_skill(tmp_pat
     assert "已预载完整指令" in joined
     assert "先提取本周完成事项" in joined
     assert "未预载；执行前必须调用 read_skill_instruction" not in joined
+    assert "`tools.md`" in joined
+    assert "UNIQUE_SIDECAR_BODY_SHOULD_NOT_INJECT" not in joined
+    assert "file=\"相对路径\"" in joined
 
 
 @pytest.mark.asyncio
@@ -512,6 +516,10 @@ def test_runtime_skill_read_emits_enabled_flow_log():
         {"skill_id": "industry-dispatch-task"},
         "错误：技能 industry-dispatch-task 不存在",
     ) is None
+
+    assert SkillInjector.is_skill_md_read({"skill_id": "demo"}) is True
+    assert SkillInjector.is_skill_md_read({"skill_id": "demo", "file": "SKILL.md"}) is True
+    assert SkillInjector.is_skill_md_read({"skill_id": "demo", "file": "tools.md"}) is False
 
 
 @pytest.mark.asyncio

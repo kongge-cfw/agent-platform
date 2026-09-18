@@ -2115,6 +2115,7 @@ XML 示例：
     MUST_LOAD_SKILL_FIRST = (
         "用户明确要求使用某个技能，或 System Prompt 中已有 [Active Skills Loaded] 摘要块。"
         "如果当前模型能够稳定调用技能工具，可先对目标 skill_id 调用 read_skill_instruction 读取完整 SKILL.md；"
+        "同目录附属文件再传 file 相对路径，不要用 Read 拼会话 skills/；"
         "若尚不知 skill_id，可先 list_available_skills 再 read_skill_instruction。"
         "但 DataExecutor 的核心流程始终是 get_dataset_schema -> execute_sql_query；"
         "技能、案例和记忆只作为提升查数准确率的辅助信息，不得阻断元数据检索或 SQL 查询。"
@@ -2123,6 +2124,7 @@ XML 示例：
     MUST_READ_MATCHED_SKILLS = (
         "【技能已匹配（仅摘要）】[Active Skills Loaded] 中不含 SKILL.md 全文。"
         "若本轮需要执行技能 workflow，建议先对块内 skill_id 调用 read_skill_instruction。"
+        "同目录附属文件用 file 参数读取，禁止用 Read 拼会话 skills/。"
         "但在 ChatBI/DataExecutor 查数场景中，技能是辅助上下文，不得优先级高于 get_dataset_schema -> execute_sql_query 主流程。"
     )
 

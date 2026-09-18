@@ -49,14 +49,15 @@ export const useChatAttachments = ({
     return `用户本轮已上传图片：${file.filename}，该图片已作为视觉多模态输入随消息一并发送（托管路径：${path}）。`;
   };
 
-  const buildSkillAttachmentHint = (file: ChatAttachment, path: string) => {
+  const buildSkillAttachmentHint = (file: ChatAttachment) => {
     const skillName = file.filename.replace(" (技能)", "");
+    const skillId = String(file.url || "").trim();
     const meta = file.skillMeta;
     const metaParts: string[] = [];
     if (meta?.name) metaParts.push(`name: ${meta.name}`);
     if (meta?.description) metaParts.push(`description: ${meta.description}`);
     const metaText = metaParts.length > 0 ? metaParts.join(", ") : "";
-    let hint = `用户本轮已调用生态技能工作流：${skillName}，对应的物理描述文件绝对路径是：${path}。`;
+    let hint = `用户本轮已调用生态技能工作流：${skillName}，skill_id=\`${skillId}\`。\n请用 read_skill_instruction(skill_id="${skillId}") 读取 SKILL.md；同目录附属文件再传 file 相对路径，禁止用 Read 拼会话 skills/ 路径。`;
     if (metaText) {
       hint += `\nskills meta 为：${metaText}`;
     }
@@ -86,10 +87,10 @@ export const useChatAttachments = ({
         });
         return `💡 以下引用的是历史记忆，供参考：\n\n${memoryContextLines.join("\n\n")}`;
       }
-      const path = getServerAttachmentPath(file);
       if (file.type === "skill") {
-        return buildSkillAttachmentHint(file, path);
+        return buildSkillAttachmentHint(file);
       }
+      const path = getServerAttachmentPath(file);
       if (isImageAttachment(file)) {
         return buildImageAttachmentHint(file, path);
       }

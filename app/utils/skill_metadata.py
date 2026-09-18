@@ -97,10 +97,11 @@ def build_skill_attachment_hint(
         meta = parse_skill_frontmatter(skill_id, skill_md_path)
 
     display_name = (skill_name or meta.get("name") or skill_id).replace(" (技能)", "")
-    path = f"/app/data/skills/{skill_id}/SKILL.md"
     meta_text = format_skill_meta_text(meta)
     return (
-        f"用户本轮已调用生态技能工作流：{display_name}，对应的物理描述文件绝对路径是：{path}。\n"
+        f"用户本轮已调用生态技能工作流：{display_name}，skill_id=`{skill_id}`。\n"
+        f"请用 read_skill_instruction(skill_id=\"{skill_id}\") 读取 SKILL.md；"
+        "同目录附属文件再传 file 相对路径，禁止用 Read 拼会话 skills/ 路径。\n"
         f"skills meta 为：{meta_text}"
     )
 

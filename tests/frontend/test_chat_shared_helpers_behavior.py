@@ -83,6 +83,10 @@ const requireModule = id => {
     assert result["image"].startswith("\n\n---\n\n用户本轮已从服务器挂载图片：a.png")
     assert "/data/a.png" in result["image"]
     assert "skills meta 为：name: analysis, description: 说明" in result["skill"]
+    assert "skill_id=`s1`" in result["skill"]
+    assert "read_skill_instruction" in result["skill"]
+    assert "/app/data/skills/s1/SKILL.md" not in result["skill"]
+    assert "物理描述文件绝对路径" not in result["skill"]
     assert "服务器本地目录：jobs" in result["directory"]
 
 

@@ -3697,10 +3697,11 @@ class AssistantAgentRunner(BaseExecutor):
             if parsed_skill:
                 skill_id, skill_name = parsed_skill
                 tool_title = f"工具完成: {tool_name} · {skill_id} ({duration_tool:.0f}ms)"
-                skill_flow_log = SkillInjector.build_runtime_skill_enabled_log(
-                    skill_id,
-                    skill_name,
-                )
+                if SkillInjector.is_skill_md_read(tool_args):
+                    skill_flow_log = SkillInjector.build_runtime_skill_enabled_log(
+                        skill_id,
+                        skill_name,
+                    )
         log_event = {
             "type": "log",
             "id": tool_id,

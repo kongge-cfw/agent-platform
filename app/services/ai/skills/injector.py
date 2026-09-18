@@ -20,6 +20,12 @@ class SkillInjector:
     USING_SUPERPOWERS_SKILL_ID = "using-superpowers"
 
     @staticmethod
+    def _sidecar_files_for(skill_md_path: Optional[str]) -> List[str]:
+        from app.services.ai.skill_resolver import list_skill_dir_files
+
+        return list_skill_dir_files(skill_md_path)
+
+    @staticmethod
     def _parse_bool_config(value: Any, default: bool) -> bool:
         if value is None:
             return default
@@ -211,6 +217,7 @@ class SkillInjector:
                 skill_id=skill_id,
                 description=description,
                 full_instruction=full_instruction,
+                sidecar_files=cls._sidecar_files_for(skill_meta.get("skill_md_path")),
             )
         )
         mounted_skill_ids.add(skill_id)
@@ -241,6 +248,7 @@ class SkillInjector:
         skill_id: str,
         description: str,
         full_instruction: Optional[str] = None,
+        sidecar_files: Optional[List[str]] = None,
     ) -> str:
         if full_instruction:
             return AgentServicePrompts.skill_full_instruction_block(
@@ -248,11 +256,13 @@ class SkillInjector:
                 skill_id,
                 description,
                 full_instruction,
+                sidecar_files=sidecar_files,
             )
         return AgentServicePrompts.skill_summary_injection_block(
             skill_name,
             skill_id,
             description,
+            sidecar_files=sidecar_files,
         )
 
     @staticmethod
@@ -316,8 +326,21 @@ class SkillInjector:
             skill_id = (matched.group(1) if matched else "").strip()
         if not skill_id:
             return None
-        skill_name = cls._skill_name_from_instruction(text, skill_id)
+        file_arg = tool_args.get("file") if isinstance(tool_args, dict) else None
+        if cls.is_skill_md_read({"file": file_arg}):
+            skill_name = cls._skill_name_from_instruction(text, skill_id)
+        else:
+            skill_name = skill_id
         return skill_id, skill_name
+
+    @staticmethod
+    def is_skill_md_read(tool_args: Any) -> bool:
+        from app.services.ai.skill_resolver import is_skill_md_relative_file
+
+        file_arg = None
+        if isinstance(tool_args, dict):
+            file_arg = tool_args.get("file")
+        return is_skill_md_relative_file(file_arg)
 
     @classmethod
     def build_runtime_skill_enabled_log(cls, skill_id: str, skill_name: str) -> Dict[str, Any]:
@@ -481,6 +504,9 @@ class SkillInjector:
                         skill_id=skill_id,
                         description=description,
                         full_instruction=full_instruction,
+                        sidecar_files=cls._sidecar_files_for(
+                            skill_md_path if os.path.exists(skill_md_path) else None
+                        ),
                     )
                 )
                 logger.info(
@@ -550,6 +576,7 @@ class SkillInjector:
                             skill_id=skill_id,
                             description=description,
                             full_instruction=full_instruction,
+                            sidecar_files=cls._sidecar_files_for(skill_meta.get("skill_md_path")),
                         )
                     )
                     mounted_skill_ids.add(skill_id)
@@ -670,6 +697,9 @@ class SkillInjector:
                                     skill_id=skill_id,
                                     description=description,
                                     full_instruction=full_instruction,
+                                    sidecar_files=cls._sidecar_files_for(
+                                        skill_meta.get("skill_md_path")
+                                    ),
                                 )
                             )
                             mounted_skill_ids.add(skill_id)

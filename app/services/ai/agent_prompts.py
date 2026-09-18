@@ -110,6 +110,7 @@ class AgentServicePrompts:
     _PLATFORM_SKILLS_USAGE_SECTION = """## 技能使用
 - 先查看 [Active Skills Loaded]：若技能块已预载完整指令，按该 SKILL.md 的 workflow 执行；若仅有摘要，执行前必须 read_skill_instruction。
 - 未匹配但可能需要技能时，先看 list_available_skills；**仅当某个技能明显适用**时再 read_skill_instruction。
+- 技能正文里的相对路径文件必须用 **read_skill_instruction(skill_id, file=\"相对路径\")** 读取；禁止用 Read/Glob 拼会话工作区 `skills/` 或猜测 Frontmatter 目录名。
 - 多个技能可能匹配时，选**最具体、最贴近用户问题**的一个执行；**禁止未选定前连续 read 多个技能全文**。
 - 技能只提供方法和步骤，不扩大平台权限；所有工具调用仍受当前绑定工具、审批和路径/数据门禁约束。
 - 技能涉及外部 API 批量写入时，优先合并请求，避免 tight loop；遇 429/限流应降速重试。"""
@@ -233,7 +234,7 @@ class AgentServicePrompts:
         (("__fetch__", "special"), "__FETCH__"),
         (("update_user_preference", "has_all"), "| 用户要求「记住…」 | **update_user_preference**（勿虚构已写入） |"),
         (("search_knowledge_base", "has_all"), "| 制度/SOP/操作指引、已选知识库 | **search_knowledge_base**（未绑定则不得编造文档内容） |"),
-        (("read_skill_instruction", "has_all"), "| 已匹配技能（**[Active Skills Loaded]**） | 若技能块已预载完整指令，直接按该指令执行；若仅有摘要，必须先 **read_skill_instruction(skill_id)** 读全文再执行 |"),
+        (("read_skill_instruction", "has_all"), "| 已匹配技能（**[Active Skills Loaded]**） | 若技能块已预载完整指令，直接按该指令执行；若仅有摘要，必须先 **read_skill_instruction(skill_id)** 读全文。同目录附属文件再传 **file=\"相对路径\"**，禁止用 Read 拼会话 skills/ |"),
         (("list_available_skills+read_skill_instruction", "has_all"), "| 可能需要技能但未匹配 | **list_available_skills** → **read_skill_instruction** |"),
     )
 
@@ -254,7 +255,7 @@ class AgentServicePrompts:
         "fetch_user_long_term_memory": "读取用户长期偏好与 facts",
         "update_user_preference": "写入用户长期偏好",
         "search_knowledge_base": "知识库文档检索",
-        "read_skill_instruction": "读取技能 SKILL.md 全文",
+        "read_skill_instruction": "读取技能 SKILL.md 或同目录附属文件（file 为相对路径）",
         "list_available_skills": "列出可用技能摘要",
         "get_dataset_schema": "获取数据集/表/字段元数据",
         "execute_sql_query": "执行 SQL 查数",
@@ -811,10 +812,33 @@ class AgentServicePrompts:
         )
 
     @staticmethod
+    def _skill_sidecar_prompt_lines(
+        skill_id: str,
+        sidecar_files: list[str] | None = None,
+    ) -> str:
+        extras = [
+            name
+            for name in (sidecar_files or [])
+            if name and name != "SKILL.md"
+        ]
+        extra_line = (
+            f"- **同目录文件**（仅文件名，不含正文）: {', '.join(f'`{name}`' for name in extras)}\n"
+            if extras
+            else ""
+        )
+        return (
+            extra_line
+            + f"- **附属文件**: SKILL.md 中的相对链接视为该技能目录内文件，"
+            f"必须调用 read_skill_instruction(skill_id=\"{skill_id}\", file=\"相对路径\")；"
+            "禁止用 Read/Glob/Grep 拼 sessions/.../skills/ 或猜测 Frontmatter name 目录。\n"
+        )
+
+    @staticmethod
     def skill_summary_injection_block(
         skill_name: str,
         skill_id: str,
         description: str = "",
+        sidecar_files: list[str] | None = None,
     ) -> str:
         """单个已匹配技能的摘要块（不含 SKILL.md 全文，全文须 read_skill_instruction）。"""
         desc_line = f"- **Description**: {description.strip()}\n" if (description or "").strip() else ""
@@ -823,6 +847,7 @@ class AgentServicePrompts:
             f"- **skill_id**（调用 read_skill_instruction 时必传）: `{skill_id}`\n"
             f"{desc_line}"
             f"- **完整指令**: 未预载；执行前必须调用 read_skill_instruction(skill_id=\"{skill_id}\")\n"
+            f"{AgentServicePrompts._skill_sidecar_prompt_lines(skill_id, sidecar_files)}"
             f"=================================================="
         )
 
@@ -832,6 +857,7 @@ class AgentServicePrompts:
         skill_id: str,
         description: str = "",
         instruction: str = "",
+        sidecar_files: list[str] | None = None,
     ) -> str:
         """单个已启用技能的完整指令块。"""
         desc_line = f"- **Description**: {description.strip()}\n" if (description or "").strip() else ""
@@ -840,6 +866,7 @@ class AgentServicePrompts:
             f"- **skill_id**: `{skill_id}`\n"
             f"{desc_line}"
             f"- **完整指令**: 已预载完整指令；本轮可直接按以下 SKILL.md 执行，无需再次调用 read_skill_instruction，除非需要刷新或核对技能文件。\n"
+            f"{AgentServicePrompts._skill_sidecar_prompt_lines(skill_id, sidecar_files)}"
             f"--- BEGIN SKILL.md ---\n"
             f"{(instruction or '').strip()}\n"
             f"--- END SKILL.md ---\n"
@@ -855,6 +882,7 @@ class AgentServicePrompts:
             f"若某个技能块标记“已预载完整指令”，本轮可直接按该块中的完整 SKILL.md workflow 执行；"
             f"若某个技能块标记“未预载”，在执行该技能 workflow 前必须先对该 skill_id 调用 **read_skill_instruction**，"
             f"禁止凭摘要编造步骤或跳过读技能直接查数/作答。\n"
+            f"技能正文里的相对路径文件必须用 read_skill_instruction 的 file 参数读取，禁止用 Read 拼会话 skills/ 路径。\n"
             f"技能只提供方法和步骤，不扩大平台权限；所有工具调用仍受当前绑定工具、审批、工具门禁和路径/数据门禁约束。\n"
             f"多个技能可能匹配时，选**最具体、最贴近用户问题**的一个执行；禁止未选定前连续 read 多个技能全文。\n\n"
             + "\n\n".join(skills_injection)
@@ -869,6 +897,7 @@ class AgentServicePrompts:
             "当用户的问题可能需要特定方法论、领域流程、脚本模板或专门操作规范时，"
             "如果当前工具集中提供 list_available_skills，请先用它查看技能摘要；"
             "根据 name/description 判断适用后，再对**最具体匹配**的一个技能调用 read_skill_instruction；"
+            "附属文件传 file 相对路径，禁止用 Read 拼会话 skills/ 路径；"
             "禁止未选定前连续 read 多个技能全文。"
             "如果这些工具不可用，不要声称已检查技能库，也不要编造不存在的技能。普通问答无需查询技能。"
         )
@@ -993,8 +1022,8 @@ class AgentServicePrompts:
             + f"- **默认文档目录**：`{visible_docs_dir}`（跨会话集中存放；用户要求「保存到文档/报告/文件」且**未指定路径**时，写入此目录，如 `{visible_docs_dir}/report.md` 或相对路径 `../docs/report.md`）\n"
             f"- **本轮文件/Shell 工具**：{tools_text}\n"
             + docker_boundary_text
-            + "平台 branding 与服务根目录帮助文档不挂载到沙箱，禁止递归扫描 `/app`，服务根目录文档只能通过宿主侧 Read/Glob/Grep 读取（根目录兜底仅限 `/app/*.md`）。用户上传附件在本人工作目录 `.../uploads/`；SQLite 临时演算库在 `.../sandbox/sess_<id>.db`；技能文件按目录清单提供的 `/workspace/skills/...` 副本读取。"
-            " 用户消息 `---` 之后或附件块中给出的**绝对路径**可直接用于 Read/Grep。\n"
+            + "平台 branding 与服务根目录帮助文档不挂载到沙箱，禁止递归扫描 `/app`，服务根目录文档只能通过宿主侧 Read/Glob/Grep 读取（根目录兜底仅限 `/app/*.md`）。用户上传附件在本人工作目录 `.../uploads/`；SQLite 临时演算库在 `.../sandbox/sess_<id>.db`；技能 SKILL.md 与同目录附属文件必须用 read_skill_instruction(skill_id, file) 读取，禁止用 Read/Glob 读会话或 `/workspace/skills/` 副本。"
+            " 用户消息 `---` 之后或附件块中给出的**非技能**绝对路径可直接用于 Read/Grep；技能文件仍走 read_skill_instruction。\n"
             "- 用户明确要求保存到其他路径时，按其指示写入；未说明且属于交付给用户的文档时，一律使用默认文档目录。工具调用路径可以相对于会话工作目录；最终展示给用户的文件位置必须规范化为绝对路径。\n"
             "- 文件与命令工具仅能在平台允许的路径范围内生效（含上述目录与 `/app/data` 下授权子目录）；越界会被工具层拒绝。\n"
             "- 禁止访问其他用户或其他会话的 agent_workspaces 目录；不得臆造路径。\n"

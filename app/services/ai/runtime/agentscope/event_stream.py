@@ -8,6 +8,10 @@ import uuid
 from typing import Any, AsyncGenerator, Callable, Dict, List, Protocol
 
 from app.services.ai.context_compaction_log_service import context_compaction_log_service
+from app.services.ai.runtime.agentscope.hitl_tool_result import (
+    reset_pending_hitl_ui_payloads,
+    take_pending_hitl_ui_payload,
+)
 from app.services.ai.runtime.agentscope.tool_result import normalize_tool_result_state
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,7 @@ def new_native_stream_state(
     max_steps: int = 5,
     candidate_answer_enabled: bool = False,
 ) -> Dict[str, Any]:
+    reset_pending_hitl_ui_payloads()
     return {
         "tool_names": {},
         "tool_args_text": {},
@@ -631,6 +636,10 @@ async def map_standard_agentscope_event(
             state.setdefault("tool_result_states", {})[tool_id] = normalize_tool_result_state(
                 result_state
             )
+        tool_name = str((state.get("tool_names") or {}).get(tool_id) or "")
+        full_hitl_payload = take_pending_hitl_ui_payload(tool_name)
+        if full_hitl_payload is not None:
+            state.setdefault("tool_outputs", {})[tool_id] = full_hitl_payload
         if on_tool_result_end is not None:
             async for chunk in on_tool_result_end(event):
                 yield chunk

@@ -2346,3 +2346,30 @@ async def test_e2b_workspace_uses_page_overrides_and_falls_back_for_masked_key(m
     assert kwargs["api_key"] == "saved-e2b-key"
     assert kwargs["template"] == "custom-template"
     assert kwargs["timeout_seconds"] == 45
+
+
+def test_preseed_session_skills_aliases_catalog_id_when_frontmatter_name_differs(tmp_path):
+    from app.services.ai.runtime.agentscope.workspace import _preseed_session_skills
+
+    skill_dir = tmp_path / "src" / "task"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: industry-dispatch-task\n"
+        "description: demo skill for catalog alias\n"
+        "---\n\n"
+        "# Demo\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "tools.md").write_text("# tools\nsidecar-body-unique\n", encoding="utf-8")
+    workdir = tmp_path / "session"
+    workdir.mkdir()
+
+    _preseed_session_skills(str(workdir), [str(skill_dir)])
+
+    named = workdir / "skills" / "industry-dispatch-task" / "tools.md"
+    aliased = workdir / "skills" / "task" / "tools.md"
+    assert named.is_file()
+    assert aliased.is_file()
+    assert named.read_text(encoding="utf-8") == aliased.read_text(encoding="utf-8")
+    assert "sidecar-body-unique" in aliased.read_text(encoding="utf-8")

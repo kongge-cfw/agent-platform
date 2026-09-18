@@ -20,6 +20,10 @@ from app.services.ai.runtime.agentscope.tool_timeout import (
     DEFAULT_AGENT_MAX_TOOLCALL_TIMEOUT,
     effective_tool_timeout,
 )
+from app.services.ai.runtime.agentscope.hitl_tool_result import (
+    prepare_runtime_tool_observation_text,
+    serialize_runtime_tool_result,
+)
 from app.services.ai.runtime.agentscope.stream_reconcile import truncate_for_context
 from app.services.ai.runtime.agentscope.tool_result import (
     attach_tool_call_id_metadata,
@@ -74,14 +78,7 @@ def _raise_tool_loop_fuse(reason: str) -> None:
 
 def _format_runtime_tool_result(result: Any) -> str:
     """将工具结果转换为模型可读文本，并限制进入上下文的长度。"""
-    if isinstance(result, str):
-        text = result
-    else:
-        try:
-            text = json.dumps(result, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            text = str(result)
-    return truncate_for_context(text)
+    return truncate_for_context(serialize_runtime_tool_result(result))
 
 
 def _new_tool_call_id(tool_name: str) -> str:
@@ -807,7 +804,7 @@ class AgentScopeRuntimeTool:
 
             res = await execute_with_concurrency_guard(_invoke)
             return ToolChunk(
-                content=[TextBlock(text=_format_runtime_tool_result(res))],
+                content=[TextBlock(text=prepare_runtime_tool_observation_text(self.spec.name, res))],
                 state=(
                     ToolResultState.SUCCESS
                     if is_tool_execution_success(res)
