@@ -228,6 +228,53 @@ export type ProcessTimelineTarget = {
   processTimeline?: ProcessTimelineItem[];
 };
 
+type ProcessTimelineMessageTarget = ProcessTimelineTarget & {
+  role?: string;
+  content?: string;
+};
+
+export function activeTodoTimelineFromMessages(
+  messages: ProcessTimelineMessageTarget[],
+): ProcessTimelineItem[] | undefined {
+  const list = Array.isArray(messages) ? messages : [];
+  let latestUserIndex = -1;
+  let latestAgentIndex = -1;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const role = String(list[index]?.role || "").toLowerCase();
+    if (latestUserIndex < 0 && role === "user") latestUserIndex = index;
+    if (
+      latestAgentIndex < 0
+      && (role === "agent" || role === "assistant")
+    ) {
+      latestAgentIndex = index;
+    }
+    if (latestUserIndex >= 0 && latestAgentIndex >= 0) break;
+  }
+
+  const latestAgent = latestAgentIndex >= 0 ? list[latestAgentIndex] : undefined;
+  if (
+    (latestUserIndex < 0 || latestAgentIndex > latestUserIndex)
+    && latestAgent?.processTimeline?.some((item) => item.kind === "todo")
+  ) {
+    return latestAgent.processTimeline;
+  }
+
+  if (latestUserIndex < 0) return undefined;
+  const receipt = String(list[latestUserIndex]?.content || "");
+  if (!receipt.includes("【业务确认】") && !receipt.includes("【用户回答】")) {
+    return undefined;
+  }
+  for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+    const message = list[index];
+    const role = String(message?.role || "").toLowerCase();
+    if (role !== "agent" && role !== "assistant") continue;
+    if (message.processTimeline?.some((item) => item.kind === "todo")) {
+      return message.processTimeline;
+    }
+  }
+  return undefined;
+}
+
 function normalizeTodoItems(rawTodos: unknown): ProcessTimelineTodo[] | undefined {
   if (!Array.isArray(rawTodos)) return undefined;
   const seen = new Set<string>();
@@ -290,13 +337,51 @@ export function cancelOpenTodos(target: ProcessTimelineTarget): boolean {
   return true;
 }
 
-/** 从最新消息往前找一份仍在进行的任务清单并取消。 */
-export function cancelOpenTodosInMessages(messages: ProcessTimelineTarget[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message && cancelOpenTodos(message)) return true;
-  }
-  return false;
+function replaceLatestTodo(
+  target: ProcessTimelineTarget,
+  mutate: (current: ProcessTimelineTodoItem) => ProcessTimelineTodo[] | null,
+): boolean {
+  const items = target.processTimeline;
+  if (!items?.length) return false;
+  const index = [...items].reverse().findIndex((item) => item.kind === "todo");
+  if (index < 0) return false;
+  const itemIndex = items.length - 1 - index;
+  const current = items[itemIndex];
+  if (!current || current.kind !== "todo") return false;
+  const todos = mutate(current);
+  if (!todos) return false;
+  items[itemIndex] = {
+    ...current,
+    todos,
+    counts: todoCounts(todos),
+  };
+  target.processTimeline = [...items];
+  return true;
+}
+
+/** 确认卡/提问卡用户已确定：把等待项收成完成，并启动下一项。 */
+export function advanceOpenTodos(target: ProcessTimelineTarget): boolean {
+  return replaceLatestTodo(target, (current) => {
+    if (!current.todos.some((todo) => isOpenTodoStatus(todo.status))) return null;
+    const todos = current.todos.map((todo) => ({
+      ...todo,
+      status: todo.status === "in_progress" ? "completed" as const : todo.status,
+    }));
+    const nextPending = todos.find((todo) => todo.status === "pending");
+    if (nextPending) nextPending.status = "in_progress";
+    return todos;
+  });
+}
+
+/** 整轮成功结束：未完成项全部标完成，避免清单停在确认/执行中。 */
+export function completeOpenTodos(target: ProcessTimelineTarget): boolean {
+  return replaceLatestTodo(target, (current) => {
+    if (!current.todos.some((todo) => isOpenTodoStatus(todo.status))) return null;
+    return current.todos.map((todo) => ({
+      ...todo,
+      status: isOpenTodoStatus(todo.status) ? "completed" as const : todo.status,
+    }));
+  });
 }
 
 /** Replace the current main-agent checklist while keeping it as a timeline sibling. */

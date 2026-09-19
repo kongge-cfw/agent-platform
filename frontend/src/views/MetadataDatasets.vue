@@ -14,7 +14,7 @@ import MetadataCronInspectionModal from '../components/metadata/MetadataCronInsp
 import { useUser } from '../composables/useUser'
 import { useToast } from '../composables/useToast'
 import { copyToClipboard } from '../utils/clipboard'
-import { createSseLineParser } from '../utils/chartRenderer'
+import { createSseLineParser } from '../utils/sseLineParser'
 import {
   CircleStackIcon,
   CpuChipIcon,

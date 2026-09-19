@@ -65,6 +65,59 @@ async def test_request_user_confirmation_rejects_empty_fields():
     assert "fields" in result.lower() or "字段" in result
 
 
+@pytest.mark.asyncio
+async def test_request_user_confirmation_repairs_top_level_fields_array():
+    result = await request_user_confirmation.ainvoke(
+        [
+            {
+                "key": "task_name",
+                "label": "任务名称",
+                "value": "疲劳驾驶问题整改",
+                "editable": True,
+                "value_type": "string",
+            },
+            {
+                "key": "deadline",
+                "label": "完成时限",
+                "value": "2026-09-26",
+                "editable": True,
+                "value_type": "date",
+            },
+        ]
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "awaiting_user"
+    assert payload["ui"]["title"] == "请确认以下信息"
+    assert [field["key"] for field in payload["ui"]["fields"]] == [
+        "task_name",
+        "deadline",
+    ]
+
+
+def test_agentscope_jsonschema_accepts_repaired_confirmation_array():
+    import jsonschema
+
+    from agentscope.agent import _agent as agent_mod
+    from app.services.ai.runtime.agentscope.tools import (
+        install_interactive_tool_input_repair,
+    )
+    from app.services.ai.tools.user_confirmation_tools import (
+        RequestUserConfirmationArgs,
+    )
+
+    install_interactive_tool_input_repair()
+    raw = json.dumps(
+        [{"key": "deadline", "label": "完成时限", "value": "2026-09-26"}],
+        ensure_ascii=False,
+    )
+    schema = RequestUserConfirmationArgs.model_json_schema()
+    parsed = agent_mod._json_loads_with_repair(raw, schema)
+    jsonschema.validate(parsed, schema)
+    assert parsed["title"] == "请确认以下信息"
+    assert parsed["fields"][0]["key"] == "deadline"
+
+
 def test_build_business_confirmation_sse_from_tool_output():
     raw = json.dumps(
         {

@@ -101,8 +101,8 @@ def test_abort_error_does_not_cancel_open_todos():
 
     embed_stop = embed[embed.index("const stopGeneration") : embed.index("abortController.abort()")]
     debug_stop = debug[debug.index("const stopGeneration") : debug.index("abortController.abort()")]
-    assert "cancelOpenTodosInMessages" in embed_stop
-    assert "cancelOpenTodosInMessages" in debug_stop
+    assert "cancelOpenTodos(lastMsg)" in embed_stop
+    assert "cancelOpenTodos(lastMsg)" in debug_stop
 
 
 def test_visibility_does_not_poll_audit_history_while_generating():

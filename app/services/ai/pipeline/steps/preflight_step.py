@@ -62,7 +62,7 @@ class PreflightStep(BasePipelineStep):
                     "content": quota_block,
                     "trace_id": context.trace_id,
                 }
-                context.execution_status = "quota_exceeded"
+                context.set_execution_status("quota_exceeded")
                 return
 
         # 3. Queue wait notification if locked
@@ -126,7 +126,7 @@ class PreflightStep(BasePipelineStep):
                     "content": "用户回答格式无效或当前会话无法恢复问题，请重新发起问题。",
                     "trace_id": context.trace_id,
                 }
-                context.execution_status = "error"
+                context.set_execution_status("error")
                 return
             from app.services.ai.user_question_store import UserQuestionStore
 
@@ -157,7 +157,7 @@ class PreflightStep(BasePipelineStep):
                     "content": f"用户回答未通过校验：{exc}",
                     "trace_id": context.trace_id,
                 }
-                context.execution_status = "error"
+                context.set_execution_status("error")
                 return
             except Exception:
                 logger.exception("Failed to validate user-question receipt")
@@ -167,7 +167,7 @@ class PreflightStep(BasePipelineStep):
                     "content": "当前无法验证用户回答，请稍后重试。",
                     "trace_id": context.trace_id,
                 }
-                context.execution_status = "error"
+                context.set_execution_status("error")
                 return
 
         # 3. Preparation Parent & Validation Timeline Logs

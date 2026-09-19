@@ -500,7 +500,12 @@ def _schedule_task_retry(task_id: int, retry_attempt: int, delay_sec: int) -> bo
         asyncio.get_running_loop()
     except RuntimeError:
         return False
-    asyncio.create_task(_delayed_retry())
+    from app.core.cancellation import spawn_detached
+
+    spawn_detached(
+        _delayed_retry(),
+        name=f"scheduled-task-retry-{task_id}-{retry_attempt}",
+    )
     return True
 
 

@@ -1,6 +1,5 @@
 import json
 import logging
-import asyncio
 import re
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,7 +156,12 @@ class ExampleService:
             await db.refresh(example)
 
             # 5. 异步触发 AI 增强 (意图还原、背景总结、SQL特征)
-            asyncio.create_task(ExampleService._enhance_example_with_llm(example.id))
+            from app.core.cancellation import spawn_detached
+
+            spawn_detached(
+                ExampleService._enhance_example_with_llm(example.id),
+                name=f"enhance-chatbi-example-{example.id}",
+            )
             
             return example
 

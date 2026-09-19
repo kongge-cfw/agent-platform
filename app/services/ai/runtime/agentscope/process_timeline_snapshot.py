@@ -277,11 +277,18 @@ def complete_todo_items(state: Optional[List[Dict[str, Any]]]) -> Optional[Dict[
         normalized = _normalize_todo_update(item)
         if normalized is None or not normalized["todos"]:
             return None
-        if all(todo["status"] == "completed" for todo in normalized["todos"]):
+        if not any(todo["status"] in OPEN_TODO_STATUSES for todo in normalized["todos"]):
             return None
 
         todos = [
-            {"content": todo["content"], "status": "completed"}
+            {
+                "content": todo["content"],
+                "status": (
+                    "completed"
+                    if todo["status"] in OPEN_TODO_STATUSES
+                    else todo["status"]
+                ),
+            }
             for todo in normalized["todos"]
         ]
         counts = _todo_counts(todos)
@@ -337,6 +344,31 @@ def last_todo_update_from_history(
             if normalized is None or not normalized["todos"]:
                 continue
             return {"type": "todo_update", "todos": normalized["todos"], "counts": normalized["counts"]}
+    return None
+
+
+def latest_assistant_todo_update_from_history(
+    history: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    """只读取最近一条助手消息的清单，避免把更早的无关任务带入当前成功轮。"""
+    for message in reversed(history or []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        timeline = message.get("process_timeline")
+        if not isinstance(timeline, list):
+            return None
+        for item in reversed(timeline):
+            if not isinstance(item, dict) or item.get("kind") != "todo":
+                continue
+            normalized = _normalize_todo_update(item)
+            if normalized is None or not normalized["todos"]:
+                continue
+            return {
+                "type": "todo_update",
+                "todos": normalized["todos"],
+                "counts": normalized["counts"],
+            }
+        return None
     return None
 
 

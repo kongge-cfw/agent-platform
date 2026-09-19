@@ -243,6 +243,35 @@ return msg.processTimeline;
     assert result == []
 
 
+def test_agentscope_stream_dispatcher_does_not_reopen_todo_after_success():
+    result = _run_typescript(
+        "frontend/src/utils/agentscopeSseHandlers.ts",
+        """
+const msg = {
+  content: '已完成',
+  status: 'success',
+  processTimeline: [{
+    kind: 'todo',
+    todos: [{ content: '最终任务', status: 'completed' }],
+    counts: { pending: 0, in_progress: 0, completed: 1, cancelled: 0 },
+  }],
+};
+api.dispatchAgentscopeStreamEvent(msg, {
+  type: 'todo_update',
+  todos: [
+    { content: '迟到的旧任务', status: 'in_progress' },
+  ],
+}, () => {});
+return msg.processTimeline[0];
+""",
+    )
+
+    assert [item["content"] for item in result["todos"]] == ["最终任务"]
+    assert [item["status"] for item in result["todos"]] == ["completed"]
+    assert result["counts"]["in_progress"] == 0
+    assert result["counts"]["completed"] == 1
+
+
 def test_process_narration_handler_is_shared_across_chat_surfaces():
     handlers = (ROOT / "frontend/src/utils/agentscopeSseHandlers.ts").read_text(encoding="utf-8")
     embed = (ROOT / "frontend/src/views/EmbedChat.vue").read_text(encoding="utf-8")
@@ -307,14 +336,70 @@ def test_process_narration_handler_is_shared_across_chat_surfaces():
 def test_todo_card_follows_thought_timeline_on_both_chat_surfaces():
     embed = (ROOT / "frontend/src/views/EmbedChat.vue").read_text(encoding="utf-8")
     debug = (ROOT / "frontend/src/views/AgentDebug.vue").read_text(encoding="utf-8")
+    run_status = (ROOT / "frontend/src/utils/chatRunStatus.ts").read_text(encoding="utf-8")
 
     for source in (embed, debug):
         timeline_at = source.find("<ChatExecutionTimeline")
         todo_at = source.find("<ChatTodoCard")
         assert timeline_at >= 0
         assert todo_at > timeline_at
-        assert "cancelOpenTodosInMessages" in source
-        assert "data.status === \"cancelled\"" in source
+        assert "cancelOpenTodos(" in source
+        assert "advanceOpenTodos(" in source
+        assert "resolveHitlCardsInHistory" in source
+        assert "applyRunStatusEvent(agentMsg.value, data, streamMessages)" in source
+        assert "if (payload.confirmed) advanceOpenTodos(msg)" in source
+        assert "sseLineParser.flush()" in source
+    assert "completeOpenTodos(message)" in run_status
+    assert 'event.status === "cancelled"' in run_status
+
+
+def test_advance_open_todos_completes_waiting_step_and_starts_next():
+    result = _run_typescript(
+        "frontend/src/utils/processTimeline.ts",
+        """
+const previous = {
+  processTimeline: [{
+    kind: 'todo',
+    todos: [
+      { content: '整理附件', status: 'completed' },
+      { content: '确认下发内容', status: 'in_progress' },
+      { content: '向企业下发任务', status: 'pending' },
+    ],
+    counts: { pending: 1, in_progress: 1, completed: 1, cancelled: 0 },
+  }],
+};
+const advanced = api.advanceOpenTodos(previous);
+const afterConfirm = JSON.parse(JSON.stringify(previous.processTimeline[0]));
+const completed = api.completeOpenTodos(previous);
+return {
+  advanced,
+  completed,
+  afterConfirm,
+  afterSuccess: previous.processTimeline[0],
+};
+""",
+    )
+
+    assert result["advanced"] is True
+    assert result["completed"] is True
+    assert [item["status"] for item in result["afterConfirm"]["todos"]] == [
+        "completed",
+        "completed",
+        "in_progress",
+    ]
+    assert result["afterConfirm"]["counts"] == {
+        "pending": 0,
+        "in_progress": 1,
+        "completed": 2,
+        "cancelled": 0,
+    }
+    assert [item["status"] for item in result["afterSuccess"]["todos"]] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
+    assert result["afterSuccess"]["counts"]["completed"] == 3
+    assert result["afterSuccess"]["counts"]["in_progress"] == 0
 
 
 def test_todo_card_supports_collapse_close_and_auto_collapse_when_completed():
@@ -1504,3 +1589,60 @@ def test_execution_timeline_renders_workspace_prewarm_progress():
     process = (ROOT / "frontend/src/utils/processTimeline.ts").read_text(encoding="utf-8")
     assert "WORKSPACE_PREWARM_LOG_ID" in process
     assert "workspace:sandbox" in process
+
+
+def test_chat_file_intake_collects_clipboard_batch_and_enforces_limits():
+    result = _run_typescript(
+        "frontend/src/utils/chatFileIntake.ts",
+        """
+const files = Array.from({ length: 12 }, (_, i) => new File([new Uint8Array(8)], `f${i + 1}.txt`));
+const oversize = new File([new Uint8Array(21 * 1024 * 1024)], 'big.bin');
+const forbidden = new File([new Uint8Array(8)], 'run.sh');
+const clipboard = {
+  files,
+  items: [{ kind: 'file', getAsFile: () => files[0] }],
+};
+const collected = api.collectClipboardFiles(clipboard);
+const plan = api.planChatFileIntake([...collected, oversize, forbidden], { existingCount: 0 });
+const leftover = api.planChatFileIntake(files.slice(0, 3), { existingCount: 8 });
+return {
+  collectedCount: collected.length,
+  maxCount: api.CHAT_FILE_MAX_COUNT,
+  maxBytes: api.CHAT_FILE_MAX_BYTES,
+  accepted: plan.accepted.map(f => f.name),
+  overflowCount: plan.overflowCount,
+  oversizeNames: plan.oversizeNames,
+  forbiddenNames: plan.forbiddenNames,
+  leftoverAccepted: leftover.accepted.map(f => f.name),
+  leftoverOverflow: leftover.overflowCount,
+  leftoverNotice: leftover.notice,
+};
+""",
+    )
+
+    assert result["collectedCount"] == 12
+    assert result["maxCount"] == 10
+    assert result["maxBytes"] == 20 * 1024 * 1024
+    assert result["accepted"] == [f"f{i}.txt" for i in range(1, 11)]
+    assert result["overflowCount"] == 2
+    assert result["oversizeNames"] == ["big.bin"]
+    assert result["forbiddenNames"] == ["run.sh"]
+    assert result["leftoverAccepted"] == ["f1.txt", "f2.txt"]
+    assert result["leftoverOverflow"] == 1
+    assert "单次最多上传 10 个文件" in result["leftoverNotice"]
+
+
+def test_chat_input_uses_clipboard_file_list_for_batch_paste():
+    source = (ROOT / "frontend/src/components/embed/ChatInput.vue").read_text(encoding="utf-8")
+    assert "collectClipboardFiles" in source
+    assert "planChatFileIntake" in source
+    assert "uploadSelectedFiles" in source
+    assert "const files = collectClipboardFiles(e.clipboardData);" in source
+    assert "e.preventDefault();" in source
+    assert "await uploadSelectedFiles(files);" in source
+    assert "clipboardData?.items" not in source
+    assert "alert(" not in source
+    assert "showFileNotice(plan.notice)" in source
+    assert '<ConfirmModal' in source
+    assert 'confirm-text="知道了"' in source
+    assert ':show-cancel="false"' in source

@@ -49,7 +49,8 @@ import axios from "@/utils/axios";
 import { finalizeConversation } from "@/utils/conversationFinalize";
 import { cancelConversationRun } from "@/utils/cancelConversationRun";
 import { createConversationId } from "@/utils/conversationId";
-import { createSseLineParser } from "@/utils/chartRenderer";
+import { createSseLineParser } from "@/utils/sseLineParser";
+import type { ChatMessageBase } from "@/types/chat";
 import { normalizeAgentSwitchCommand } from "@/utils/agentSwitchCommands";
 import {
   formatTokenUsageAmount,
@@ -69,7 +70,7 @@ import {
   type GroundingBlockedAction,
   type GroundingBlockedPayload,
 } from "@/utils/agentscopeSseHandlers";
-import { cancelOpenTodosInMessages, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import { activeTodoTimelineFromMessages, advanceOpenTodos, cancelOpenTodos, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
 import {
   discardInflightConversation,
   lastNonSystemMessage,
@@ -118,6 +119,7 @@ import WorkspaceBrowserDrawer from "@/components/embed/WorkspaceBrowserDrawer.vu
 import MemoryBrowserDrawer from "@/components/embed/MemoryBrowserDrawer.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
 import ChatExecutionTimeline from "@/components/chat/ChatExecutionTimeline.vue";
+import ChatMessageRow from "@/components/chat/ChatMessageRow.vue";
 import ChatTodoCard from "@/components/chat/ChatTodoCard.vue";
 import ChatModelCallStatsModal from "@/components/chat/ChatModelCallStatsModal.vue";
 import DataPortalReportCreateModal from "@/components/data-portal/DataPortalReportCreateModal.vue";
@@ -167,6 +169,11 @@ import {
   useChatAttachments,
 } from "@/composables/chat/useChatAttachments";
 import { groupChatHistoryByDate } from "@/composables/chat/useChatHistoryGroups";
+import { chatMessageRenderKey } from "@/utils/chatMessageRenderKey";
+import {
+  applyResumeRunStatusEvent,
+  applyRunStatusEvent,
+} from "@/utils/chatRunStatus";
 
 const route = useRoute();
 const router = useRouter();
@@ -529,20 +536,22 @@ const displayMessages = computed(() => {
   return filtered;
 });
 
-function getSkillFlowBadgesForMessage(msg: Message, allMessages: Message[]): SkillFlowBadge[] {
-  if (msg.role !== 'agent') return [];
-  const idx = allMessages.findIndex(m => m.id === msg.id);
-  if (idx <= 0) return [];
-  let files: ChatFile[] = [];
-  for (let i = idx - 1; i >= 0; i--) {
-    const prev = allMessages[i];
-    if (!prev) continue;
-    if (prev.role === 'user') {
-      files = prev.files || [];
-      break;
+const skillFlowBadgesByMessageId = computed(() => {
+  const badgesById = new Map<number, SkillFlowBadge[]>();
+  let latestUserFiles: ChatFile[] = [];
+  for (const [index, message] of messages.value.entries()) {
+    if (message.role === "user") {
+      latestUserFiles = message.files || [];
+    } else if (message.role === "agent" && index > 0) {
+      badgesById.set(message.id, buildSkillFlowBadges(latestUserFiles, message.logs || []));
     }
   }
-  return buildSkillFlowBadges(files, msg.logs || []);
+  return badgesById;
+});
+
+function getSkillFlowBadgesForMessage(msg: Message, allMessages: Message[]): SkillFlowBadge[] {
+  void allMessages;
+  return skillFlowBadgesByMessageId.value.get(msg.id) || [];
 }
 const conversationId = ref("");
 const metadataMountableDatasets = ref<Array<{ id: string; name?: string; description?: string; dataset_name?: string }>>([]);
@@ -687,6 +696,7 @@ const mapDebugConversationMessages = (rawMessages: any[]): Message[] => {
     (m: any, idx: number) => attachHitlCardsFromTimeline({
       id: Date.now() + idx,
       trace_id: m.trace_id,
+      status: m.status || undefined,
       role: m.role === "assistant" ? "agent" : m.role,
       content: m.content as string,
       reasoningContent: m.reasoning_content || undefined,
@@ -1467,39 +1477,16 @@ interface DatasetNavigationPayload {
   _failed_at?: string;
 }
 
-interface Message {
-  id: number;
-  role: "user" | "agent" | "system";
-  content: string;
+interface Message extends ChatMessageBase {
   errorDetail?: StreamErrorDetail;
-  reasoningContent?: string;
-  isReasoningExpanded?: boolean;
   files?: ChatFile[];
   rawContent?: string; // Store original markdown for copying
   logs?: LogEntry[];
-  isThinking?: boolean;
-  processNarration?: string;
-  processNarrationPending?: string;
-  processTimeline?: import("@/utils/processTimeline").ProcessTimelineItem[];
-  isProcessNarrationExpanded?: boolean;
-  timestamp?: string;
   intent?: string;
   rawPrompt?: any; // Store raw prompt data
   rawPromptSystem?: string; // 组装完成的完整系统级提示词
-  trace_id?: string; // Associated Trace ID for full logs
-  citations?: any[]; // Knowledge base references
-  isCitationsExpanded?: boolean; // Collapsible toggle
-  agentName?: string; // Which agent responded (ID or Name)
-  agentDisplayName?: string; // Human readable display name
-  agentType?: string;
-  isSavedReportResult?: boolean;
-  isThoughtExpanded?: boolean; // Toggle for the logs block
-  thoughtStartTime?: number; // Timestamp when thinking started
-  thoughtDuration?: string; // Duration in seconds (formatted)
-  thinkingText?: string; // Dynamic thinking text
   isGreeting?: boolean; // Is this the initial greeting message?
   isHistory?: boolean; // Is this a history separator or message?
-  feedback?: "up" | "down" | null;
   pendingPermission?: PendingToolPermission;
   pendingExternalExecution?: PendingExternalExecution;
   toolResultData?: Record<string, Array<{ block_id?: string; media_type?: string; data?: unknown; url?: string | null }>>;
@@ -1511,15 +1498,7 @@ interface Message {
   groundingBlocked?: GroundingBlockedPayload;
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
 }
-
-const isAgentTimelineMessage = (msg: Message): boolean => {
-  const role = (msg as unknown as { role?: string }).role;
-  return role === "agent" || role === "assistant";
-};
 
 const isChatContextMessage = (message: Message): boolean => (
   !message.isThinking &&
@@ -2441,19 +2420,9 @@ const focusChatInputWhenReady = () => {
 
 watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);
 
-const activeTodoTimeline = computed(() => {
-  for (let i = messages.value.length - 1; i >= 0; i--) {
-    const msg = messages.value[i];
-    if (!msg) continue;
-    if (isAgentTimelineMessage(msg)) {
-      const hasTodo = msg.processTimeline?.some((item) => item.kind === 'todo');
-      if (hasTodo) {
-        return msg.processTimeline;
-      }
-    }
-  }
-  return undefined;
-});
+const activeTodoTimeline = computed(() =>
+  activeTodoTimelineFromMessages(messages.value),
+);
 const messagesContainer = ref<HTMLDivElement | null>(null);
 
 let abortController: AbortController | null = null;
@@ -3267,7 +3236,7 @@ const stopGeneration = () => {
   const lastMsg = messages.value.length > 0 ? messages.value[messages.value.length - 1] : null;
   // SSE 会立刻被掐断，后端的 todo_update / run_status=cancelled 到不了前端。
   // 必须在本地先把清单收尾，否则会一直转圈「进行中」。
-  cancelOpenTodosInMessages(messages.value);
+  if (lastMsg?.role === "agent") cancelOpenTodos(lastMsg);
   if (conversationId.value) {
     void cancelConversationRun(conversationId.value, {
       traceId: lastMsg?.trace_id,
@@ -3636,15 +3605,8 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
                 remoteRunActive.value = true;
                 void refreshCurrentRunStatus();
               }
-            } else if (data.type === "run_status") {
-              agentMsg.value.isThinking = false;
+            } else if (applyRunStatusEvent(agentMsg.value, data, streamMessages)) {
               if (isViewingStream()) markOutputCompleted();
-              if (data.status === "success") {
-                (agentMsg.value as any).status = "success";
-              } else if (data.status === "cancelled") {
-                (agentMsg.value as any).status = "cancelled";
-                cancelOpenTodosInMessages(streamMessages);
-              }
             } else if (data.type === "log") {
               addRealLog(agentMsg.value, data);
             }
@@ -3778,6 +3740,30 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
           } catch (e) {
             console.warn("Failed to parse SSE chunk", e);
           }
+      }
+    }
+
+    for (const dataStr of sseLineParser.flush()) {
+      if (dataStr === "[DONE]") continue;
+      try {
+        const data = JSON.parse(dataStr);
+        applyStreamTraceId(agentMsg.value, data);
+        if (applyRunStatusEvent(agentMsg.value, data, streamMessages)) {
+          if (isViewingStream()) markOutputCompleted();
+          continue;
+        }
+        if (data.type === "log") {
+          addRealLog(agentMsg.value, data);
+          continue;
+        }
+        if (mergeStreamCitations(agentMsg.value, data)) continue;
+        if (dispatchAgentscopeStreamEvent(agentMsg.value, data, addRealLog, streamMessages)) continue;
+        if (data.type === "answer_delta" || data.content) {
+          const piece = sanitizeStreamContent(String(data.content || ""));
+          if (piece) appendAssistantBodyDelta(agentMsg.value, piece);
+        }
+      } catch (e) {
+        console.warn("Failed to parse final SSE chunk", e);
       }
     }
 
@@ -3945,35 +3931,11 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
   if (data.agent_name && !msg.agentName) msg.agentName = data.agent_name;
   if (data.agent_display_name && !msg.agentDisplayName) msg.agentDisplayName = data.agent_display_name;
 
-  if (data?.type === "run_status") {
-    // 恢复流末尾的 run_status 终态：status 为 success / rejected / error 等真实结果，
-    // 按终态映射，避免把“用户拒绝/执行失败”错误显示为已完成。
-    if (msg.pendingPermission) {
-      msg.pendingPermission.status =
-        data.status === "awaiting_permission"
-          ? "pending"
-          : data.status === "rejected" || data.status === "denied"
-          ? "rejected"
-          : data.status === "error" || data.status === "failed"
-            ? "error"
-            : "approved";
-      if (data.status === "awaiting_permission") msg.pendingPermission.expanded = true;
-    }
-    if (msg.pendingExternalExecution) {
-      msg.pendingExternalExecution.status =
-        data.status === "error" || data.status === "failed" ? "error" : "completed";
-    }
-    msg.isThinking = false;
+  if (applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))) {
     if (messages.value.includes(msg)) markOutputCompleted();
     if (thoughtTimer) {
       clearInterval(thoughtTimer);
       thoughtTimer = null;
-    }
-    if (data.status === "success") {
-      (msg as any).status = "success";
-    } else if (data.status === "cancelled") {
-      (msg as any).status = "cancelled";
-      cancelOpenTodosInMessages(messagesOwningAgent(msg));
     }
     return;
   }
@@ -4133,7 +4095,8 @@ const submitBusinessConfirmation = async (
   card.fields = payload.fields.map((field) => ({ ...field }));
   card.status = "submitted";
   card.decision = payload.confirmed ? "confirmed" : "cancelled";
-  if (!payload.confirmed) cancelOpenTodosInMessages(messages.value);
+  if (payload.confirmed) advanceOpenTodos(msg);
+  else cancelOpenTodos(msg);
   userInput.value = content;
   await sendMessage();
 };
@@ -4155,7 +4118,8 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
-  if (payload.cancelled) cancelOpenTodosInMessages(messages.value);
+  if (payload.cancelled) cancelOpenTodos(msg);
+  else advanceOpenTodos(msg);
   userInput.value = content;
   await sendMessage();
 };
@@ -4547,11 +4511,11 @@ onUnmounted(() => {
         @scroll="handleScroll"
         class="flex-1 overflow-y-auto p-6 space-y-6 bg-gray-50 custom-scrollbar"
       >
-        <div
+        <ChatMessageRow
           v-for="msg in displayMessages"
-          :key="msg.id"
-          class="flex w-full"
-          :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+          :key="chatMessageRenderKey(msg)"
+          surface="debug"
+          :role="msg.role"
         >
           <!-- User Message -->
           <div
@@ -5163,7 +5127,7 @@ onUnmounted(() => {
               <!-- Thinking Indicator (Removed in favor of dynamic timeline indicator) -->
             </div>
           </div>
-        </div>
+        </ChatMessageRow>
       </div>
 
       <!-- Input Area -->

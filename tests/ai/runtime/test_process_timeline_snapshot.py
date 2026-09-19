@@ -6,6 +6,7 @@ from app.services.ai.runtime.agentscope.process_timeline_snapshot import (
     complete_todo_items,
     finalize_process_timeline,
     last_todo_update_from_history,
+    latest_assistant_todo_update_from_history,
 )
 
 
@@ -403,6 +404,33 @@ def test_cancel_todo_items_keeps_completed_and_marks_open_items_cancelled():
     assert cancel_todo_items(state) is None
 
 
+def test_complete_todo_items_keeps_cancelled_and_completes_only_open_items():
+    state = [{
+        "kind": "todo",
+        "id": "todo_current",
+        "title": "任务清单",
+        "todos": [
+            {"content": "已完成步骤", "status": "completed"},
+            {"content": "已取消步骤", "status": "cancelled"},
+            {"content": "待处理步骤", "status": "in_progress"},
+        ],
+    }]
+
+    event = complete_todo_items(state)
+
+    assert event["todos"] == [
+        {"content": "已完成步骤", "status": "completed"},
+        {"content": "已取消步骤", "status": "cancelled"},
+        {"content": "待处理步骤", "status": "completed"},
+    ]
+    assert event["counts"] == {
+        "pending": 0,
+        "in_progress": 0,
+        "completed": 2,
+        "cancelled": 1,
+    }
+
+
 def test_last_todo_update_from_history_reads_latest_assistant_checklist():
     event = last_todo_update_from_history(
         [
@@ -441,3 +469,26 @@ def test_last_todo_update_from_history_reads_latest_assistant_checklist():
     assert event["counts"]["pending"] == 1
     assert last_todo_update_from_history([]) is None
     assert last_todo_update_from_history([{"role": "user", "content": "hi"}]) is None
+
+
+def test_latest_assistant_todo_does_not_fall_back_to_unrelated_older_task():
+    history = [
+        {
+            "role": "assistant",
+            "process_timeline": [
+                {
+                    "kind": "todo",
+                    "todos": [{"content": "无关旧任务", "status": "in_progress"}],
+                }
+            ],
+        },
+        {"role": "user", "content": "新的任务"},
+        {
+            "role": "assistant",
+            "content": "请确认",
+            "process_timeline": [{"kind": "hitl", "card_type": "business_confirmation"}],
+        },
+    ]
+
+    assert latest_assistant_todo_update_from_history(history) is None
+    assert last_todo_update_from_history(history)["todos"][0]["content"] == "无关旧任务"

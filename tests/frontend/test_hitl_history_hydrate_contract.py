@@ -159,6 +159,91 @@ return {
     assert result["resume"] is True
 
 
+def test_hitl_history_successful_continuation_finishes_prior_checklist():
+    result = _run_typescript(
+        "frontend/src/utils/hitlHistory.ts",
+        """
+const messages = [
+  {
+    role: 'agent',
+    status: 'awaiting_user',
+    businessConfirmation: {
+      confirmation_id: 'bc_1',
+      status: 'pending',
+      fields: [],
+    },
+    processTimeline: [{
+      kind: 'todo',
+      todos: [
+        { content: '解析企业', status: 'completed' },
+        { content: '生成确认卡', status: 'in_progress' },
+        { content: '下发任务', status: 'pending' },
+      ],
+    }],
+  },
+  {
+    role: 'user',
+    content: '【业务确认】用户已确定\\nconfirmation_id: bc_1',
+  },
+  {
+    role: 'agent',
+    status: 'success',
+    content: '已完成任务下发',
+  },
+];
+api.resolveHitlCardsInHistory(messages);
+const unrelated = [
+  {
+    role: 'agent',
+    status: 'error',
+    processTimeline: [{
+      kind: 'todo',
+      todos: [{ content: '失败旧任务', status: 'in_progress' }],
+    }],
+  },
+  { role: 'user', content: '新的普通问题' },
+  { role: 'agent', status: 'success', content: '普通回答' },
+];
+api.resolveHitlCardsInHistory(unrelated);
+const interrupted = [
+  {
+    role: 'agent',
+    status: 'awaiting_user',
+    businessConfirmation: {
+      confirmation_id: 'bc_interrupted',
+      status: 'pending',
+      fields: [],
+    },
+    processTimeline: [{
+      kind: 'todo',
+      todos: [{ content: '旧任务', status: 'in_progress' }],
+    }],
+  },
+  {
+    role: 'user',
+    content: '【业务确认】用户已确定\\nconfirmation_id: bc_interrupted',
+  },
+  { role: 'user', content: '开始一个新任务' },
+  { role: 'agent', status: 'success', content: '新任务已完成' },
+];
+api.resolveHitlCardsInHistory(interrupted);
+return {
+  decision: messages[0].businessConfirmation.decision,
+  statuses: messages[0].processTimeline[0].todos.map(item => item.status),
+  unrelatedStatus: unrelated[0].processTimeline[0].todos[0].status,
+  interruptedStatus: interrupted[0].processTimeline[0].todos[0].status,
+};
+""",
+    )
+
+    assert result == {
+        "decision": "confirmed",
+        "statuses": ["completed", "completed", "completed"],
+        "unrelatedStatus": "in_progress",
+        "interruptedStatus": "in_progress",
+    }
+
+
 def test_hitl_history_wiring_covers_embed_and_debug():
     embed = (ROOT / "frontend/src/views/EmbedChat.vue").read_text(encoding="utf-8")
     debug = (ROOT / "frontend/src/views/AgentDebug.vue").read_text(encoding="utf-8")
@@ -166,11 +251,16 @@ def test_hitl_history_wiring_covers_embed_and_debug():
         ROOT / "app/services/ai/runtime/agentscope/process_timeline_snapshot.py"
     ).read_text(encoding="utf-8")
     timeline = (ROOT / "frontend/src/utils/processTimeline.ts").read_text(encoding="utf-8")
+    chat_api = (ROOT / "app/api/v1/endpoints/chat.py").read_text(encoding="utf-8")
 
     assert "attachHitlCardsFromTimeline" in embed
     assert "resolveHitlCardsInHistory" in embed
     assert "attachHitlCardsFromTimeline" in debug
     assert "resolveHitlCardsInHistory" in debug
+    assert "status: item.status" in embed
+    assert "status: m.status" in debug
+    assert "status: Optional[str] = None" in chat_api
+    assert '"status": r.status' in chat_api
     assert '"kind": "hitl"' in snapshot
     assert '"business_confirmation"' in snapshot
     assert '"permission_required"' in snapshot

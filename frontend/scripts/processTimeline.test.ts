@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  activeTodoTimelineFromMessages,
   hydrateHistoryProcessTimeline,
   timelineHasPending,
   upsertTimelineTodo,
   cancelOpenTodos,
-  cancelOpenTodosInMessages,
   upsertTimelineLog,
   formatTimelineTitle,
   type ProcessTimelineTarget,
@@ -92,9 +92,7 @@ function testCancelOpenTodosMarksRemainingItemsCancelled() {
       },
     ],
   };
-  const current: ProcessTimelineTarget = { processTimeline: [] };
-
-  assert.equal(cancelOpenTodosInMessages([previous, current]), true);
+  assert.equal(cancelOpenTodos(previous), true);
   const todo = previous.processTimeline?.[0];
   assert.equal(todo?.kind, "todo");
   assert.equal(todo?.todos[0].status, "completed");
@@ -375,9 +373,35 @@ function testSubagentToolAndLifecycleDeduplication() {
   console.log("testSubagentToolAndLifecycleDeduplication passed successfully!");
 }
 
+function testActiveTodoTimelineSurvivesHitlContinuationPlaceholder() {
+  const todoTimeline = [
+    {
+      kind: "todo" as const,
+      id: "todo_1",
+      title: "任务清单",
+      todos: [{ content: "等待确认", status: "in_progress" as const }],
+      counts: { pending: 0, in_progress: 1, completed: 0 },
+    },
+  ];
+  const receiptMessages = [
+    { role: "agent", content: "", processTimeline: todoTimeline },
+    { role: "user", content: "【业务确认】\n用户已确认" },
+    { role: "agent", content: "", processTimeline: [] },
+  ];
+  assert.equal(activeTodoTimelineFromMessages(receiptMessages), todoTimeline);
+
+  const unrelatedMessages = [
+    { role: "agent", content: "", processTimeline: todoTimeline },
+    { role: "user", content: "新的无关问题" },
+    { role: "agent", content: "", processTimeline: [] },
+  ];
+  assert.equal(activeTodoTimelineFromMessages(unrelatedMessages), undefined);
+}
+
 testSubagentNesting();
 testHydrateHistoryReorganization();
 testSubagentToolAndLifecycleDeduplication();
 testTodoTimelineSiblingAndReplacement();
 testTodoHistoryRemainsIndependent();
 testCancelOpenTodosMarksRemainingItemsCancelled();
+testActiveTodoTimelineSurvivesHitlContinuationPlaceholder();

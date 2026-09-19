@@ -427,8 +427,6 @@ class MetadataIndexService:
         from app.services.metadata_service import MetadataService
         from app.services.ai.embedding_client import EmbeddingClient
         from app.services.metadata_rag_service import MetadataRagService
-        import asyncio
-
         async def _run_sync():
             try:
                 async with AsyncSessionLocal() as db:
@@ -518,10 +516,12 @@ class MetadataIndexService:
             except Exception as e:
                 logger.error(f"[Local Redis Sync] Background task failed for dataset {dataset_id}: {e}", exc_info=True)
 
-        try:
-            asyncio.create_task(_run_sync())
-        except Exception as e:
-            logger.warning(f"[Local Redis Sync] Failed to trigger background sync: {e}")
+        from app.core.cancellation import spawn_detached
+
+        spawn_detached(
+            _run_sync(),
+            name=f"metadata-index-sync-{dataset_id}",
+        )
 
     @staticmethod
     async def _execute_ft_search(

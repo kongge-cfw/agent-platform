@@ -120,6 +120,10 @@ from app.services.ai.runtime.agentscope.tools import (
 from app.services.ai.runtime.agentscope.tool_choice_compat import (
     tool_choice_for_model,
 )
+from app.services.ai.runtime.agentscope.tool_call_args import (
+    extract_agentscope_tool_call_input as _extract_agentscope_tool_call_input,
+    resolve_agentscope_tool_args as _resolve_agentscope_tool_args,
+)
 from app.services.ai.runtime.agentscope.tools import build_toolkit
 from app.services.ai.tool_capability import (
     AgentScopeToolConsumer,
@@ -139,80 +143,6 @@ _FILE_TOOL_OPERATIONS = {
     "Glob": "search",
     "Grep": "search",
 }
-
-
-def _extract_agentscope_tool_call_input(agent: Any, tool_id: str) -> Any:
-    """Read the final tool input saved in AgentScope's assistant context.
-
-    AgentScope 2.x streams tool arguments as deltas, but the authoritative
-    ``ToolCallBlock`` is also saved in ``agent.state.context`` before the tool
-    runs.  The context is a useful fallback when a provider emits an empty or
-    malformed argument delta while still executing the parsed tool call.
-    """
-    if agent is None or not tool_id:
-        return None
-    context = getattr(getattr(agent, "state", None), "context", None)
-    if not isinstance(context, (list, tuple)):
-        return None
-
-    for message in reversed(context):
-        blocks: Any = None
-        get_content_blocks = getattr(message, "get_content_blocks", None)
-        if callable(get_content_blocks):
-            try:
-                blocks = get_content_blocks("tool_call")
-            except Exception:
-                blocks = None
-        elif isinstance(message, dict):
-            blocks = message.get("content")
-        if not isinstance(blocks, (list, tuple)):
-            blocks = [blocks] if blocks is not None else []
-
-        for block in reversed(blocks):
-            block_id = (
-                block.get("id")
-                if isinstance(block, dict)
-                else getattr(block, "id", None)
-            )
-            if str(block_id or "") != str(tool_id):
-                continue
-            return (
-                block.get("input")
-                if isinstance(block, dict)
-                else getattr(block, "input", None)
-            )
-    return None
-
-
-def _parse_tool_args_object(value: Any) -> Dict[str, Any] | None:
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = json.loads(value)
-    except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _resolve_agentscope_tool_args(
-    agent: Any,
-    tool_id: str,
-    streamed_args: Any,
-) -> Dict[str, Any]:
-    """Resolve tool args without changing the model-facing tool contract."""
-    streamed = _parse_tool_args_object(streamed_args)
-    saved = _parse_tool_args_object(
-        _extract_agentscope_tool_call_input(agent, tool_id)
-    )
-    if streamed:
-        return streamed
-    if saved is not None:
-        return saved
-    if streamed is not None:
-        return streamed
-    return {"input": streamed_args} if streamed_args else {}
 
 
 def _logical_file_tool_path(raw_path: Any) -> str | None:
@@ -2515,29 +2445,35 @@ class AssistantAgentRunner(BaseExecutor):
                 maybe_resolve = "resolve" in str(tool_name or "").lower()
                 if tool_name == "read_skill_instruction" or maybe_resolve:
                     from app.services.ai.hitl_continuation import (
-                        HitlContinuationStore,
+                        HitlContinuationCoordinator,
                         is_entity_resolve_tool,
                     )
                     from app.services.ai.skills.injector import SkillInjector
 
-                    store = await HitlContinuationStore.from_runtime()
+                    coordinator = await HitlContinuationCoordinator.from_runtime()
                     if tool_name == "read_skill_instruction":
                         parsed_skill = SkillInjector.parse_successful_skill_read(tool_args, output)
                         if parsed_skill:
-                            await store.remember_skill(
+                            await coordinator.remember_skill(
                                 skill_id=parsed_skill[0],
                                 skill_name=parsed_skill[1],
                                 user_id=self._runtime_user_id(),
                                 conversation_id=self.conversation_id,
                             )
                     elif is_entity_resolve_tool(tool_name):
-                        await store.remember_resolve_tool(
+                        await coordinator.remember_resolve_tool(
                             tool_name=tool_name,
                             tool_output=output,
                             user_id=self._runtime_user_id(),
                             conversation_id=self.conversation_id,
                         )
-            except Exception:
+            except Exception as exc:
+                from app.services.ai.hitl_continuation import (
+                    HitlContinuationUnavailableError,
+                )
+
+                if isinstance(exc, HitlContinuationUnavailableError):
+                    raise
                 logger.warning(
                     "[AssistantAgentRunner] Failed to persist HITL continuation facts",
                     exc_info=True,

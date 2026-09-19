@@ -11,7 +11,14 @@ import type { ReasoningEffort } from "@/api/model";
 import type { ContextCompactionRecord } from "@/api/agent";
 import ContextCompactionTimeline from "@/components/chat/ContextCompactionTimeline.vue";
 import { formatContextTokens, type ContextUsage } from "@/composables/useContextUsage";
+import ConfirmModal from "@/components/ConfirmModal.vue";
 import { isImageAttachment } from "@/utils/attachmentImages";
+import {
+  collectClipboardFiles,
+  collectFilesFromList,
+  countPhysicalChatAttachments,
+  planChatFileIntake,
+} from "@/utils/chatFileIntake";
 import { catalogHasDelegationHost } from "@/utils/delegationHost";
 import { DATASET_PORTAL_SYSTEM_COMMAND_ID } from "@/constants/datasetPortalCommand";
 import { getTemperatureGuidance } from "@/utils/temperatureGuidance";
@@ -1806,74 +1813,83 @@ const removeFile = (index: number) => {
   uploadedFiles.value.splice(index, 1);
 };
 
-// 核心文件上传逻辑
-const uploadSingleFile = async (file: File) => {
-  if (isInteractionLocked.value) return;
-  if (file.size > 20 * 1024 * 1024) {
-    alert("文件大小不能超过 20MB");
-    return;
-  }
-  const name = file.name;
-  const ext = '.' + name.split('.').pop()?.toLowerCase();
-  const forbiddenExts = ['.exe', '.bat', '.sh', '.cmd', '.msi', '.php', '.js', '.html'];
-  if (forbiddenExts.includes(ext)) {
-    alert("暂不支持上传该类型的危险脚本文件");
-    return;
-  }
+const fileNoticeVisible = ref(false);
+const fileNoticeTitle = ref("无法添加文件");
+const fileNoticeMessage = ref("");
 
-  isUploading.value = true;
+const showFileNotice = (message: string, title = "无法添加文件") => {
+  const text = String(message || "").trim();
+  if (!text) return;
+  fileNoticeTitle.value = title;
+  fileNoticeMessage.value = text;
+  fileNoticeVisible.value = true;
+};
+
+const closeFileNotice = () => {
+  fileNoticeVisible.value = false;
+};
+
+const postChatUpload = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
+  const res = await axios.post("/api/v1/chat/upload", formData);
+  if (res.data && res.data.data) {
+    uploadedFiles.value.push(res.data.data);
+    return;
+  }
+  throw new Error("上传失败");
+};
 
+const uploadSelectedFiles = async (files: File[]) => {
+  if (isInteractionLocked.value || files.length === 0) return;
+  const plan = planChatFileIntake(files, {
+    existingCount: countPhysicalChatAttachments(uploadedFiles.value),
+  });
+  if (plan.notice) showFileNotice(plan.notice);
+  if (!plan.accepted.length) return;
+
+  isUploading.value = true;
   try {
-    const res = await axios.post("/api/v1/chat/upload", formData);
-    if (res.data && res.data.data) {
-      uploadedFiles.value.push(res.data.data);
-    } else {
-      throw new Error("上传失败");
+    for (const file of plan.accepted) {
+      try {
+        await postChatUpload(file);
+      } catch (error: any) {
+        console.error("Upload error:", error);
+        showFileNotice(
+          error.response?.data?.message || error.message || "上传文件时出错，请重试",
+          "上传失败",
+        );
+      }
     }
-  } catch (error: any) {
-    console.error("Upload error:", error);
-    alert(error.response?.data?.message || error.message || "上传文件时出错，请重试");
   } finally {
     isUploading.value = false;
   }
 };
 
+const uploadSingleFile = async (file: File) => {
+  await uploadSelectedFiles([file]);
+};
+
 const handleFileChange = async (e: Event) => {
   const target = e.target as HTMLInputElement;
   if (!target.files) return;
-  const filesArray = Array.from(target.files);
-  for (const file of filesArray) {
-    await uploadSingleFile(file);
-  }
+  await uploadSelectedFiles(collectFilesFromList(target.files));
   target.value = ''; // 清空 input 避免无法重复选择同一文件
 };
 
-// 拖拽与粘贴
+// 拖拽与粘贴：一次可收多个文件，单次最多 10 个、单文件不超过 20MB
 const handlePaste = async (e: ClipboardEvent) => {
   if (isInteractionLocked.value) return;
-  const items = e.clipboardData?.items;
-  if (!items) return;
-  for (const item of Array.from(items)) {
-    if (item.kind === 'file') {
-      const file = item.getAsFile();
-      if (file) {
-        e.preventDefault();
-        await uploadSingleFile(file);
-      }
-    }
-  }
+  const files = collectClipboardFiles(e.clipboardData);
+  if (!files.length) return;
+  e.preventDefault();
+  await uploadSelectedFiles(files);
 };
 
 const handleDropFile = async (e: DragEvent) => {
   if (isInteractionLocked.value) return;
   e.preventDefault();
-  const files = e.dataTransfer?.files;
-  if (!files) return;
-  for (const file of Array.from(files)) {
-    await uploadSingleFile(file);
-  }
+  await uploadSelectedFiles(collectFilesFromList(e.dataTransfer?.files));
 };
 
 const addBase64Image = async (dataUrl: string, filename = 'crop_image.png') => {
@@ -3808,6 +3824,16 @@ defineExpose({
           </div>
         </div>
       </Teleport>
+      <ConfirmModal
+        v-if="fileNoticeVisible"
+        :title="fileNoticeTitle"
+        :message="fileNoticeMessage"
+        type="warning"
+        confirm-text="知道了"
+        :show-cancel="false"
+        @confirm="closeFileNotice"
+        @cancel="closeFileNotice"
+      />
     </div>
 </template>
 

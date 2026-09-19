@@ -209,9 +209,12 @@ async def update_report_subscription_status(subscription_id: int, payload: Dict[
 @router.post("/report-subscriptions/{subscription_id}/run")
 async def run_report_subscription(subscription_id: int, user_info=Depends(require_api_key), db: AsyncSession = Depends(get_db_session)):
     await _owned_report_subscription(db, subscription_id, user_info)
-    import asyncio
+    from app.core.cancellation import spawn_detached
     from app.services.ai.scheduler_service import _saved_report_subscription_wrapper
-    asyncio.create_task(_saved_report_subscription_wrapper(subscription_id, is_manual=True))
+    spawn_detached(
+        _saved_report_subscription_wrapper(subscription_id, is_manual=True),
+        name=f"manual-report-subscription-{subscription_id}",
+    )
     return StandardResponse(data={"message": "报表订阅已触发"})
 
 
@@ -349,9 +352,12 @@ async def run_task_immediately(
     
     _check_task_ownership(task, user_info)
     
-    # Trigger async
-    import asyncio
-    asyncio.create_task(scheduler_service.run_task(task_id, is_manual=True))
+    from app.core.cancellation import spawn_detached
+
+    spawn_detached(
+        scheduler_service.run_task(task_id, is_manual=True),
+        name=f"manual-scheduled-task-{task_id}",
+    )
     
     return StandardResponse(data={"message": "Task triggered successfully"})
 

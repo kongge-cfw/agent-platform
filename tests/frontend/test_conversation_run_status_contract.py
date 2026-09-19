@@ -145,13 +145,19 @@ def test_resume_flow_run_status_triggers_completion_finalization_on_both_surface
     该函数此前未处理 run_status，导致恢复后 Stall 计时与“进行中/已完成”文案失收（Bug-17）。
     必须在两个聊天表面的 applyPermissionStreamEvent 内补齐完成收尾。
     """
+    reducer = (ROOT / "frontend/src/utils/chatRunStatus.ts").read_text(encoding="utf-8")
+    assert 'event?.type !== "run_status"' in reducer
+    assert "applyResumeRunStatusEvent" in reducer
+    assert "applyRunStatusEvent(message, event, history)" in reducer
+    assert "completeOpenTodos(message)" in reducer
+    assert "resolveHitlCardsInHistory(history)" in reducer
+
     for relative_path in (
         "frontend/src/views/EmbedChat.vue",
         "frontend/src/views/AgentDebug.vue",
     ):
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         fn_start = source.index("const applyPermissionStreamEvent")
-        region = source[fn_start : fn_start + 3000]
-        assert 'type === "run_status"' in region, f"{relative_path} 恢复流未处理 run_status"
+        region = source[fn_start : fn_start + 1500]
+        assert "applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))" in region
         assert "markOutputCompleted()" in region, f"{relative_path} 恢复流未做完成收尾"
-        assert 'data.status === "success"' in region, f"{relative_path} 恢复流未按 success 状态收尾"

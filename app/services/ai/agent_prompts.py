@@ -124,6 +124,7 @@ class AgentServicePrompts:
 - 工具返回 `awaiting_user` 后必须停止，等待用户下一条消息；**不得在未确认前声称已录入成功**。
 - **本轮只要已调用 request_user_confirmation（确认卡将展示给用户）**：禁止再输出任何 `quick:` 链接、快捷按钮、「您还可以继续 / 您可能还想了解」引导语或对应列表；确认/取消只走确认卡按钮，不要再用 quick 重复提供「确认录入 / 取消」等选项。即使上文「交互与引导」要求附带 quick，本条优先。
 - 确认卡必须是**可执行载荷**：涉及外部对象时，字段里同时写清显示名称和已解析主键（字段名以解析工具返回为准），禁止只写名称；批量写入须按对象列出结构化说明，禁止用一句通用模板代替。主键必须来自解析类工具返回，禁止臆造。
+- 调用 **request_user_confirmation** 时顶层入参必须是 JSON 对象：`{"title":"…","fields":[...]}`；`fields` 才是字段数组，禁止把字段数组直接作为整个工具入参。
 - 日历日期字段的 `value_type` 用 **date**（值写成 `YYYY-MM-DD`），含时刻用 **datetime**；不要把日期当成普通 string。空的日期字段也必须标 `date`/`datetime`，不能只靠字段名。
 - 收到「【业务确认】用户已确定」：继续**原任务**，不是新问题。若本轮已启用技能或存在 [HITL 续跑上下文]，必须按该 SKILL.md workflow 执行；按快照写入前核对已解析 ID，快照只有名称时先解析再写。禁止臆造外部主键。
 - 收到「【业务确认】用户已取消」：**立即终止本次录入/变更流程**；禁止调用写入类工具；**禁止再次调用 request_user_confirmation**（不得重新弹确认卡）。只可用自然语言简短确认已取消，并询问用户是否要修改后重试或彻底放弃；仅当用户随后明确提供新的/修改后的业务数据并要求继续录入时，才允许重新调用 request_user_confirmation。
@@ -684,7 +685,9 @@ class AgentServicePrompts:
                 "分对象条数必须读 matched_values 里对应列的 top_values；不要用 read_range 灌表做分析；"
                 "按条件筛选行必须用 filter，在工具内完成匹配，禁止 read_range 整表翻页，也禁止为此写 Python 脚本；"
                 "filter 的 filters 为对象数组，如 [{\"header\":\"列名\",\"op\":\"contains\",\"value\":\"关键词\"}]，combine 为 and 或 or；"
-                "筛专有全称（机构、人名、编号等）用 op=eq；不要用 contains 截取名称片段，避免把不同对象算在一起；"
+                "header 必须逐字复制 inspect/profile 摘要或 headers 里的表头，禁止用用户说法，禁止自行加「轨迹」「(%)」等修饰；"
+                "筛专有全称（机构、人名、编号等）单名用 op=eq，多名/多值用一条 op=in（value 为数组），不要给每个名称各写一条 eq；"
+                "同一列的多条 eq/in 会自动合并；不要用 contains 截取名称片段，避免把不同对象算在一起；"
                 "filter 返回 matched_count、各列 matched_values 与最多 50 行样本；需要全部命中行时传 output_filename 导出 xlsx；"
                 "sheet_name 须用 inspect/profile 返回的完整表名，不要自行缩写；"
                 "仅查看少量单元格时才 read_range；单次最多 1000 行、50 列，超限会截取首段并返回 next_range；"

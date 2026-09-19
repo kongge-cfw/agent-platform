@@ -134,6 +134,59 @@ const filledNew = api.mergeCompletedRunIntoMessages(placeholder, readyServer);
     }
 
 
+def test_merge_completed_run_prefers_server_checklist_when_it_is_finalized():
+    result = _run_typescript(
+        """
+const local = [{
+  role: 'agent',
+  content: '已完成任务',
+  trace_id: 'trace-1',
+  processTimeline: [{
+    kind: 'todo',
+    todos: [
+      { content: '解析企业', status: 'completed' },
+      { content: '下发任务', status: 'in_progress' },
+    ],
+  }],
+}];
+const server = [{
+  role: 'assistant',
+  content: '已完成任务',
+  trace_id: 'trace-1',
+  status: 'success',
+  processTimeline: [{
+    kind: 'todo',
+    todos: [
+      { content: '解析企业', status: 'completed' },
+      { content: '下发任务', status: 'completed' },
+    ],
+  }],
+}];
+const merged = api.mergeCompletedRunIntoMessages(local, server);
+const localLogsOnly = [{
+  role: 'agent',
+  content: '已完成任务',
+  trace_id: 'trace-1',
+  processTimeline: [{ kind: 'log', id: 'tool-1', status: 'success' }],
+}];
+const mergedLogsOnly = api.mergeCompletedRunIntoMessages(localLogsOnly, server);
+return {
+  usedServer: merged.usedServer,
+  status: merged.messages[0].status,
+  statuses: merged.messages[0].processTimeline[0].todos.map(item => item.status),
+  logsOnlyKinds: mergedLogsOnly.messages[0].processTimeline.map(item => item.kind),
+};
+"""
+    )
+
+    assert result == {
+        "usedServer": True,
+        "status": "success",
+        "statuses": ["completed", "completed"],
+        "logsOnlyKinds": ["log", "todo"],
+    }
+
+
 def test_generating_placeholder_only_when_run_active_without_live_agent():
     result = _run_typescript(
         """

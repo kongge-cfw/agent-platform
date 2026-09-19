@@ -19,10 +19,12 @@ from app.services.ai.runtime.agentscope.tool_result import (
     normalize_tool_result_state,
 )
 from app.services.ai.runtime.agentscope.stream_reconcile import truncate_for_display
+from app.services.ai.runtime.agentscope.tool_call_args import (
+    resolve_agentscope_tool_args as _resolve_agentscope_tool_args,
+)
 from app.services.ai.runtime.agentscope.tools import RuntimeToolSpec
 from app.services.ai.runners.assistant_agent_runner import (
     _build_file_tool_metadata,
-    _resolve_agentscope_tool_args,
 )
 from app.services.ai.runners.chatbi.run_state import DataRunState
 from app.services.ai.runners.chatbi.sql_result_compact import (

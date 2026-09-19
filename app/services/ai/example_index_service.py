@@ -179,7 +179,6 @@ class ExampleIndexService:
         from app.models.chatbi_example import ChatBIExample
         from app.models.metadata import MetaDataset
         from sqlalchemy import select
-        import asyncio
 
         async def _run_sync():
             try:
@@ -236,10 +235,12 @@ class ExampleIndexService:
             except Exception as e:
                 logger.error("[ExampleIndex Sync] Sync background task failed: %s", e, exc_info=True)
 
-        try:
-            asyncio.create_task(_run_sync())
-        except Exception as e:
-            logger.warning("[ExampleIndex Sync] Failed to trigger background sync: %s", e)
+        from app.core.cancellation import spawn_detached
+
+        spawn_detached(
+            _run_sync(),
+            name="example-index-sync",
+        )
 
     @staticmethod
     async def search_knn(

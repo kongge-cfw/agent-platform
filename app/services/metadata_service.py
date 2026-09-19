@@ -4,7 +4,6 @@ from sqlalchemy import select, delete, update, or_, cast, String, Integer, func
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-import asyncio
 import logging
 from app.models.metadata import MetaDataset, MetaTable, MetaColumn, MetaMetric, MetaRelationship
 from app.services.ai.config import AgentConfigProvider
@@ -19,53 +18,60 @@ class MetadataService:
     
     @staticmethod
     async def get_datasets(db: AsyncSession) -> List[MetaDataset]:
-        # Optimized query to fetch counts
         stmt = select(MetaDataset).options(
             selectinload(MetaDataset.tables),
             selectinload(MetaDataset.metrics)
         )
         result = await db.execute(stmt)
         datasets = result.scalars().all()
-        
-        # Populate counts
+
+        relationship_counts: Dict[int, int] = {}
+        dataset_ids = [ds.id for ds in datasets]
+        if dataset_ids:
+            # 一条关系的源表和目标表可能属于同一数据集，先合并两端归属，再按
+            # relationship_id 去重聚合，避免逐数据集查询产生 N+1。
+            relationship_dataset_pairs = (
+                select(
+                    MetaTable.dataset_id.label("dataset_id"),
+                    MetaRelationship.id.label("relationship_id"),
+                )
+                .join(
+                    MetaRelationship,
+                    MetaRelationship.source_table_id == MetaTable.id,
+                )
+                .where(MetaTable.dataset_id.in_(dataset_ids))
+                .union_all(
+                    select(
+                        MetaTable.dataset_id.label("dataset_id"),
+                        MetaRelationship.id.label("relationship_id"),
+                    )
+                    .join(
+                        MetaRelationship,
+                        MetaRelationship.target_table_id == MetaTable.id,
+                    )
+                    .where(MetaTable.dataset_id.in_(dataset_ids))
+                )
+                .subquery()
+            )
+            relationship_count_stmt = (
+                select(
+                    relationship_dataset_pairs.c.dataset_id,
+                    func.count(
+                        func.distinct(relationship_dataset_pairs.c.relationship_id)
+                    ).label("relationship_count"),
+                )
+                .group_by(relationship_dataset_pairs.c.dataset_id)
+            )
+            relationship_count_result = await db.execute(relationship_count_stmt)
+            relationship_counts = {
+                dataset_id: relationship_count
+                for dataset_id, relationship_count in relationship_count_result.all()
+            }
+
         for ds in datasets:
             ds.table_count = len(ds.tables)
             ds.metric_count = len(ds.metrics)
-            # Relationship count: Relationships are not directly on Dataset, but derived from tables
-            # This could be expensive in a loop. For list view, maybe we can skip or do a separate count query?
-            # Or assume we only need table/metric counts for list view? 
-            # Request asked for "Digital labels on cards: Table count, Metric count, Relationship count".
-            # So we need it. Let's do a quick query for each or optimize.
-            # OPTIMIZATION: Get all table IDs for this dataset
-            table_ids = [t.id for t in ds.tables]
-            ds.relationship_count = 0 
-            if table_ids:
-                # We need a synchronous way or await in loop. Await in loop is fine for N<50 datasets.
-                # But sqlalchemy objects in async session... 
-                # Better: Pre-fetch all relationships or use count query.
-                rel_count_stmt = select(func.count(MetaRelationship.id)).where(
-                    (MetaRelationship.source_table_id.in_(table_ids)) | 
-                    (MetaRelationship.target_table_id.in_(table_ids))
-                )
-                # We can't await inside this synchronous iteration if we return list directly.
-                # We need to change structure to async loop.
-                pass 
-                
-        # Since we need async execution for relationship counts, let's do it properly
-        for ds in datasets:
-            ds.table_count = len(ds.tables)
-            ds.metric_count = len(ds.metrics)
-            
-            table_ids = [t.id for t in ds.tables]
-            if table_ids:
-                 rel_count_stmt = select(func.count(MetaRelationship.id)).where(
-                    (MetaRelationship.source_table_id.in_(table_ids)) | 
-                    (MetaRelationship.target_table_id.in_(table_ids))
-                )
-                 rel_count = await db.scalar(rel_count_stmt)
-                 ds.relationship_count = rel_count or 0
-            else:
-                ds.relationship_count = 0
+            ds.relationship_count = relationship_counts.get(ds.id, 0)
                 
         return datasets
 
@@ -425,18 +431,25 @@ class MetadataService:
 
         # 级联删除本地 Redis 向量
         try:
+            from app.core.cancellation import spawn_detached
             from app.services.ai.metadata_index_service import MetadataIndexService
-            import asyncio
-            asyncio.create_task(MetadataIndexService.delete_dataset_vectors(dataset_id))
+
+            spawn_detached(
+                MetadataIndexService.delete_dataset_vectors(dataset_id),
+                name=f"delete-metadata-vectors-{dataset_id}",
+            )
         except Exception as ex:
             logger.warning("[Local Redis Sync] Failed to delete dataset vectors: %s", ex)
 
         # 5. Cascade Delete RAGFlow KB (Background or Fire-and-forget)
         if rag_kb_id:
             from app.services.metadata_rag_service import MetadataRagService
-            # We don't await this to keep the API responsive, or handle it in BackgroundTasks.
-            # For simplicity, we just trigger it.
-            asyncio.create_task(MetadataRagService.delete_rag_dataset(rag_kb_id))
+            from app.core.cancellation import spawn_detached
+
+            spawn_detached(
+                MetadataRagService.delete_rag_dataset(rag_kb_id),
+                name=f"delete-rag-dataset-{rag_kb_id}",
+            )
 
     # --- Table/Column CRUD (Simplified for now) ---
     

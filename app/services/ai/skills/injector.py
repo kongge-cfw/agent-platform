@@ -367,7 +367,8 @@ class SkillInjector:
     ) -> List[str]:
         """挂载与自动匹配技能，返回 skills_injection。"""
         from app.services.ai.hitl_continuation import (
-            HitlContinuationStore,
+            HitlContinuationCoordinator,
+            HitlContinuationUnavailableError,
             should_restore_hitl_continuation,
         )
 
@@ -379,8 +380,8 @@ class SkillInjector:
 
         if conversation_id and should_restore_hitl_continuation(user_query):
             try:
-                store = await HitlContinuationStore.from_runtime()
-                continuation = await store.get(
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                continuation = await coordinator.get(
                     user_info=user_info,
                     conversation_id=conversation_id,
                 )
@@ -400,6 +401,8 @@ class SkillInjector:
                             "_hitl_restore": True,
                         }
                     )
+            except HitlContinuationUnavailableError:
+                raise
             except Exception as restore_err:
                 logger.warning("[Skills] Failed to restore HITL continuation skills: %s", restore_err)
 
@@ -782,14 +785,16 @@ class SkillInjector:
 
         if conversation_id:
             try:
-                store = await HitlContinuationStore.from_runtime()
-                await store.remember_turn_inputs(
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                await coordinator.remember_turn_inputs(
                     user_info=user_info,
                     conversation_id=conversation_id,
                     user_query=user_query,
                     messages=messages,
                     skills=activated_skill_metas,
                 )
+            except HitlContinuationUnavailableError:
+                raise
             except Exception as persist_err:
                 logger.warning("[Skills] Failed to persist HITL continuation skills: %s", persist_err)
 

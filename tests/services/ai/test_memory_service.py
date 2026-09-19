@@ -1,5 +1,6 @@
 import pytest
 import json
+import logging
 from unittest.mock import MagicMock, AsyncMock, patch
 from app.services.ai.conversation_identity import MissingUserIdentityError
 from app.services.ai.memory_service import MemoryService
@@ -131,9 +132,10 @@ async def test_memory_service_add_message(mock_redis):
         assert pipe.execute.call_count == 2
 
 @pytest.mark.asyncio
-async def test_memory_service_get_history(mock_redis):
+async def test_memory_service_get_history(mock_redis, caplog):
     """测试获取历史记录及其限额过滤"""
     service = MemoryService(max_history_turns=2) # Max 4 messages
+    caplog.set_level(logging.DEBUG, logger="app.services.ai.memory_service")
     
     # Mock data in Redis (5 items), in list-index order (oldest first)
     mock_data = [
@@ -169,6 +171,13 @@ async def test_memory_service_get_history(mock_redis):
         history_limited = await service.get_history("u1", "c1", limit=2)
         assert len(history_limited) == 2
     assert history_limited[0]["content"] == "msg 3"
+    fetch_records = [
+        record
+        for record in caplog.records
+        if "[MemoryService] Fetching history" in record.getMessage()
+    ]
+    assert fetch_records
+    assert all(record.levelno == logging.DEBUG for record in fetch_records)
 
 
 @pytest.mark.asyncio

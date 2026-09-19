@@ -64,8 +64,7 @@ class RouteStep(BasePipelineStep):
 
         if not messages:
             yield {"content": AgentServicePrompts.EMPTY_REQUEST}
-            context.execution_status = "empty_request"
-            shared_state["execution_status"] = "empty_request"
+            context.set_execution_status("empty_request")
             return
 
         normalized_quick_context = normalize_quick_result_context(context.quick_context)
@@ -165,8 +164,7 @@ class RouteStep(BasePipelineStep):
                     "content": str(err_msg),
                     "trace_id": trace_id,
                 }
-                context.execution_status = "denied"
-                shared_state["execution_status"] = "denied"
+                context.set_execution_status("denied")
                 return
         else:
             # 外部注入或单测环境模拟
@@ -288,8 +286,7 @@ class RouteStep(BasePipelineStep):
                     execution_time_ms=preparation_elapsed_ms,
                 )
                 yield {"content": AgentServicePrompts.NO_AGENT_CONFIG}
-            context.execution_status = "no_agent_config"
-            shared_state["execution_status"] = "no_agent_config"
+            context.set_execution_status("no_agent_config")
             return
 
         # 3. 挂载 Session MCP 工具

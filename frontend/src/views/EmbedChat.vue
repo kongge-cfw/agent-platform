@@ -23,7 +23,7 @@
     />
 
     <!-- Persistent Global Watermark (Fixed position, now in background) -->
-    <div v-if="currentUser?.watermark ? currentUser.watermark.enabled : true" class="fixed inset-0 pointer-events-none overflow-hidden z-0 opacity-[0.04] select-none grid grid-cols-2 sm:grid-cols-3 gap-x-10 gap-y-24 p-10 justify-items-center items-center h-full w-full" aria-hidden="true">
+    <div v-if="currentUser?.watermark?.enabled === true" class="fixed inset-0 pointer-events-none overflow-hidden z-0 opacity-[0.04] select-none grid grid-cols-2 sm:grid-cols-3 gap-x-10 gap-y-24 p-10 justify-items-center items-center h-full w-full" aria-hidden="true">
         <div v-for="n in 60" :key="n" class="text-[10px] sm:text-xs font-black -rotate-[30deg] whitespace-nowrap uppercase tracking-tighter">
             <template v-if="currentUser?.watermark?.style === 'custom'">
                 {{ currentUser?.watermark?.text || '南孜系统' }}
@@ -402,10 +402,11 @@
         </div>
       </div>
       <!-- Message List -->
-      <div
+      <ChatMessageRow
         v-for="msg in displayMessages"
-        :key="msg.id"
-        class="flex flex-col space-y-4 animate-fade-in-up"
+        :key="chatMessageRenderKey(msg)"
+        surface="embed"
+        :role="msg.role"
       >
         <!-- Time Label -->
         <div v-if="msg.isTimeLabel" class="flex justify-center py-2 animate-fade-in">
@@ -1103,7 +1104,7 @@
             </div>
             </div>
         </div>
-      </div>
+      </ChatMessageRow>
     </div>
     <!-- Floating Scroll Down Button (Refined) -->
     <transition
@@ -2238,6 +2239,7 @@ import ConfirmModal from "@/components/ConfirmModal.vue";
 import ChatSettings from "@/components/embed/ChatSettings.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
 import ChatExecutionTimeline from "@/components/chat/ChatExecutionTimeline.vue";
+import ChatMessageRow from "@/components/chat/ChatMessageRow.vue";
 import ChatTodoCard from "@/components/chat/ChatTodoCard.vue";
 import BashEnvBanner from "@/components/chat/BashEnvBanner.vue";
 import DockerTerminalModal from "@/components/chat/DockerTerminalModal.vue";
@@ -2283,7 +2285,8 @@ import {
   stripInternalContextBlocks,
 } from "@/utils/streamContentSanitize";
 import { normalizeAgentSwitchCommand } from "@/utils/agentSwitchCommands";
-import { createSseLineParser } from "@/utils/chartRenderer";
+import { createSseLineParser } from "@/utils/sseLineParser";
+import type { ChatMessageBase } from "@/types/chat";
 import { modelApi, type AIModel, type ReasoningEffort } from "@/api/model";
 import {
   type TurnType,
@@ -2324,6 +2327,11 @@ import {
   useChatAttachments,
 } from "@/composables/chat/useChatAttachments";
 import { groupChatHistoryByDate } from "@/composables/chat/useChatHistoryGroups";
+import { chatMessageRenderKey } from "@/utils/chatMessageRenderKey";
+import {
+  applyResumeRunStatusEvent,
+  applyRunStatusEvent,
+} from "@/utils/chatRunStatus";
 import {
   applyStreamTraceId,
   appendAssistantBodyDelta,
@@ -2340,7 +2348,7 @@ import {
   type GroundingBlockedAction,
   type GroundingBlockedPayload,
 } from "@/utils/agentscopeSseHandlers";
-import { cancelOpenTodosInMessages, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
+import { activeTodoTimelineFromMessages, advanceOpenTodos, cancelOpenTodos, hydrateHistoryProcessTimeline, timelineHasPending } from "@/utils/processTimeline";
 import {
   discardInflightConversation,
   hasLiveGeneratingAgent,
@@ -2491,41 +2499,15 @@ interface DatasetNavigationPayload {
   refresh_disabled_reason?: string | null;
   _failed_at?: string;
 }
-interface Message {
-  id: number;
-  trace_id?: string;
-  role: "user" | "agent" | "system";
-  content: string;
+interface Message extends ChatMessageBase {
   errorDetail?: StreamErrorDetail;
-  reasoningContent?: string;
-  isReasoningExpanded?: boolean;
   files?: ChatFile[];
   logs?: LogEntry[];
-  citations?: any[];
-  isThinking?: boolean;
-  isThoughtExpanded?: boolean;
-  processNarration?: string;
-  processNarrationPending?: string;
-  processTimeline?: import("@/utils/processTimeline").ProcessTimelineItem[];
-  isProcessNarrationExpanded?: boolean;
-  isCitationsExpanded?: boolean;
-  thoughtStartTime?: number;
-  thoughtDuration?: string;
-  thinkingText?: string;
-  agentName?: string;
-  agentDisplayName?: string;
-  agentType?: string;
-  isSavedReportResult?: boolean;
   turnType?: TurnType | string;
   hasDataOutput?: boolean;
   chatbiInsight?: ChatBIInsightMeta;
   chatbiMetadataGuide?: ChatBIMetadataGuidePayload;
   agentHandoff?: AgentHandoffNoticeData;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
-  feedback?: "up" | "down" | null;
-  timestamp?: string;
   isTimeLabel?: boolean;
   pendingPermission?: PendingToolPermission;
   pendingExternalExecution?: PendingExternalExecution;
@@ -2542,11 +2524,6 @@ interface Message {
   userQuestion?: UserQuestionState;
   _hasSilentlyRefreshed?: boolean;
 }
-
-const isAgentTimelineMessage = (msg: Message): boolean => {
-  const role = (msg as unknown as { role?: string }).role;
-  return role === "agent" || role === "assistant";
-};
 
 const reusableResultCountByTrace = ref<Record<string, number>>({});
 const currentMessageReusableCount = (msg: Message): number => {
@@ -2590,20 +2567,22 @@ function visibleStreamBody(msg: Message): string {
     : (msg.content || "");
 }
 
-function getSkillFlowBadgesForMessage(msg: Message, allMessages: Message[]): SkillFlowBadge[] {
-  if (msg.role !== 'agent') return [];
-  const idx = allMessages.findIndex(m => m.id === msg.id);
-  if (idx <= 0) return [];
-  let files: ChatFile[] = [];
-  for (let i = idx - 1; i >= 0; i--) {
-    const prev = allMessages[i];
-    if (!prev) continue;
-    if (prev.role === 'user') {
-      files = prev.files || [];
-      break;
+const skillFlowBadgesByMessageId = computed(() => {
+  const badgesById = new Map<number, SkillFlowBadge[]>();
+  let latestUserFiles: ChatFile[] = [];
+  for (const [index, message] of messages.value.entries()) {
+    if (message.role === "user") {
+      latestUserFiles = message.files || [];
+    } else if (message.role === "agent" && index > 0) {
+      badgesById.set(message.id, buildSkillFlowBadges(latestUserFiles, message.logs || []));
     }
   }
-  return buildSkillFlowBadges(files, msg.logs || []);
+  return badgesById;
+});
+
+function getSkillFlowBadgesForMessage(msg: Message, allMessages: Message[]): SkillFlowBadge[] {
+  void allMessages;
+  return skillFlowBadgesByMessageId.value.get(msg.id) || [];
 }
 
 // Helper: Format Timestamp for Bubbles (Smart Date)
@@ -3032,19 +3011,9 @@ const setBashBannerVisible = (visible: boolean) => {
 const handleIgnoreBashBanner = () => {
   setBashBannerVisible(false);
 };
-const activeTodoTimeline = computed(() => {
-  for (let i = messages.value.length - 1; i >= 0; i--) {
-    const msg = messages.value[i];
-    if (!msg) continue;
-    if (isAgentTimelineMessage(msg)) {
-      const hasTodo = msg.processTimeline?.some((item) => item.kind === 'todo');
-      if (hasTodo) {
-        return msg.processTimeline;
-      }
-    }
-  }
-  return undefined;
-});
+const activeTodoTimeline = computed(() =>
+  activeTodoTimelineFromMessages(messages.value),
+);
 const datasetMenuLoading = ref(false);
 const isInitialLoading = ref(true);
 const messagesContainer = ref<HTMLDivElement | null>(null);
@@ -6380,6 +6349,7 @@ const handleInitConfig = async (data: Record<string, any>) => {
     stashCurrentInflightIfNeeded();
     applyInitConfigPayload(data);
     postInitSuccess();
+    void fetchUserInfo();
     await initChat({ skipAuth: true });
     return;
   }
@@ -6820,6 +6790,7 @@ const mapServerConversationMessages = (rawMessages: any[], idOffset = 0): Messag
     batch.push(attachHitlCardsFromTimeline({
       id: Date.now() + idx * 2 + 1 + idOffset,
       trace_id: item.trace_id,
+      status: item.status ?? undefined,
       role: "agent",
       content: String(item.content || ""),
       reasoningContent: item.reasoning_content ?? undefined,
@@ -7255,7 +7226,7 @@ const stopGeneration = () => {
   const lastMsg = messages.value.length > 0 ? messages.value[messages.value.length - 1] : null;
   // SSE 会立刻被掐断，后端的 todo_update / run_status=cancelled 到不了前端。
   // 必须在本地先把清单收尾，否则会一直转圈「进行中」。
-  cancelOpenTodosInMessages(messages.value);
+  if (lastMsg?.role === "agent") cancelOpenTodos(lastMsg);
   if (conversationId.value) {
     void cancelConversationRun(conversationId.value, {
       traceId: lastMsg?.trace_id,
@@ -7902,35 +7873,10 @@ const applyPermissionStreamEvent = (msg: Message, data: any) => {
 
   if (applyReusableResultStatusEvent(msg, data)) return;
 
-  if (data?.type === "run_status") {
-    // 恢复流（权限确认 / 外部执行）在末尾发射 run_status 作为终态，其 status 为
-    // success / rejected / error 等真实执行结果。按终态映射状态，避免把“用户拒绝”
-    // 或“执行失败”错误显示为已完成（拒绝/失败必须保留其自身语义）。
-    if (msg.pendingPermission) {
-      msg.pendingPermission.status =
-        data.status === "awaiting_permission"
-          ? "pending"
-          : data.status === "rejected" || data.status === "denied"
-          ? "rejected"
-          : data.status === "error" || data.status === "failed"
-            ? "error"
-            : "approved";
-      if (data.status === "awaiting_permission") msg.pendingPermission.expanded = true;
-    }
-    if (msg.pendingExternalExecution) {
-      msg.pendingExternalExecution.status =
-        data.status === "error" || data.status === "failed" ? "error" : "completed";
-    }
-    msg.isThinking = false;
+  if (applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))) {
     clearStallTimer();
     showStalledPrompt.value = false;
     if (messages.value.includes(msg)) markOutputCompleted();
-    if (data.status === "success") {
-      (msg as any).status = "success";
-    } else if (data.status === "cancelled") {
-      (msg as any).status = "cancelled";
-      cancelOpenTodosInMessages(messagesOwningAgent(msg));
-    }
     return;
   }
 
@@ -8070,7 +8016,8 @@ const submitBusinessConfirmation = async (
   card.fields = payload.fields.map((field) => ({ ...field }));
   card.status = "submitted";
   card.decision = payload.confirmed ? "confirmed" : "cancelled";
-  if (!payload.confirmed) cancelOpenTodosInMessages(messages.value);
+  if (payload.confirmed) advanceOpenTodos(msg);
+  else cancelOpenTodos(msg);
   userInput.value = content;
   await sendMessage();
 };
@@ -8092,7 +8039,8 @@ const submitUserQuestion = async (
   card.selected_option_ids = [...payload.selectedOptionIds];
   card.custom_input = payload.customInput;
   card.status = payload.cancelled ? "cancelled" : "submitted";
-  if (payload.cancelled) cancelOpenTodosInMessages(messages.value);
+  if (payload.cancelled) cancelOpenTodos(msg);
+  else advanceOpenTodos(msg);
   userInput.value = content;
   await sendMessage();
 };
@@ -8583,18 +8531,11 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
               remoteRunActive.value = true;
               void refreshCurrentRunStatus();
             }
-          } else if (data.type === "run_status") {
+          } else if (applyRunStatusEvent(agentMsg.value, data, streamMessages)) {
             flushContentBuffer();
-            agentMsg.value.isThinking = false;
             clearStallTimer();
             showStalledPrompt.value = false;
             if (isViewingStream()) markOutputCompleted();
-            if (data.status === "success") {
-              (agentMsg.value as any).status = "success";
-            } else if (data.status === "cancelled") {
-              (agentMsg.value as any).status = "cancelled";
-              cancelOpenTodosInMessages(streamMessages);
-            }
           } else if (data.type === "browser_session") {
             const targetSessionId = String(data.session_id || "").trim();
             if (targetSessionId && isViewingStream()) {
@@ -8744,6 +8685,13 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
         applyStreamTraceId(agentMsg.value, data);
         if (handleBufferedBodyEvent(data)) continue;
         if (applyReusableResultStatusEvent(agentMsg.value, data)) continue;
+        if (applyRunStatusEvent(agentMsg.value, data, streamMessages)) {
+          flushContentBuffer();
+          clearStallTimer();
+          showStalledPrompt.value = false;
+          if (isViewingStream()) markOutputCompleted();
+          continue;
+        }
         if (data.type === "log") addEmbedLogFromStream(agentMsg.value, data);
         else if (mergeStreamCitations(agentMsg.value, data)) continue;
         else if (dispatchAgentscopeStreamEvent(agentMsg.value, data, addEmbedLogFromStream, streamMessages, (env) => {

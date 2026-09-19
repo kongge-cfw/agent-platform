@@ -5,7 +5,7 @@ import ConfirmModal from '@/components/ConfirmModal.vue'
 import { useToast } from '@/composables/useToast'
 import { useUser } from '@/composables/useUser'
 import { metadataApi, type MetaDriftAlert, type AnalyzeColumnResult, type AnalyzeUpdateCommentResult } from '@/api/metadata'
-import { createSseLineParser } from '@/utils/chartRenderer'
+import { createSseLineParser } from '@/utils/sseLineParser'
 
 const props = defineProps<{
   show?: boolean

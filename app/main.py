@@ -114,9 +114,17 @@ async def lifespan(app: FastAPI):
     apply_agentscope_docker_patches()
     start_docker_workspace_reaper()
     start_k8s_workspace_reaper()
-    asyncio.create_task(maybe_rebuild_local_vectors_on_startup())
+    from app.core.cancellation import spawn_detached
+
+    spawn_detached(
+        maybe_rebuild_local_vectors_on_startup(),
+        name="startup-local-vector-rebuild",
+    )
     # 记忆摘要索引：Redis 重启后易丢失，启动时自动 ensure（设计文档约定）
-    asyncio.create_task(maybe_ensure_memory_index_on_startup())
+    spawn_detached(
+        maybe_ensure_memory_index_on_startup(),
+        name="startup-memory-index-ensure",
+    )
 
     # Mounted Starlette 子应用不会自动执行自己的 lifespan；显式托管
     # FastMCP 的 session manager，否则首次请求会报 Task group 未初始化。

@@ -121,10 +121,9 @@ class ExecutionStep(BasePipelineStep):
         def sync_execution_state() -> None:
             context.full_response_content = full_response_content
             context.full_reasoning_content = full_reasoning_content
-            context.execution_status = execution_status
+            context.set_execution_status(execution_status)
             context.has_data_output = has_data_output
             context.tool_run_text = tool_run_text
-            shared_state["execution_status"] = execution_status
             shared_state["full_response_content"] = full_response_content
             shared_state["full_reasoning_content"] = full_reasoning_content
 

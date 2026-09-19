@@ -11,6 +11,7 @@ interface Props {
   details?: string[]
   detailsLabel?: string
   detailsLimit?: number
+  showCancel?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -20,7 +21,8 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
   details: () => [],
   detailsLabel: '影响配置',
-  detailsLimit: 5
+  detailsLimit: 5,
+  showCancel: true,
 })
 
 const emit = defineEmits<{
@@ -63,74 +65,90 @@ onUnmounted(() => {
 <template>
   <Teleport to="body">
     <div
-      class="fixed inset-0 z-[13000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      class="fixed inset-0 z-[13000] flex items-center justify-center p-4 bg-black/[0.45]"
       role="dialog"
       aria-modal="true"
       @click.self="!loading && $emit('cancel')"
     >
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-sm w-full overflow-hidden scale-100 transition-transform duration-200">
-        <div class="p-6 text-center">
-          <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full mb-4" :class="{
-            'bg-red-100 text-red-600': type === 'danger',
-            'bg-blue-100 text-blue-600': type === 'primary',
-            'bg-yellow-100 text-yellow-600': type === 'warning'
-          }">
-            <svg v-if="type === 'danger'" class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-            <svg v-else-if="type === 'warning'" class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-            <svg v-else class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <!-- 视觉对齐 Ant Design Modal.warning / Modal.confirm：416 宽、左图标、右标题正文、底栏右对齐 -->
+      <div
+        class="w-[416px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-white dark:bg-gray-800"
+        style="box-shadow: 0 6px 16px 0 rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.12), 0 9px 28px 8px rgba(0,0,0,0.05);"
+      >
+        <div class="flex gap-3 px-6 pt-5">
+          <div
+            class="mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-white"
+            :class="{
+              'bg-[#ff4d4f]': type === 'danger',
+              'bg-primary': type === 'primary',
+              'bg-[#faad14]': type === 'warning',
+            }"
+            aria-hidden="true"
+          >
+            <svg v-if="type === 'primary'" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 16h-1v-4h-1m1-4h.01" />
+            </svg>
+            <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v4m0 4h.01" />
+            </svg>
           </div>
-          <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">{{ title }}</h3>
-          <!-- slot 优先：有 slot 内容时左对齐展示结构化信息；否则回退到 message 文本 -->
-          <div v-if="$slots.default" class="mt-3 text-left">
-            <slot />
-          </div>
-          <p v-else-if="message" class="text-sm text-gray-500 dark:text-gray-400 mt-2 whitespace-pre-line">{{ message }}</p>
-          <div v-if="details?.length" class="mt-3 text-left">
-            <p class="mb-1 text-xs font-semibold text-gray-500 dark:text-gray-400">
-              {{ detailsLabel }}（{{ details.length }}）
-            </p>
-            <ul class="max-h-36 space-y-1 overflow-y-auto rounded-lg bg-gray-50 p-2 text-xs text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
-              <li v-for="(detail, index) in (showAllDetails ? details : visibleDetails)" :key="`${index}-${detail}`" class="truncate" :title="detail">
-                {{ detail }}
-              </li>
-            </ul>
-            <button
-              v-if="hasHiddenDetails"
-              type="button"
-              class="mt-1 text-xs font-medium text-primary hover:underline"
-              @click="toggleDetails"
+          <div class="min-w-0 flex-1 pb-2">
+            <h3 class="text-base font-semibold leading-6 text-[rgba(0,0,0,0.88)] dark:text-gray-100">{{ title }}</h3>
+            <div v-if="$slots.default" class="mt-2">
+              <slot />
+            </div>
+            <p
+              v-else-if="message"
+              class="mt-2 text-sm leading-6 text-[rgba(0,0,0,0.65)] dark:text-gray-400 whitespace-pre-line"
             >
-              {{ showAllDetails ? '收起列表' : `还有 ${details.length - detailsLimit} 个，展开查看` }}
-            </button>
+              {{ message }}
+            </p>
+            <div v-if="details?.length" class="mt-3">
+              <p class="mb-1 text-xs font-medium text-[rgba(0,0,0,0.45)] dark:text-gray-400">
+                {{ detailsLabel }}（{{ details.length }}）
+              </p>
+              <ul class="max-h-36 space-y-1 overflow-y-auto rounded-md bg-[#fafafa] p-2 text-xs text-[rgba(0,0,0,0.65)] dark:bg-gray-900/40 dark:text-gray-300">
+                <li v-for="(detail, index) in (showAllDetails ? details : visibleDetails)" :key="`${index}-${detail}`" class="truncate" :title="detail">
+                  {{ detail }}
+                </li>
+              </ul>
+              <button
+                v-if="hasHiddenDetails"
+                type="button"
+                class="mt-1 text-xs font-medium text-primary hover:text-primary-hover"
+                @click="toggleDetails"
+              >
+                {{ showAllDetails ? '收起列表' : `还有 ${details.length - detailsLimit} 个，展开查看` }}
+              </button>
+            </div>
           </div>
         </div>
-        <div class="bg-gray-50 dark:bg-gray-900/50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+        <div class="flex justify-end gap-2 px-4 py-3">
+          <button
+            v-if="showCancel"
+            @click="!loading && $emit('cancel')"
+            type="button"
+            class="inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-[15px] text-sm text-[rgba(0,0,0,0.88)] transition-colors hover:border-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:border-primary dark:hover:text-primary"
+            :disabled="loading"
+          >
+            {{ cancelText }}
+          </button>
           <button
             ref="confirmButtonRef"
             @click="!loading && $emit('confirm')"
             type="button"
-            class="w-full inline-flex justify-center items-center gap-1.5 rounded-md border border-transparent shadow-sm px-4 py-2 text-base font-medium text-white sm:ml-3 sm:w-auto sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-transparent px-[15px] text-sm text-white shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60"
             :class="{
-              'bg-red-600 hover:bg-red-700 focus:ring-red-500': type === 'danger',
-              'bg-primary hover:bg-primary-dark focus:ring-primary': type === 'primary',
-              'bg-yellow-600 hover:bg-yellow-700 focus:ring-yellow-500': type === 'warning'
+              'bg-[#ff4d4f] hover:bg-[#ff7875] focus:ring-[#ff4d4f]/30': type === 'danger',
+              'bg-primary hover:bg-primary-hover focus:ring-primary/30': type !== 'danger',
             }"
             :disabled="loading"
           >
-            <!-- SVG Loading Spinner -->
-            <svg v-if="loading" class="animate-spin -ml-1 mr-1 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+            <svg v-if="loading" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
             <span>{{ loading ? '处理中...' : confirmText }}</span>
-          </button>
-          <button 
-            @click="!loading && $emit('cancel')" 
-            type="button" 
-            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 shadow-sm px-4 py-2 bg-white dark:bg-gray-800 text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="loading"
-          >
-            {{ cancelText }}
           </button>
         </div>
       </div>

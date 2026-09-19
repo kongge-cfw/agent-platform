@@ -1,4 +1,5 @@
 import JSON5 from "json5";
+export { createSseLineParser } from "./sseLineParser";
 
 export type ChartParseResult =
   | { ok: true; option: Record<string, any> }
@@ -494,27 +495,6 @@ export function buildChartTableRows(options: Record<string, any>): ChartTableDat
   return {
     columns: ["维度", ...series.map((item: any, index: number) => seriesName(item, index))],
     rows,
-  };
-}
-
-export function createSseLineParser() {
-  let buffer = "";
-
-  return {
-    feed(chunk: string): string[] {
-      buffer += chunk;
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      return lines
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith("data: "))
-        .map((line) => line.slice(6).trim());
-    },
-    flush(): string[] {
-      const line = buffer.trim();
-      buffer = "";
-      return line.startsWith("data: ") ? [line.slice(6).trim()] : [];
-    },
   };
 }
 

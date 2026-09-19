@@ -40,6 +40,7 @@ _MAX_FILTER_ROWS = 50000
 _MAX_FILTER_SAMPLE_ROWS = 50
 _MAX_FILTER_EXPORT_ROWS = 5000
 _MAX_FILTER_RULES = 8
+_MAX_FILTER_RULES_RAW = 80
 _COLUMN_LETTER_RE = re.compile(r"^[A-Za-z]{1,3}$")
 _EXCEL_READ_ACTION_ALIASES = {
     "read": "inspect",
@@ -514,6 +515,63 @@ def _split_in_values(value: Any) -> list[str]:
     return [text]
 
 
+def _membership_values(op: str, value: Any) -> list[str]:
+    if op in {"in", "not_in"}:
+        return _split_in_values(value)
+    text = str(value).strip() if value is not None else ""
+    return [text] if text else []
+
+
+def _fold_same_column_membership_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一列的多条 eq/in（或 ne/not_in）收成一条，避免每家企业各写一条 eq 撞上限。"""
+    folded: list[dict[str, Any]] = []
+    group_index: dict[tuple[str, str], int] = {}
+    for rule in rules:
+        op = str(rule.get("op") or "")
+        if op in {"eq", "in"}:
+            polarity = "in"
+        elif op in {"ne", "not_in"}:
+            polarity = "not_in"
+        else:
+            folded.append(rule)
+            continue
+        values = _membership_values(op, rule.get("value"))
+        column = str(rule.get("column") or "")
+        key = (column, polarity)
+        if key in group_index:
+            existing = folded[group_index[key]]
+            existing_value = existing.get("value")
+            merged = (
+                list(existing_value)
+                if isinstance(existing_value, list)
+                else _membership_values(str(existing.get("op") or polarity), existing_value)
+            )
+            for item in values:
+                if item not in merged:
+                    merged.append(item)
+            if len(merged) > 1:
+                existing["op"] = polarity
+                existing["value"] = merged
+            elif merged:
+                existing["op"] = "eq" if polarity == "in" else "ne"
+                existing["value"] = merged[0]
+            continue
+        if len(values) > 1:
+            folded_rule = {"column": column, "op": polarity, "value": values}
+        elif values:
+            folded_rule = {
+                "column": column,
+                "op": "eq" if polarity == "in" else "ne",
+                "value": values[0],
+            }
+        else:
+            folded.append(rule)
+            continue
+        group_index[key] = len(folded)
+        folded.append(folded_rule)
+    return folded
+
+
 def _parse_filter_rules(raw: Any) -> list[dict[str, Any]]:
     payload = raw
     if isinstance(raw, str):
@@ -535,8 +593,8 @@ def _parse_filter_rules(raw: Any) -> list[dict[str, Any]]:
             "filter 需要 filters。每条规则包含 header 或 column，以及 op、value。"
             '示例：[{"header":"列名","op":"contains","value":"关键词"}]'
         )
-    if len(payload) > _MAX_FILTER_RULES:
-        raise DocumentPathError(f"筛选条件最多 {_MAX_FILTER_RULES} 条")
+    if len(payload) > _MAX_FILTER_RULES_RAW:
+        raise DocumentPathError(f"筛选条件最多 {_MAX_FILTER_RULES_RAW} 条")
     rules: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
@@ -559,6 +617,13 @@ def _parse_filter_rules(raw: Any) -> list[dict[str, Any]]:
                 "value": item.get("value"),
             }
         )
+    rules = _fold_same_column_membership_rules(rules)
+    if len(rules) > _MAX_FILTER_RULES:
+        raise DocumentPathError(
+            f"筛选条件最多 {_MAX_FILTER_RULES} 条（同一列的多条 eq/in 会自动合并）。"
+            "多名/多值请用一条 op=in，例如 "
+            '[{"header":"企业名称","op":"in","value":["甲公司","乙公司"]}]'
+        )
     return rules
 
 
@@ -569,6 +634,38 @@ def _looks_like_column_letter(text: str) -> bool:
         return column_index_from_string(text.upper()) >= 1
     except ValueError:
         return False
+
+
+def _headers_from_sheet_payload(item: dict[str, Any]) -> list[str]:
+    raw = item.get("headers")
+    if isinstance(raw, list) and raw:
+        return [str(name).strip() for name in raw if str(name).strip()]
+    profiles = item.get("column_profiles")
+    if isinstance(profiles, list):
+        names: list[str] = []
+        for column in profiles:
+            if not isinstance(column, dict):
+                continue
+            header = str(column.get("header") or "").strip()
+            if header:
+                names.append(header)
+        return names
+    return []
+
+
+def _workbook_header_summary(sheets: list[dict[str, Any]], *, prefix: str) -> str:
+    parts: list[str] = []
+    for item in sheets[:8]:
+        name = str(item.get("name") or "Sheet").strip() or "Sheet"
+        headers = _headers_from_sheet_payload(item)
+        if headers:
+            shown = headers[:20]
+            extra = f" 等{len(headers)}列" if len(headers) > 20 else ""
+            parts.append(f"{name} 表头：{'、'.join(shown)}{extra}")
+        else:
+            parts.append(name)
+    detail = "；".join(parts)
+    return f"{prefix}。{detail}" if detail else prefix
 
 
 def _resolve_filter_column(
@@ -862,7 +959,11 @@ async def excel_document_read(
       omitted_unique and top_values_row_coverage. sheet_name is optional.
     - filter: evaluate structured predicates in-process. Do not page rows into
       the model. filters is a list of {header|column, op, value}. combine is
-      and/or. matched_count is the total matching rows, not one object's count.
+      and/or. header must be copied verbatim from inspect/profile headers;
+      do not paraphrase the user request or add units. Multiple names on one
+      column must use a single op=in with an array value; same-column eq/in
+      rules are folded automatically.
+      matched_count is the total matching rows, not one object's count.
       matched_values covers every column with the same adaptive top_values.
       Also returns up to 50 sample rows. Pass output_filename to export matches.
     - read_range: preview cells only, not for analysis. Requires sheet_name
@@ -907,7 +1008,15 @@ async def excel_document_read(
                     "headers": headers,
                     "preview": preview,
                 })
-            return {"status": "ok", "summary": f"工作簿包含 {len(sheets)} 个工作表", "data": {"sheets": sheets}, "truncated": False}
+            return {
+                "status": "ok",
+                "summary": _workbook_header_summary(
+                    sheets,
+                    prefix=f"工作簿包含 {len(sheets)} 个工作表",
+                ),
+                "data": {"sheets": sheets},
+                "truncated": False,
+            }
         if action == "profile":
             targets = list(workbook.worksheets)
             if sheet_name:
@@ -937,10 +1046,10 @@ async def excel_document_read(
                         truncated=range_truncated,
                     )
                 )
-            names = "、".join(item["name"] for item in sheets)
-            summary = f"已统计 {len(sheets)} 张工作表"
-            if names:
-                summary += f"：{names}"
+            summary = _workbook_header_summary(
+                sheets,
+                prefix=f"已统计 {len(sheets)} 张工作表",
+            )
             incomplete = []
             for item in sheets:
                 for column in item.get("column_profiles") or []:

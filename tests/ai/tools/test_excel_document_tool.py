@@ -133,3 +133,83 @@ async def test_excel_create_writes_initial_cells(excel_context, tmp_path):
         ]
     finally:
         workbook.close()
+
+
+def test_excel_filter_folds_same_column_eq_rules_into_in():
+    from app.services.ai.tools.excel_document_tool import _parse_filter_rules
+    from app.services.ai.tools.document_paths import DocumentPathError
+
+    folded = _parse_filter_rules(
+        [
+            {"header": "企业名称", "op": "eq", "value": "甲物流有限公司"},
+            {"header": "企业名称", "op": "eq", "value": "乙运输有限公司"},
+            {"header": "状态", "op": "eq", "value": "在营"},
+            {"header": "企业名称", "op": "in", "value": ["丙客运有限公司", "丁仓储有限公司"]},
+        ]
+    )
+    assert folded == [
+        {
+            "column": "企业名称",
+            "op": "in",
+            "value": [
+                "甲物流有限公司",
+                "乙运输有限公司",
+                "丙客运有限公司",
+                "丁仓储有限公司",
+            ],
+        },
+        {"column": "状态", "op": "eq", "value": "在营"},
+    ]
+
+    many = [{"header": "企业名称", "op": "eq", "value": f"企业{i}"} for i in range(9)]
+    assert _parse_filter_rules(many) == [
+        {
+            "column": "企业名称",
+            "op": "in",
+            "value": [f"企业{i}" for i in range(9)],
+        }
+    ]
+
+    too_many_columns = [
+        {"header": f"列{i}", "op": "eq", "value": "x"} for i in range(9)
+    ]
+    with pytest.raises(DocumentPathError, match="筛选条件最多 8 条"):
+        _parse_filter_rules(too_many_columns)
+
+
+def test_excel_inspect_summary_lists_exact_headers():
+    from app.services.ai.tools.excel_document_tool import (
+        _resolve_filter_column,
+        _workbook_header_summary,
+    )
+    from app.services.ai.tools.document_paths import DocumentPathError
+
+    summary = _workbook_header_summary(
+        [
+            {
+                "name": "Sheet1",
+                "headers": ["企业", "所属区县", "总里程", "完整里程", "完整率"],
+            }
+        ],
+        prefix="工作簿包含 1 个工作表",
+    )
+    assert summary == (
+        "工作簿包含 1 个工作表。Sheet1 表头：企业、所属区县、总里程、完整里程、完整率"
+    )
+    profile_summary = _workbook_header_summary(
+        [{"name": "Sheet1", "column_profiles": [{"header": "完整率"}, {"header": "企业"}]}],
+        prefix="已统计 1 张工作表",
+    )
+    assert profile_summary == "已统计 1 张工作表。Sheet1 表头：完整率、企业"
+
+    headers = {
+        1: "企业",
+        2: "所属区县",
+        3: "总里程",
+        4: "完整里程",
+        5: "完整率",
+    }
+    kwargs = {"headers": headers, "min_col": 1, "max_col": 5}
+    assert _resolve_filter_column("完整率", **kwargs) == 5
+    with pytest.raises(DocumentPathError, match="找不到列「轨迹完整率"):
+        _resolve_filter_column("轨迹完整率(%)", **kwargs)

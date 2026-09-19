@@ -14,19 +14,11 @@ from app.services.ai.pipeline.steps.route_step import RouteStep
 from app.services.ai.pipeline.steps.assemble_step import AssembleStep
 from app.services.ai.pipeline.steps.execution_step import ExecutionStep
 from app.services.ai.pipeline.steps.finalize_step import FinalizeStep
+from app.services.ai.turn_status import (
+    PIPELINE_TERMINAL_OR_SHORT_CIRCUIT_STATUSES as TERMINAL_OR_SHORT_CIRCUIT_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
-
-# 中断/非继续推导状态集合
-TERMINAL_OR_SHORT_CIRCUIT_STATUSES = {
-    "quota_exceeded",
-    "cancelled",
-    "empty_request",
-    "no_agent_config",
-    "answered_directly",
-    "denied",
-    "error",
-}
 
 
 class PipelineRunner:
@@ -65,7 +57,7 @@ class PipelineRunner:
             try:
                 async for chunk in step.run(context):
                     if run_handle is not None and getattr(run_handle, "cancelled", False):
-                        context.execution_status = "cancelled"
+                        context.set_execution_status("cancelled")
                         raise asyncio.CancelledError("User cancelled execution run")
                     if isinstance(chunk, dict):
                         from app.services.ai.agent_service import _track_process_timeline
@@ -76,7 +68,7 @@ class PipelineRunner:
                         )
                     yield chunk
             except asyncio.CancelledError:
-                context.execution_status = "cancelled"
+                context.set_execution_status("cancelled")
                 logger.info(f"[PipelineRunner] Run cancelled for trace: {context.trace_id}")
                 # 若尚未执行到 FinalizeStep，确保 FinalizeStep 能够收拢
                 if not is_finalize:
@@ -99,8 +91,7 @@ class PipelineRunner:
                     step.__class__.__name__,
                     sanitize_error_text(e),
                 )
-                context.execution_status = "error"
-                context.shared_state["execution_status"] = "error"
+                context.set_execution_status("error")
                 agent_config = context.agent_config or context.shared_state.get("agent_config")
                 error_chunk = await _enrich_terminal_error_chunk(
                     {

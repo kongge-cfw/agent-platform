@@ -12,10 +12,13 @@ import {
   type BusinessConfirmationState,
 } from "./businessConfirmation";
 import { USER_QUESTION_MESSAGE_PREFIX, parseUserQuestionEvent, type UserQuestionState } from "./userQuestion";
+import { completeOpenTodos, type ProcessTimelineItem } from "./processTimeline";
 
 export type HistoryHitlMessage = {
   role?: string;
   content?: string;
+  status?: string;
+  processTimeline?: ProcessTimelineItem[];
   businessConfirmation?: BusinessConfirmationState;
   userQuestion?: UserQuestionState;
   pendingPermission?: PendingToolPermission;
@@ -39,6 +42,18 @@ function isUserRole(role?: string): boolean {
 function isAssistantRole(role?: string): boolean {
   const value = String(role || "").toLowerCase();
   return value === "assistant" || value === "agent";
+}
+
+function continuationAssistantAfterReceipt<T extends HistoryHitlMessage>(
+  messages: T[],
+  receipt: T,
+): T | undefined {
+  const afterReceipt = messages.slice(messages.indexOf(receipt) + 1);
+  const nextUserIndex = afterReceipt.findIndex((item) => isUserRole(item.role));
+  const sameTurn = nextUserIndex >= 0
+    ? afterReceipt.slice(0, nextUserIndex)
+    : afterReceipt;
+  return sameTurn.find((item) => isAssistantRole(item.role));
 }
 
 function protocolValue(content: string, key: string): string {
@@ -179,6 +194,7 @@ export function resolveHitlCardsInHistory<T extends HistoryHitlMessage>(messages
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || !isAssistantRole(message.role)) continue;
+    if (message.status === "success") completeOpenTodos(message);
     const later = messages.slice(index + 1);
     const conversationMovedOn = later.some((item) => isUserRole(item.role) || isAssistantRole(item.role));
 
@@ -194,6 +210,10 @@ export function resolveHitlCardsInHistory<T extends HistoryHitlMessage>(messages
         const cancelled = String(receipt.content || "").includes("用户已取消");
         confirmation.status = "submitted";
         confirmation.decision = cancelled ? "cancelled" : "confirmed";
+        const continuation = continuationAssistantAfterReceipt(later, receipt);
+        if (!cancelled && continuation?.status === "success") {
+          completeOpenTodos(message);
+        }
       } else if (conversationMovedOn) {
         confirmation.status = "stale";
       }
@@ -210,6 +230,10 @@ export function resolveHitlCardsInHistory<T extends HistoryHitlMessage>(messages
       if (receipt) {
         const cancelled = /cancelled:\s*true/i.test(String(receipt.content || ""));
         question.status = cancelled ? "cancelled" : "submitted";
+        const continuation = continuationAssistantAfterReceipt(later, receipt);
+        if (!cancelled && continuation?.status === "success") {
+          completeOpenTodos(message);
+        }
       } else if (conversationMovedOn) {
         question.status = "stale";
       }

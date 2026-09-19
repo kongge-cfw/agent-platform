@@ -1376,27 +1376,43 @@ class AgentScopeNativeApprovalTool:
             await result
 
 
-_ASK_USER_QUESTION_REPAIR_INSTALLED = False
+_INTERACTIVE_TOOL_INPUT_REPAIR_INSTALLED = False
 
 
-def _rewrite_ask_user_question_tool_call(tool_call: Any) -> None:
-    if str(getattr(tool_call, "name", "") or "") != "ask_user_question":
-        return
-    from app.services.ai.tools.user_question_tools import prepare_ask_user_question_tool_input
+def _prepare_interactive_tool_input(tool_name: str, raw: Any) -> str | None:
+    if tool_name == "ask_user_question":
+        from app.services.ai.tools.user_question_tools import (
+            prepare_ask_user_question_tool_input,
+        )
 
-    prepared = prepare_ask_user_question_tool_input(getattr(tool_call, "input", None))
+        return prepare_ask_user_question_tool_input(raw)
+    if tool_name == "request_user_confirmation":
+        from app.services.ai.tools.user_confirmation_tools import (
+            prepare_request_user_confirmation_tool_input,
+        )
+
+        return prepare_request_user_confirmation_tool_input(raw)
+    return None
+
+
+def _rewrite_interactive_tool_call(tool_call: Any) -> None:
+    tool_name = str(getattr(tool_call, "name", "") or "")
+    prepared = _prepare_interactive_tool_input(
+        tool_name,
+        getattr(tool_call, "input", None),
+    )
     if prepared is None:
         return
     try:
         tool_call.input = prepared
     except Exception:
-        logger.debug("ask_user_question input rewrite skipped", exc_info=True)
+        logger.debug("%s input rewrite skipped", tool_name, exc_info=True)
 
 
-def install_ask_user_question_input_repair() -> None:
-    """Rewrite malformed ask_user_question args before AgentScope jsonschema."""
-    global _ASK_USER_QUESTION_REPAIR_INSTALLED
-    if _ASK_USER_QUESTION_REPAIR_INSTALLED:
+def install_interactive_tool_input_repair() -> None:
+    """Normalize malformed interactive-tool args before AgentScope jsonschema."""
+    global _INTERACTIVE_TOOL_INPUT_REPAIR_INSTALLED
+    if _INTERACTIVE_TOOL_INPUT_REPAIR_INSTALLED:
         return
     try:
         from agentscope._utils import _common as common_mod
@@ -1404,46 +1420,59 @@ def install_ask_user_question_input_repair() -> None:
         from agentscope.agent import _agent as agent_mod
         from agentscope.tool import _toolkit as toolkit_mod
     except Exception:
-        logger.debug("ask_user_question input repair not installed", exc_info=True)
+        logger.debug("interactive tool input repair not installed", exc_info=True)
         return
 
     from app.services.ai.tools.user_question_tools import (
         prepare_ask_user_question_tool_input,
         schema_looks_like_ask_user_question,
     )
+    from app.services.ai.tools.user_confirmation_tools import (
+        prepare_request_user_confirmation_tool_input,
+        schema_looks_like_request_user_confirmation,
+    )
 
     original_loads = common_mod._json_loads_with_repair
 
-    def _json_loads_with_ask_user_question_repair(json_str, schema=None):
+    def _json_loads_with_interactive_tool_repair(json_str, schema=None):
         if schema_looks_like_ask_user_question(schema):
             prepared = prepare_ask_user_question_tool_input(json_str)
+            if prepared is not None:
+                json_str = prepared
+        elif schema_looks_like_request_user_confirmation(schema):
+            prepared = prepare_request_user_confirmation_tool_input(json_str)
             if prepared is not None:
                 json_str = prepared
         return original_loads(json_str, schema)
 
     original_execute = agent_mod.Agent._execute_tool_call
 
-    async def _execute_tool_call_with_ask_user_question_repair(
+    async def _execute_tool_call_with_interactive_tool_repair(
         self,
         tool_call,
         kept_rules=None,
     ):
-        _rewrite_ask_user_question_tool_call(tool_call)
+        _rewrite_interactive_tool_call(tool_call)
         async for event in original_execute(self, tool_call, kept_rules):
             yield event
 
-    common_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
-    agent_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
-    toolkit_mod._json_loads_with_repair = _json_loads_with_ask_user_question_repair
-    agent_mod.Agent._execute_tool_call = _execute_tool_call_with_ask_user_question_repair
-    Agent._execute_tool_call = _execute_tool_call_with_ask_user_question_repair
-    _ASK_USER_QUESTION_REPAIR_INSTALLED = True
+    common_mod._json_loads_with_repair = _json_loads_with_interactive_tool_repair
+    agent_mod._json_loads_with_repair = _json_loads_with_interactive_tool_repair
+    toolkit_mod._json_loads_with_repair = _json_loads_with_interactive_tool_repair
+    agent_mod.Agent._execute_tool_call = _execute_tool_call_with_interactive_tool_repair
+    Agent._execute_tool_call = _execute_tool_call_with_interactive_tool_repair
+    _INTERACTIVE_TOOL_INPUT_REPAIR_INSTALLED = True
+
+
+def install_ask_user_question_input_repair() -> None:
+    """Backward-compatible alias for the unified interactive input repair."""
+    install_interactive_tool_input_repair()
 
 
 def _load_agentscope_toolkit():
     from agentscope.tool import Toolkit
 
-    install_ask_user_question_input_repair()
+    install_interactive_tool_input_repair()
     return Toolkit
 
 

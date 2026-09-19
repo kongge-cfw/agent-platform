@@ -38,6 +38,57 @@ export const lastNonSystemMessage = <T extends InflightChatMessage>(
 const isAgentMessage = (message?: InflightChatMessage | null): boolean =>
   message?.role === "agent" || message?.role === "assistant";
 
+const timelineTodoState = (
+  timeline: unknown,
+): { hasTodo: boolean; hasOpen: boolean } => {
+  if (!Array.isArray(timeline)) return { hasTodo: false, hasOpen: false };
+  let hasTodo = false;
+  let hasOpen = false;
+  for (const item of timeline) {
+    if (!item || typeof item !== "object" || (item as any).kind !== "todo") continue;
+    hasTodo = true;
+    const todos = Array.isArray((item as any).todos) ? (item as any).todos : [];
+    if (todos.some((todo: any) => todo?.status === "pending" || todo?.status === "in_progress")) {
+      hasOpen = true;
+    }
+  }
+  return { hasTodo, hasOpen };
+};
+
+const mergedProcessTimeline = (
+  localTimeline: unknown,
+  serverTimeline: unknown,
+): unknown => {
+  const localState = timelineTodoState(localTimeline);
+  const serverState = timelineTodoState(serverTimeline);
+  if (
+    serverState.hasTodo
+    && !serverState.hasOpen
+    && (!localState.hasTodo || localState.hasOpen)
+  ) {
+    if (!Array.isArray(localTimeline) || localTimeline.length === 0) {
+      return serverTimeline;
+    }
+    const serverTodo = Array.isArray(serverTimeline)
+      ? [...serverTimeline].reverse().find((item) => item?.kind === "todo")
+      : undefined;
+    if (!serverTodo) return localTimeline;
+    const firstLocalTodoIndex = localTimeline.findIndex((item) => item?.kind === "todo");
+    const withoutLocalTodos = localTimeline.filter((item) => item?.kind !== "todo");
+    const insertAt = firstLocalTodoIndex >= 0
+      ? Math.min(firstLocalTodoIndex, withoutLocalTodos.length)
+      : withoutLocalTodos.length;
+    return [
+      ...withoutLocalTodos.slice(0, insertAt),
+      serverTodo,
+      ...withoutLocalTodos.slice(insertAt),
+    ];
+  }
+  return Array.isArray(localTimeline) && localTimeline.length
+    ? localTimeline
+    : serverTimeline;
+};
+
 export const messageLooksIncomplete = (message?: InflightChatMessage | null): boolean => {
   if (!message) return true;
   if (message.role === "user") return true;
@@ -144,10 +195,12 @@ export const mergeCompletedRunIntoMessages = <T extends InflightChatMessage>(
     Object.assign(lastLocal, {
       isThinking: false,
       trace_id: lastLocal.trace_id || lastServer.trace_id,
+      status: lastServer.status ?? lastLocal.status,
       reasoningContent: lastLocal.reasoningContent || lastServer.reasoningContent,
-      processTimeline: (Array.isArray(lastLocal.processTimeline) && lastLocal.processTimeline.length)
-        ? lastLocal.processTimeline
-        : lastServer.processTimeline,
+      processTimeline: mergedProcessTimeline(
+        lastLocal.processTimeline,
+        lastServer.processTimeline,
+      ),
       prompt_tokens: lastServer.prompt_tokens ?? lastLocal.prompt_tokens,
       completion_tokens: lastServer.completion_tokens ?? lastLocal.completion_tokens,
       total_tokens: lastServer.total_tokens ?? lastLocal.total_tokens,
@@ -172,7 +225,10 @@ export const mergeCompletedRunIntoMessages = <T extends InflightChatMessage>(
         content: serverText.length > localText.length ? lastServer.content : lastLocal.content,
         logs: localLogs.length > 0 ? localLogs : lastServer.logs,
         citations: localCitations.length > 0 ? localCitations : lastServer.citations,
-        processTimeline: localTimeline.length > 0 ? localTimeline : lastServer.processTimeline,
+        processTimeline: mergedProcessTimeline(
+          localTimeline,
+          lastServer.processTimeline,
+        ),
       };
     }
     return { messages: next, usedServer: true };

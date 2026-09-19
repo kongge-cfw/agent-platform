@@ -67,6 +67,17 @@ export function confirmationDateTimeInputValue(value: unknown): string {
   return `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}T${pad2(parsed.hh ?? 0)}:${pad2(parsed.mm ?? 0)}`;
 }
 
+export function confirmationDateTimeDisplayValue(value: unknown): string {
+  const input = confirmationDateTimeInputValue(value);
+  return input ? input.replace("T", " ") : "";
+}
+
+export function confirmationDateFromValue(value: unknown): Date | null {
+  const parsed = parseConfirmationDateParts(value);
+  if (!parsed) return null;
+  return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.hh ?? 0, parsed.mm ?? 0);
+}
+
 export function inferConfirmationValueType(
   field: Pick<BusinessConfirmationField, "value" | "value_type">,
 ): BusinessConfirmationValueType {

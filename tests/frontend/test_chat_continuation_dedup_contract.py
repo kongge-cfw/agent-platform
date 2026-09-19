@@ -27,15 +27,18 @@ def test_continuation_actions_have_function_level_submission_guards():
 
 def test_permission_resume_keeps_a_followup_request_pending():
     """第二次工具审批的 awaiting_permission 终态不能覆盖新卡片的 pending 状态。"""
+    reducer = (ROOT / "frontend/src/utils/chatRunStatus.ts").read_text(encoding="utf-8")
+    assert 'event.status === "awaiting_permission"' in reducer
+    assert '"pending"' in reducer
+
     for relative_path in (
         "frontend/src/views/EmbedChat.vue",
         "frontend/src/views/AgentDebug.vue",
     ):
         source = (ROOT / relative_path).read_text(encoding="utf-8")
-        start = source.index('if (data?.type === "run_status")')
-        body = source[start : start + 1400]
-        assert 'data.status === "awaiting_permission"' in body, relative_path
-        assert '"pending"' in body, relative_path
+        start = source.index("const applyPermissionStreamEvent")
+        body = source[start : start + 1200]
+        assert "applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))" in body
 
 
 def test_initial_stream_keeps_composer_busy_while_continuation_is_pending():

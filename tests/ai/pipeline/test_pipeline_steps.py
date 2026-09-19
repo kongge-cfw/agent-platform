@@ -9,6 +9,15 @@ from app.services.ai.pipeline.context import PipelineContext
 from app.services.ai.pipeline.steps.finalize_step import FinalizeStep
 from app.services.ai.pipeline.steps.preflight_step import PreflightStep
 
+def test_pipeline_context_execution_status_has_single_write_api():
+    context = PipelineContext(messages=[])
+
+    context.set_execution_status("awaiting_permission")
+
+    assert context.execution_status == "awaiting_permission"
+    assert context.shared_state["execution_status"] == "awaiting_permission"
+
+
 
 @pytest.mark.asyncio
 async def test_preflight_step_init_chunk_and_success():
@@ -821,6 +830,70 @@ async def test_finalize_completes_todo_and_retracts_untrusted_content_before_sta
     assert context.full_response_content == "安全正文"
     assert persist.await_args.kwargs["content"] == "安全正文"
     assert persist.await_args.kwargs["process_timeline"][0]["counts"]["completed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_restores_prior_hitl_todo_before_success_persistence():
+    """HITL 成功轮即使本轮没收到 todo_update，也要把上一轮清单收尾后写入最新消息。"""
+    context = PipelineContext(
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "【业务确认】用户已确定\n"
+                    "confirmation_id: bc_1\n"
+                    "请根据以下已确认字段继续执行"
+                ),
+            }
+        ],
+        user_info={"user_id": 123},
+        conversation_id="conv_hitl_todo_finalize",
+    )
+    context.lane_user_id = 123
+    context.user_query = context.messages[0]["content"]
+    context.full_response_content = "已完成任务下发。"
+    context.shared_state["process_timeline"] = []
+    context.shared_state["context_source_history"] = [
+        {
+            "role": "assistant",
+            "content": "请确认下发内容",
+            "process_timeline": [
+                {
+                    "kind": "todo",
+                    "id": "todo_current",
+                    "title": "任务清单",
+                    "todos": [
+                        {"content": "解析企业", "status": "completed"},
+                        {"content": "生成确认卡", "status": "in_progress"},
+                        {"content": "下发任务", "status": "pending"},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    with patch(
+        "app.services.ai.agent_service._persist_assistant_message_and_summary",
+        new_callable=AsyncMock,
+    ) as persist, patch(
+        "app.services.ai.agent_service.AuditManager.log_transaction",
+        new_callable=AsyncMock,
+    ):
+        chunks = [chunk async for chunk in FinalizeStep().run(context)]
+
+    todo_update = next(chunk for chunk in chunks if chunk.get("type") == "todo_update")
+    assert todo_update["counts"] == {
+        "pending": 0,
+        "in_progress": 0,
+        "completed": 3,
+        "cancelled": 0,
+    }
+    persisted_todo = next(
+        item
+        for item in persist.await_args.kwargs["process_timeline"]
+        if item.get("kind") == "todo"
+    )
+    assert all(item["status"] == "completed" for item in persisted_todo["todos"])
 
 
 @pytest.mark.asyncio

@@ -86,6 +86,7 @@ def test_external_execution_resume_consumes_shared_sse_parser_payloads_directly(
     shared = _read("frontend/src/utils/agentscopeSseHandlers.ts")
     resume_stream = shared[shared.index("export async function resumeExternalExecutionStream") :]
 
+    assert 'import("@/utils/sseLineParser")' in resume_stream
     assert "for (const payload of lines)" in resume_stream
     assert "for (const payload of parser.flush())" in resume_stream
     assert 'startsWith("data:")' not in resume_stream
@@ -104,7 +105,7 @@ def test_stop_generation_cancels_backend_run_before_aborting_sse():
         assert cancel_at > stop_at > 0
         assert abort_at > cancel_at
         stop_body = source[stop_at:abort_at]
-        assert "cancelOpenTodosInMessages" in stop_body
+        assert "cancelOpenTodos(lastMsg)" in stop_body
 
 
 
@@ -223,9 +224,97 @@ def test_both_chat_surfaces_share_stream_trace_and_citation_normalization():
 def test_embed_chat_uses_shared_sse_parser_for_process_events():
     embed = _read("frontend/src/views/EmbedChat.vue")
 
+    assert 'from "@/utils/sseLineParser"' in embed
     assert "const sseLineParser = createSseLineParser();" in embed
     assert "sseLineParser.feed(decoder.decode(value, { stream: true }))" in embed
     assert 'let buffer = ""; // 缓冲区，用于处理跨 chunk 的不完整行' not in embed
+
+
+def test_chat_surfaces_extend_shared_message_base_and_cache_skill_badges():
+    shared_type = _read("frontend/src/types/chat.ts")
+    embed = _read("frontend/src/views/EmbedChat.vue")
+    debug = _read("frontend/src/views/AgentDebug.vue")
+
+    assert "export interface ChatMessageBase" in shared_type
+    assert 'role: ChatMessageRole' in shared_type
+    for source in (embed, debug):
+        assert 'import type { ChatMessageBase } from "@/types/chat"' in source
+        assert "interface Message extends ChatMessageBase" in source
+        assert "const skillFlowBadgesByMessageId = computed(() =>" in source
+        assert "skillFlowBadgesByMessageId.value.get(msg.id)" in source
+        assert "v-memo" not in source
+
+
+def test_chat_surfaces_share_terminal_reducer_and_safe_message_row_boundary():
+    reducer = _read("frontend/src/utils/chatRunStatus.ts")
+    render_key = _read("frontend/src/utils/chatMessageRenderKey.ts")
+    row = _read("frontend/src/components/chat/ChatMessageRow.vue")
+    embed = _read("frontend/src/views/EmbedChat.vue")
+    debug = _read("frontend/src/views/AgentDebug.vue")
+
+    assert "export function applyRunStatusEvent" in reducer
+    assert "export function applyResumeRunStatusEvent" in reducer
+    assert "completeOpenTodos(message)" in reducer
+    assert "cancelOpenTodos(message)" in reducer
+    assert "resolveHitlCardsInHistory(history)" in reducer
+    for dependency in (
+        "message.status",
+        "pendingPermission?.status",
+        "pendingExternalExecution?.status",
+        "businessConfirmation?.status",
+        "businessConfirmation?.decision",
+        "userQuestion?.status",
+    ):
+        assert dependency in render_key
+    assert '<slot />' in row
+
+    for source, surface in ((embed, "embed"), (debug, "debug")):
+        assert source.count("applyRunStatusEvent(agentMsg.value, data, streamMessages)") >= 2
+        assert "applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))" in source
+        assert "<ChatMessageRow" in source
+        assert f'surface="{surface}"' in source
+        assert ':key="chatMessageRenderKey(msg)"' in source
+        assert "v-memo" not in source
+
+
+def test_sse_parser_has_dedicated_module_with_compatibility_export():
+    parser = _read("frontend/src/utils/sseLineParser.ts")
+    chart = _read("frontend/src/utils/chartRenderer.ts")
+    direct_consumers = (
+        "frontend/src/views/EmbedChat.vue",
+        "frontend/src/views/AgentDebug.vue",
+        "frontend/src/views/MetadataDatasets.vue",
+        "frontend/src/views/MetadataTables.vue",
+        "frontend/src/components/metadata/MetadataDriftAlertsDrawer.vue",
+    )
+
+    assert "export function createSseLineParser()" in parser
+    assert 'export { createSseLineParser } from "./sseLineParser"' in chart
+    assert "export function createSseLineParser()" not in chart
+    for path in direct_consumers:
+        source = _read(path)
+        assert "sseLineParser" in source
+        assert "createSseLineParser" in source
+        assert "createSseLineParser } from \"@/utils/chartRenderer\"" not in source
+        assert "createSseLineParser } from '@/utils/chartRenderer'" not in source
+        assert "createSseLineParser } from '../utils/chartRenderer'" not in source
+
+
+def test_heavy_management_routes_are_lazy_loaded():
+    router = _read("frontend/src/router/index.ts")
+
+    for view in (
+        "AgentDebug",
+        "SystemConfig",
+        "AgentManagement",
+        "AuditLogs",
+        "ChatLogs",
+        "MetadataDatasets",
+        "MetadataTables",
+        "PromptStudio",
+    ):
+        assert f"component: () => import('../views/{view}.vue')" in router
+        assert f"import {view} from '../views/{view}.vue'" not in router
 
 
 def test_embed_chat_keeps_ltm_state_outside_workspace_canvas_extraction():

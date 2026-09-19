@@ -104,17 +104,30 @@ class TodoWriteTool(BaseTool):
             context.todo_snapshot = event if todos else None
             try:
                 from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
-                from app.services.ai.hitl_continuation import HitlContinuationStore
+                from app.services.ai.hitl_continuation import HitlContinuationCoordinator
 
                 conversation_id = str(getattr(context, "conversation_id", "") or "").strip()
-                if conversation_id and todos:
-                    store = await HitlContinuationStore.from_runtime()
-                    await store.remember_todos(
-                        todos=event,
-                        user_id=try_session_user_id_from_agent_context(context),
-                        conversation_id=conversation_id,
-                    )
-            except Exception:
+                if conversation_id:
+                    coordinator = await HitlContinuationCoordinator.from_runtime()
+                    session_user_id = try_session_user_id_from_agent_context(context)
+                    if todos:
+                        await coordinator.remember_todos(
+                            todos=event,
+                            user_id=session_user_id,
+                            conversation_id=conversation_id,
+                        )
+                    else:
+                        await coordinator.clear_todos(
+                            user_id=session_user_id,
+                            conversation_id=conversation_id,
+                        )
+            except Exception as exc:
+                from app.services.ai.hitl_continuation import (
+                    HitlContinuationUnavailableError,
+                )
+
+                if isinstance(exc, HitlContinuationUnavailableError):
+                    raise
                 logger.warning("[todo_write] Failed to persist HITL continuation todos", exc_info=True)
         event_queue = getattr(context, "event_queue", None) if context else None
         if event_queue is not None:

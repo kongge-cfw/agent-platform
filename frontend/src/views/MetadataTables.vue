@@ -17,7 +17,7 @@ import MetadataDriftAlertsDrawer from '../components/metadata/MetadataDriftAlert
 import { useUser } from '../composables/useUser'
 import { useToast } from '../composables/useToast'
 import { copyToClipboard } from '../utils/clipboard'
-import { createSseLineParser } from '../utils/chartRenderer'
+import { createSseLineParser } from '../utils/sseLineParser'
 import { CircleStackIcon, KeyIcon, MagnifyingGlassIcon, SparklesIcon, UserIcon } from '@heroicons/vue/24/outline'
 
 const { isAdmin: _isAdmin, hasPermission } = useUser()

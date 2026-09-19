@@ -1,4 +1,6 @@
 import asyncio
+from sqlalchemy import event
+
 from app.services.metadata_service import MetadataService
 from app.core.orm import AsyncSessionLocal
 
@@ -47,8 +49,27 @@ async def test_metadata_counts():
             })
             
             # 5. Verify Counts via get_datasets (List View)
+            # 数据集主查询、tables/metrics selectinload、关系聚合应保持固定查询数，
+            # 不随数据集数量逐条增加 relationship count 查询。
             print("Verifying List View Counts...")
-            datasets = await MetadataService.get_datasets(db)
+            statements = []
+
+            def record_statement(*args):
+                statements.append(args[2])
+
+            sync_engine = db.bind.sync_engine
+            event.listen(sync_engine, "before_cursor_execute", record_statement)
+            try:
+                datasets = await MetadataService.get_datasets(db)
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", record_statement)
+
+            relationship_statements = [
+                statement
+                for statement in statements
+                if "meta_relationships" in statement.lower()
+            ]
+            assert len(relationship_statements) == 1
             target_ds = next((d for d in datasets if d.id == ds.id), None)
             assert target_ds is not None
             

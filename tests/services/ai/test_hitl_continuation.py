@@ -6,7 +6,10 @@ import pytest
 
 from app.services.ai.hitl_continuation import (
     HITL_CONTINUATION_MARKER,
+    HitlContinuationCoordinator,
     HitlContinuationStore,
+    HitlContinuationUnavailableError,
+    advance_todo_snapshot_after_hitl_confirm,
     build_continuation_prompt_block,
     enrich_confirmation_fields,
     is_entity_resolve_tool,
@@ -25,6 +28,37 @@ def _clear_hitl_memory():
     HitlContinuationStore.clear_memory()
     yield
     HitlContinuationStore.clear_memory()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_delegates_to_compatible_store():
+    store = HitlContinuationStore(None, allow_memory_fallback=True)
+    coordinator = HitlContinuationCoordinator(store)
+
+    await coordinator.remember_skill(
+        skill_id="industry-dispatch-task",
+        skill_name="行业任务下发",
+        user_id="u1",
+        conversation_id="conv-1",
+    )
+
+    continuation = await coordinator.get(user_id="u1", conversation_id="conv-1")
+    assert continuation is not None
+    assert continuation["skills"] == [
+        {
+            "id": "industry-dispatch-task",
+            "name": "行业任务下发",
+            "scope": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_store_without_fallback_fails_when_redis_is_missing():
+    store = HitlContinuationStore(None, allow_memory_fallback=False)
+
+    with pytest.raises(HitlContinuationUnavailableError):
+        await store.get(user_id="u1", conversation_id="conv-1")
 
 
 def test_prompt_assembler_injects_hitl_continuation_block():
@@ -63,6 +97,34 @@ def test_should_restore_confirm_but_not_cancel():
         "【用户回答】\ninteraction_type: question\nquestion_id: uq_1\nselected_option_ids: []\ncancelled: true"
     )
     assert not should_restore_hitl_continuation("分析附件并下发任务")
+
+
+def test_advance_todo_snapshot_after_hitl_confirm_completes_waiting_and_starts_next():
+    advanced = advance_todo_snapshot_after_hitl_confirm(
+        {
+            "todos": [
+                {"content": "整理附件", "status": "completed"},
+                {"content": "确认下发内容", "status": "in_progress"},
+                {"content": "向企业下发任务", "status": "pending"},
+            ],
+            "counts": {"pending": 1, "in_progress": 1, "completed": 1, "cancelled": 0},
+        }
+    )
+
+    assert advanced == {
+        "todos": [
+            {"content": "整理附件", "status": "completed"},
+            {"content": "确认下发内容", "status": "completed"},
+            {"content": "向企业下发任务", "status": "in_progress"},
+        ],
+        "counts": {"pending": 0, "in_progress": 1, "completed": 2, "cancelled": 0},
+    }
+    assert advance_todo_snapshot_after_hitl_confirm({"todos": []}) is None
+    assert advance_todo_snapshot_after_hitl_confirm(None) is None
+    already_done = advance_todo_snapshot_after_hitl_confirm(
+        {"todos": [{"content": "确认下发内容", "status": "completed"}]}
+    )
+    assert already_done is None
 
 
 def test_parse_resolve_tool_and_enrich_confirmation_fields():
@@ -198,7 +260,13 @@ def test_continuation_prompt_block_includes_facts_and_skills():
                     ]
                 }
             },
-            "todos": {"todos": [{"content": "下发任务", "status": "in_progress"}], "counts": {}},
+            "todos": {
+                "todos": [
+                    {"content": "确认下发内容", "status": "completed"},
+                    {"content": "下发任务", "status": "in_progress"},
+                ],
+                "counts": {},
+            },
         }
     )
     assert HITL_CONTINUATION_MARKER in block
@@ -207,6 +275,9 @@ def test_continuation_prompt_block_includes_facts_and_skills():
     assert "/tmp/overspeed.xlsx" in block
     assert "禁止臆造" in block
     assert "不得写入下发名单" not in block
+    assert "[completed] 确认下发内容" in block
+    assert "[in_progress] 下发任务" in block
+    assert "不要把已完成项改回进行中" in block
 
 
 @pytest.mark.asyncio

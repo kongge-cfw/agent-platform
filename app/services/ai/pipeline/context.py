@@ -72,3 +72,9 @@ class PipelineContext:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+
+    def set_execution_status(self, status: str) -> str:
+        """Update the canonical turn status and executor compatibility mirror."""
+        from app.services.ai.turn_status import set_pipeline_execution_status
+
+        return set_pipeline_execution_status(self, status)

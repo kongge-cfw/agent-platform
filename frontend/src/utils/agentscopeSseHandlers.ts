@@ -111,6 +111,7 @@ export interface AgentStreamLog {
 
 export interface AgentStreamMessage {
   trace_id?: string;
+  status?: string;
   agentMaxToolcallTimeoutSeconds?: number;
   content: string;
   reasoningContent?: string;
@@ -765,6 +766,8 @@ export function syncProcessTimelineTodo<T extends AgentStreamMessage>(
   msg: T,
   data: Record<string, unknown>,
 ): void {
+  // run_status=success 是整轮终态。终态后的旧包不能替换清单文案或重新打开步骤。
+  if (msg.status === "success") return;
   upsertTimelineTodo(msg, {
     todos: data.todos,
     title: data.title,
@@ -1007,7 +1010,7 @@ export async function resumeExternalExecutionStream(options: {
   if (!response.body) {
     throw new Error("外部执行恢复流为空");
   }
-  const { createSseLineParser } = await import("@/utils/chartRenderer");
+  const { createSseLineParser } = await import("@/utils/sseLineParser");
   const parser = createSseLineParser();
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

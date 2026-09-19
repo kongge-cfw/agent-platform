@@ -110,10 +110,28 @@ def test_business_confirmation_frontend_wiring_contract():
 
     assert "业务数据确认" in card or "请确认以下信息" in card
     assert "justify-end" in card
-    assert 'type="date"' in card
-    assert 'type="datetime-local"' in card
+    assert "bc-antd-card" in card
+    assert "bc-antd-form" in card
+    assert "bc-antd-control" in card
+    assert "border-[#d9d9d9]" in card
+    assert 'border border-[#d9d9d9]' in card
+    assert "background: #f5f5f5" not in card
+    assert "background: #fff" in card
+    assert "-webkit-text-fill-color: rgba(0, 0, 0, 0.88)" in card
+    assert "bg-primary" in card
+    assert "ConfirmationDatePicker" in card
+    assert 'type="date"' not in card
+    assert "datetime-local" not in card
+    assert "max-w-[42rem]" in card
+    assert "lg:max-w-[48rem]" in card
+    assert "2xl:max-w-[52rem]" in card
     assert "isDateField" in card
-    assert "confirmationDateInputValue" in card
+    picker = (ROOT / "frontend/src/components/ConfirmationDatePicker.vue").read_text(encoding="utf-8")
+    assert "Teleport" in picker
+    assert "今天" in picker
+    assert "此刻" in picker
+    assert "eachDayOfInterval" in picker
+    assert "z-index: 1080" in picker
     assert card.find("@click=\"submit(false)\"") < card.find("@click=\"submit(true)\"")
     assert "emit('submit'" in card or 'emit("submit"' in card or "event: 'submit'" in card
     assert 'case "business_confirmation"' in handlers
@@ -191,6 +209,8 @@ return {
   kickoffType: parsed.fields[2].value_type,
   dueInput: api.confirmationDateInputValue(parsed.fields[1].value),
   kickoffInput: api.confirmationDateTimeInputValue(parsed.fields[2].value),
+  kickoffDisplay: api.confirmationDateTimeDisplayValue(parsed.fields[2].value),
+  fromValue: api.confirmationDateFromValue(parsed.fields[1].value),
   emptyHint: api.inferConfirmationValueType({ key: 'deadline', label: '截止日期', value: '', value_type: 'string' }),
   declaredEmpty: api.inferConfirmationValueType({ key: 'any', label: '任意名称', value: '', value_type: 'date' }),
   cnDate: api.inferConfirmationValueType({ value: '2026年9月25日', value_type: 'string' }),
@@ -202,6 +222,8 @@ return {
     assert result["kickoffType"] == "datetime"
     assert result["dueInput"] == "2026-09-25"
     assert result["kickoffInput"] == "2026-09-18T09:30"
+    assert result["kickoffDisplay"] == "2026-09-18 09:30"
+    assert result["fromValue"] is not None
     assert result["emptyHint"] == "string"
     assert result["declaredEmpty"] == "date"
     assert result["cnDate"] == "date"

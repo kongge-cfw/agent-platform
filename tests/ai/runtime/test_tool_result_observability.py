@@ -7,11 +7,11 @@ from app.services.ai.runtime.agentscope.tool_result import (
     is_tool_result_error,
 )
 from app.services.ai.runtime.agentscope.stream_reconcile import truncate_for_display
-from app.services.ai.runners.assistant_agent_runner import (
-    AssistantAgentRunner,
-    _extract_agentscope_tool_call_input,
-    _resolve_agentscope_tool_args,
+from app.services.ai.runtime.agentscope.tool_call_args import (
+    extract_agentscope_tool_call_input,
+    resolve_agentscope_tool_args,
 )
+from app.services.ai.runners.assistant_agent_runner import AssistantAgentRunner
 
 
 pytestmark = pytest.mark.no_infrastructure
@@ -48,10 +48,10 @@ def test_agentscope_tool_args_can_be_recovered_from_saved_tool_call():
         )
     )
 
-    assert _extract_agentscope_tool_call_input(agent, "read-1") == (
+    assert extract_agentscope_tool_call_input(agent, "read-1") == (
         '{"file_path": "/workspace/public/docs/FAQ.md"}'
     )
-    assert _resolve_agentscope_tool_args(agent, "read-1", "") == {
+    assert resolve_agentscope_tool_args(agent, "read-1", "") == {
         "file_path": "/workspace/public/docs/FAQ.md"
     }
 
@@ -76,7 +76,7 @@ def test_agentscope_tool_args_prefer_saved_call_when_stream_preview_is_invalid()
         )
     )
 
-    assert _resolve_agentscope_tool_args(agent, "glob-1", "not-json") == {
+    assert resolve_agentscope_tool_args(agent, "glob-1", "not-json") == {
         "path": "/workspace/public/docs",
         "pattern": "*.md",
     }

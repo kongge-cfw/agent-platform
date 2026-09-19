@@ -552,7 +552,7 @@ class MemoryService:
             return []
 
         key = self._get_key(user_id, conversation_id)
-        logger.info(
+        logger.debug(
             "[MemoryService] Fetching history for key: %s. Limit: %s, Offset: %s",
             key,
             limit,

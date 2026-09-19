@@ -42,12 +42,14 @@ class AgentScopeResumeHandler:
             _enrich_terminal_error_chunk,
             _filter_current_turn_download_urls,
             _final_process_timeline,
-            _finalize_todo_success,
             _persist_assistant_message_and_summary,
             _public_agent_type,
             _restore_todo_snapshot_from_pending,
-            _should_persist_turn_history,
             _track_process_timeline,
+        )
+        from app.services.ai.turn_finalizer import (
+            finalize_todo_state,
+            should_persist_turn_history,
         )
 
         current_user_id = _resume_session_user_id(user_info)
@@ -174,7 +176,7 @@ class AgentScopeResumeHandler:
                 "content": full_response_content,
             }
 
-        todo_completion = _finalize_todo_success(
+        todo_completion = finalize_todo_state(
             process_timeline_state,
             execution_status=execution_status,
         )
@@ -207,7 +209,7 @@ class AgentScopeResumeHandler:
         final_process_timeline = _final_process_timeline(process_timeline_state)
         should_persist_history = bool(
             conversation_id
-            and _should_persist_turn_history(
+            and should_persist_turn_history(
                 full_response_content,
                 final_process_timeline,
                 full_reasoning_content,
@@ -280,12 +282,14 @@ class AgentScopeResumeHandler:
             _enrich_terminal_error_chunk,
             _filter_current_turn_download_urls,
             _final_process_timeline,
-            _finalize_todo_success,
             _persist_assistant_message_and_summary,
             _public_agent_type,
             _restore_todo_snapshot_from_pending,
-            _should_persist_turn_history,
             _track_process_timeline,
+        )
+        from app.services.ai.turn_finalizer import (
+            finalize_todo_state,
+            should_persist_turn_history,
         )
 
         current_user_id = _resume_session_user_id(user_info)
@@ -411,7 +415,7 @@ class AgentScopeResumeHandler:
                 "content": full_response_content,
             }
 
-        todo_completion = _finalize_todo_success(
+        todo_completion = finalize_todo_state(
             process_timeline_state,
             execution_status=execution_status,
         )
@@ -444,7 +448,7 @@ class AgentScopeResumeHandler:
         final_process_timeline = _final_process_timeline(process_timeline_state)
         should_persist_history = bool(
             conversation_id
-            and _should_persist_turn_history(
+            and should_persist_turn_history(
                 full_response_content,
                 final_process_timeline,
                 full_reasoning_content,

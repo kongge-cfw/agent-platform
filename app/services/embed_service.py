@@ -26,6 +26,7 @@ from app.services.embed_identity import (
     shadow_remark_for_operator,
     shadow_username,
 )
+from app.services.config_service import ConfigService
 from app.utils.encryption import get_api_key_manager
 
 logger = logging.getLogger(__name__)
@@ -563,6 +564,11 @@ class EmbedService:
             "app_key": ticket_data.get("embed_app_key") or None,
             "shortcut_prompts": parse_shortcut_prompts(ticket_data.get("shortcut_prompts")),
             "default_entry_agent_id": str(ticket_data.get("default_entry_agent_id") or "").strip() or None,
+            "watermark": {
+                "enabled": await ConfigService.get("embedchat_watermark_enabled") == "true",
+                "style": await ConfigService.get("embedchat_watermark_style") or "user_time",
+                "text": await ConfigService.get("embedchat_watermark_text") or "南孜系统",
+            },
         }
         subject = str(ticket_data.get("external_subject") or "").strip()
         if subject:

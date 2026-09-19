@@ -64,15 +64,15 @@ from app.services.ai.conversation_identity import (
     require_user_id,
     try_session_user_id,
 )
+from app.services.ai.turn_status import (
+    AWAITING_EXECUTION_STATUSES as AWAITING_RESUME_STATUSES,
+)
 from app.services.schema_chunk_format import estimate_text_tokens
 
 logger = logging.getLogger(__name__)
 
 _LLM_DIGEST_TASKS: set[asyncio.Task] = set()
 
-AWAITING_RESUME_STATUSES = frozenset(
-    {"awaiting_permission", "awaiting_external_execution", "awaiting_user"}
-)
 NO_TOOL_EXECUTION_MESSAGE = "自动任务未实际调用任何工具"
 
 
@@ -283,10 +283,12 @@ def _should_persist_turn_history(
     reasoning_content: Optional[str] = None,
 ) -> bool:
     """只要本轮产生正文、推理或思考卡片，就保留本轮历史。"""
-    return bool(
-        str(content or "").strip()
-        or process_timeline
-        or str(reasoning_content or "").strip()
+    from app.services.ai.turn_finalizer import should_persist_turn_history
+
+    return should_persist_turn_history(
+        content,
+        process_timeline,
+        reasoning_content,
     )
 
 
@@ -298,15 +300,9 @@ def _finalize_todo_success(
     """仅对成功结束的当前轮 Todo 做后端收尾。"""
     if execution_status != "success":
         return None
-    from app.services.ai.runtime.agentscope.process_timeline_snapshot import complete_todo_items
+    from app.services.ai.turn_finalizer import finalize_todo_state
 
-    event = complete_todo_items(state)
-    if event:
-        logger.info(
-            "[Todo] Backend finalized checklist after successful execution: completed=%d",
-            int((event.get("counts") or {}).get("completed", 0)),
-        )
-    return event
+    return finalize_todo_state(state, execution_status=execution_status)
 
 
 def _finalize_todo_cancelled(
@@ -317,15 +313,9 @@ def _finalize_todo_cancelled(
     """用户取消/终止时，把未完成 Todo 标为 cancelled，避免清单停在「进行中」。"""
     if execution_status != "cancelled":
         return None
-    from app.services.ai.runtime.agentscope.process_timeline_snapshot import cancel_todo_items
+    from app.services.ai.turn_finalizer import finalize_todo_state
 
-    event = cancel_todo_items(state)
-    if event:
-        logger.info(
-            "[Todo] Backend cancelled open checklist items: cancelled=%d",
-            int((event.get("counts") or {}).get("cancelled", 0)),
-        )
-    return event
+    return finalize_todo_state(state, execution_status=execution_status)
 
 
 def _restore_todo_snapshot_from_pending(

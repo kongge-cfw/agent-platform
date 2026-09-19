@@ -19,3 +19,11 @@ def test_confirm_modal_teleports_above_command_drawer():
 
     drawer = CHAT_INPUT.read_text(encoding="utf-8")
     assert "z-[1200]" in drawer
+    assert "showCancel" in modal
+    assert 'v-if="showCancel"' in modal
+    assert "w-[416px]" in modal
+    assert "bg-black/[0.45]" in modal
+    assert "flex justify-end gap-2" in modal
+    assert "Modal.warning" in modal
+    assert "bg-[#faad14]" in modal
+    assert "bg-primary hover:bg-primary-hover" in modal

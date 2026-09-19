@@ -111,7 +111,9 @@ class AssembleStep(BasePipelineStep):
         user_query = str(context.user_query or shared_state.get("user_query") or "")
         hitl_continuation = None
         from app.services.ai.hitl_continuation import (
-            HitlContinuationStore,
+            HitlContinuationCoordinator,
+            HitlContinuationUnavailableError,
+            advance_todo_snapshot_after_hitl_confirm,
             attachment_paths as hitl_attachment_paths,
             build_continuation_prompt_block,
             is_hitl_cancel_receipt,
@@ -120,17 +122,32 @@ class AssembleStep(BasePipelineStep):
 
         if is_hitl_cancel_receipt(user_query) and context.conversation_id:
             try:
-                store = await HitlContinuationStore.from_runtime()
-                await store.clear(user_info=user_info, conversation_id=context.conversation_id)
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                await coordinator.clear(user_info=user_info, conversation_id=context.conversation_id)
+            except HitlContinuationUnavailableError:
+                raise
             except Exception:
                 logger.warning("[AssembleStep] Failed to clear HITL continuation on cancel", exc_info=True)
         elif should_restore_hitl_continuation(user_query) and context.conversation_id:
             try:
-                store = await HitlContinuationStore.from_runtime()
-                hitl_continuation = await store.get(
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                hitl_continuation = await coordinator.get(
                     user_info=user_info,
                     conversation_id=context.conversation_id,
                 )
+                if isinstance(hitl_continuation, dict):
+                    advanced_todos = advance_todo_snapshot_after_hitl_confirm(
+                        hitl_continuation.get("todos") if isinstance(hitl_continuation.get("todos"), dict) else None
+                    )
+                    if advanced_todos:
+                        hitl_continuation["todos"] = advanced_todos
+                        await coordinator.remember_todos(
+                            todos=advanced_todos,
+                            user_info=user_info,
+                            conversation_id=context.conversation_id,
+                        )
+            except HitlContinuationUnavailableError:
+                raise
             except Exception:
                 logger.warning("[AssembleStep] Failed to load HITL continuation", exc_info=True)
         shared_state["hitl_continuation"] = hitl_continuation

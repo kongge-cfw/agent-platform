@@ -143,10 +143,12 @@ def test_continue_analysis_buttons_use_neutral_visual_treatment():
 
 
 def test_chat_views_handle_server_terminal_status_before_done():
+    reducer = (ROOT / "frontend/src/utils/chatRunStatus.ts").read_text(encoding="utf-8")
+    assert 'event.status === "success"' in reducer
+    assert "message.status = \"success\"" in reducer
     for source_path in (EMBED, ROOT / "frontend/src/views/AgentDebug.vue"):
         source = source_path.read_text(encoding="utf-8")
-        assert 'data.type === "run_status"' in source
-        assert "data.status === \"success\"" in source
+        assert source.count("applyRunStatusEvent(agentMsg.value, data, streamMessages)") >= 2
         assert "markOutputCompleted()" in source
 
 

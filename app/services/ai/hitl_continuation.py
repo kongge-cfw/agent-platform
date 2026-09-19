@@ -64,6 +64,42 @@ def should_restore_hitl_continuation(text: str | None) -> bool:
     return not is_hitl_cancel_receipt(text)
 
 
+def advance_todo_snapshot_after_hitl_confirm(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """确认/提问回执后把等待项收尾，并启动下一项，避免清单停在出卡那一步。"""
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("todos")
+    if not isinstance(raw, list) or not raw:
+        return None
+    todos: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        status = str(item.get("status") or "").strip()
+        if not content or status not in {"pending", "in_progress", "completed", "cancelled"}:
+            continue
+        todos.append({"content": content, "status": status})
+    if not todos or not any(item["status"] in {"pending", "in_progress"} for item in todos):
+        return None
+    for item in todos:
+        if item["status"] == "in_progress":
+            item["status"] = "completed"
+    for item in todos:
+        if item["status"] == "pending":
+            item["status"] = "in_progress"
+            break
+    counts = {
+        "pending": sum(item["status"] == "pending" for item in todos),
+        "in_progress": sum(item["status"] == "in_progress" for item in todos),
+        "completed": sum(item["status"] == "completed" for item in todos),
+        "cancelled": sum(item["status"] == "cancelled" for item in todos),
+    }
+    return {"todos": todos, "counts": counts}
+
+
 def empty_continuation() -> dict[str, Any]:
     return {
         "skills": [],
@@ -349,7 +385,17 @@ def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
             elif name:
                 lines.append(f"  - {name} → 未解析到主键，不得写入")
     if todos and isinstance(todos.get("todos"), list) and todos.get("todos"):
-        lines.append("- 上一轮任务清单仍有效，请在完成后更新对应项，不要无故整表重开。")
+        lines.append(
+            "- 当前任务清单（回执后已推进，请按此状态继续更新；"
+            "不要把已完成项改回进行中，也不要无故整表重开）："
+        )
+        for item in todos.get("todos")[:20]:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if content and status:
+                lines.append(f"  - [{status}] {content}")
     return "\n".join(lines)
 
 
@@ -539,6 +585,10 @@ def _parse_json_object(text: str) -> Any:
         return parsed
 
 
+class HitlContinuationUnavailableError(RuntimeError):
+    """Raised when durable HITL state is required but Redis is unavailable."""
+
+
 class HitlContinuationStore:
     KEY_PREFIX = "ai:hitl-continuation"
     DEFAULT_TTL_SECONDS = 21600
@@ -557,11 +607,29 @@ class HitlContinuationStore:
 
     @classmethod
     async def from_runtime(cls) -> "HitlContinuationStore":
+        from app.core.config import get_settings
         from app.core.redis import get_redis
 
+        is_production = (
+            str(get_settings().API_SERVICE_ENV or "").strip().lower() == "prod"
+        )
         try:
-            return cls(await get_redis(), allow_memory_fallback=True)
-        except Exception:
+            redis_client = await get_redis()
+            if redis_client is None and is_production:
+                raise HitlContinuationUnavailableError(
+                    "生产环境 Redis 不可用，无法保存 HITL 续跑状态"
+                )
+            return cls(
+                redis_client,
+                allow_memory_fallback=not is_production,
+            )
+        except Exception as exc:
+            if is_production:
+                if isinstance(exc, HitlContinuationUnavailableError):
+                    raise
+                raise HitlContinuationUnavailableError(
+                    "生产环境 Redis 不可用，无法安全恢复 HITL 会话"
+                ) from exc
             logger.warning("[HITL continuation] Redis unavailable, using process memory")
             return cls(None, allow_memory_fallback=True)
 
@@ -755,6 +823,14 @@ class HitlContinuationStore:
                 await self.redis_client.delete(key)
             except Exception:
                 logger.warning("[HITL continuation] Failed to delete Redis key", exc_info=True)
+                if not self.allow_memory_fallback:
+                    raise HitlContinuationUnavailableError(
+                        "HITL continuation Redis delete failed"
+                    )
+        elif not self.allow_memory_fallback:
+            raise HitlContinuationUnavailableError(
+                "HITL continuation Redis client unavailable"
+            )
         self._memory.pop(key, None)
 
     def _identity(
@@ -785,7 +861,13 @@ class HitlContinuationStore:
             except Exception:
                 logger.warning("[HITL continuation] Redis get failed", exc_info=True)
                 if not self.allow_memory_fallback:
-                    return None
+                    raise HitlContinuationUnavailableError(
+                        "HITL continuation Redis read failed"
+                    )
+        elif not self.allow_memory_fallback:
+            raise HitlContinuationUnavailableError(
+                "HITL continuation Redis client unavailable"
+            )
         return copy.deepcopy(self._memory.get(key))
 
     async def _set(self, key: str, record: dict[str, Any]) -> None:
@@ -797,9 +879,134 @@ class HitlContinuationStore:
             except Exception:
                 logger.warning("[HITL continuation] Redis set failed", exc_info=True)
                 if not self.allow_memory_fallback:
-                    return
+                    raise HitlContinuationUnavailableError(
+                        "HITL continuation Redis write failed"
+                    )
+        elif not self.allow_memory_fallback:
+            raise HitlContinuationUnavailableError(
+                "HITL continuation Redis client unavailable"
+            )
         self._memory[key] = copy.deepcopy(record)
 
     @staticmethod
     def clear_memory() -> None:
         _MEMORY_STORE.clear()
+
+
+class HitlContinuationCoordinator:
+    """HITL 续跑状态门面；业务调用方不直接依赖底层存储实现。"""
+
+    def __init__(self, store: HitlContinuationStore):
+        self._store = store
+
+    @classmethod
+    async def from_runtime(cls) -> "HitlContinuationCoordinator":
+        return cls(await HitlContinuationStore.from_runtime())
+
+    async def get(
+        self,
+        *,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._store.get(
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    async def remember_turn_inputs(
+        self,
+        *,
+        user_info: Any,
+        conversation_id: str | None,
+        user_query: str,
+        messages: list[dict[str, Any]] | None,
+        skills: list[dict[str, Any]] | None = None,
+    ) -> None:
+        await self._store.remember_turn_inputs(
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_query=user_query,
+            messages=messages,
+            skills=skills,
+        )
+
+    async def remember_skill(
+        self,
+        *,
+        skill_id: str,
+        skill_name: str = "",
+        scope: str = "",
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.remember_skill(
+            skill_id=skill_id,
+            skill_name=skill_name,
+            scope=scope,
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    async def remember_resolve_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_output: Any,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.remember_resolve_tool(
+            tool_name=tool_name,
+            tool_output=tool_output,
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    async def remember_todos(
+        self,
+        *,
+        todos: dict[str, Any],
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.remember_todos(
+            todos=todos,
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    async def clear_todos(
+        self,
+        *,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.merge(
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            clear_todos=True,
+        )
+
+    async def clear(
+        self,
+        *,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.clear(
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )

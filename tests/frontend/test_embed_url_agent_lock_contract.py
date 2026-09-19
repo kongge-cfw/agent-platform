@@ -35,6 +35,12 @@ def test_embed_chat_url_agent_lock_and_status_label():
     assert "clearUrlAgentPinAndReload" not in text
 
 
+def test_embed_chat_watermark_stays_off_unless_explicitly_enabled():
+    text = EMBED.read_text(encoding="utf-8")
+    assert "currentUser?.watermark?.enabled === true" in text
+    assert "currentUser?.watermark ? currentUser.watermark.enabled : true" not in text
+
+
 def test_embed_chat_iframe_uses_app_shortcut_prompts_not_global_slash_commands():
     text = EMBED.read_text(encoding="utf-8")
     chat_input = CHAT_INPUT.read_text(encoding="utf-8")

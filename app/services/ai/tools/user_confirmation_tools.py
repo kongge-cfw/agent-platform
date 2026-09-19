@@ -6,13 +6,101 @@ import logging
 import secrets
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.services.ai.hitl_continuation import HitlContinuationUnavailableError
 from app.services.ai.tools.tool_compat import BaseTool
 
 logger = logging.getLogger(__name__)
 
 ValueType = Literal["string", "number", "boolean", "text", "date", "datetime"]
+_KNOWN_ARG_KEYS = frozenset(
+    {
+        "title",
+        "fields",
+        "summary",
+        "confirm_label",
+        "cancel_label",
+        "risk_note",
+    }
+)
+
+
+def schema_looks_like_request_user_confirmation(schema: Any) -> bool:
+    """Identify the confirmation schema before AgentScope validates arguments."""
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return False
+    return "title" in props and "fields" in props and "confirm_label" in props
+
+
+def _loads_maybe_repaired(raw: str) -> Any:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    try:
+        from json_repair import repair_json
+
+        return repair_json(text, return_objects=True)
+    except Exception:
+        return None
+
+
+def _normalize_confirmation_args_dict(data: dict[str, Any]) -> dict[str, Any] | None:
+    raw_fields = data.get("fields")
+    if isinstance(raw_fields, str):
+        raw_fields = _loads_maybe_repaired(raw_fields)
+    if not isinstance(raw_fields, list) or not raw_fields:
+        return None
+    fields = [dict(item) for item in raw_fields if isinstance(item, dict)]
+    if not fields or any(
+        not str(item.get("key") or "").strip()
+        or not str(item.get("label") or "").strip()
+        for item in fields
+    ):
+        return None
+    title = str(
+        data.get("title")
+        or data.get("header")
+        or data.get("question")
+        or "请确认以下信息"
+    ).strip()
+    payload = dict(data)
+    payload["title"] = title or "请确认以下信息"
+    payload["fields"] = fields
+    return {key: value for key, value in payload.items() if key in _KNOWN_ARG_KEYS}
+
+
+def coerce_request_user_confirmation_args(raw: Any) -> dict[str, Any] | None:
+    """Best-effort normalization for common model confirmation payload mistakes."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return _normalize_confirmation_args_dict(raw)
+    if isinstance(raw, list):
+        return _normalize_confirmation_args_dict({"fields": raw})
+    if not isinstance(raw, str):
+        return None
+    loaded = _loads_maybe_repaired(raw)
+    if isinstance(loaded, dict):
+        return _normalize_confirmation_args_dict(loaded)
+    if isinstance(loaded, list):
+        return _normalize_confirmation_args_dict({"fields": loaded})
+    return None
+
+
+def prepare_request_user_confirmation_tool_input(raw: Any) -> str | None:
+    """Return an object JSON string that can pass AgentScope schema validation."""
+    coerced = coerce_request_user_confirmation_args(raw)
+    if coerced is None:
+        return None
+    return json.dumps(coerced, ensure_ascii=False)
 
 
 class ConfirmationField(BaseModel):
@@ -42,6 +130,12 @@ class RequestUserConfirmationArgs(BaseModel):
     cancel_label: str = Field(default="取消", description="取消按钮文案")
     risk_note: str = Field(default="", description="可选风险提示")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_model_payload(cls, value: Any) -> Any:
+        coerced = coerce_request_user_confirmation_args(value)
+        return coerced if coerced is not None else value
+
     @field_validator("title")
     @classmethod
     def _title_non_empty(cls, value: str) -> str:
@@ -70,10 +164,11 @@ class RequestUserConfirmationTool(BaseTool):
         "且禁止再次调用本工具重新弹确认卡——只能用文字确认已取消并询问用户；"
         "仅当用户随后明确提供新的/修改后的数据并要求继续时，才可再次调用本工具。"
         "本工具只展示确认信息，不会写入任何业务系统。"
+        "入参必须是 JSON 对象：title 为标题，fields 为字段数组；禁止把 fields 数组直接作为整个入参。"
     )
     args_schema = RequestUserConfirmationArgs
 
-    async def ainvoke(self, arguments: dict[str, Any] | None = None) -> str:
+    async def ainvoke(self, arguments: Any = None) -> str:
         from app.services.ai.business_confirmation import (
             cancel_gate_block_payload,
             is_cancel_confirmation_gate_armed,
@@ -104,7 +199,7 @@ class RequestUserConfirmationTool(BaseTool):
             from app.core.context import get_current_agent_context
             from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
             from app.services.ai.hitl_continuation import (
-                HitlContinuationStore,
+                HitlContinuationCoordinator,
                 enrich_confirmation_fields,
             )
 
@@ -112,11 +207,13 @@ class RequestUserConfirmationTool(BaseTool):
             conversation_id = str(getattr(agent_ctx, "conversation_id", "") or "").strip()
             user_id = try_session_user_id_from_agent_context(agent_ctx) if agent_ctx else None
             if conversation_id:
-                store = await HitlContinuationStore.from_runtime()
-                continuation = await store.get(user_id=user_id, conversation_id=conversation_id)
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                continuation = await coordinator.get(user_id=user_id, conversation_id=conversation_id)
                 fields = normalize_confirmation_field_types(
                     enrich_confirmation_fields(fields, continuation)
                 )
+        except HitlContinuationUnavailableError:
+            raise
         except Exception:
             logger.warning(
                 "[request_user_confirmation] Failed to enrich confirmation fields",

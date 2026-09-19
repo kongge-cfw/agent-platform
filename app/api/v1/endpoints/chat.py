@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Request, UploadFil
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.orm import get_db_session
+from app.core.orm import AsyncSessionLocal, get_db_session
 from app.services.ai.agent_service import agent_service
 from app.services.ai.context_compaction_log_service import context_compaction_log_service
 from app.services.ai.context_usage import estimate_context_usage
@@ -908,6 +908,7 @@ class ConversationMessage(BaseModel):
     content: Optional[str] = None
     timestamp: Optional[datetime] = None
     trace_id: Optional[str] = None
+    status: Optional[str] = None
 
     # token 用量 / 结构化输出标记
     prompt_tokens: Optional[int] = 0
@@ -1093,10 +1094,19 @@ async def get_conversation_history(
             AgentExecutionHistory.user_id == user_id,
         )
             
-        stmt = stmt.order_by(AgentExecutionHistory.created_at.asc())
+        requested_limit = max(1, int(limit or memory_service.max_history_len))
+        requested_offset = max(0, int(offset or 0))
+        records_to_fetch = (
+            0
+            if requested_offset >= memory_service.max_history_len
+            else memory_service.max_history_len
+        )
+        stmt = stmt.order_by(AgentExecutionHistory.created_at.desc()).limit(
+            records_to_fetch
+        )
         
         db_res = await db.execute(stmt)
-        records = db_res.scalars().all()
+        records = list(reversed(db_res.scalars().all()))
         
         # Dynamically fetch active agents map for rich display names
         agent_map = {}
@@ -1138,13 +1148,17 @@ async def get_conversation_history(
                     "agent_display_name": agent_display_name,
                     "agent_type": agent_type_by_id.get(str(r.agent_id)) or "GENERAL",
                     "trace_id": r.trace_id,
+                    "status": r.status,
                     "feedback": r.feedback,
                     "prompt_tokens": int(r.prompt_tokens or 0),
                     "completion_tokens": int(r.completion_tokens or 0),
                     "total_tokens": int(r.total_tokens or 0),
                     "has_data_output": bool(getattr(r, "has_data_output", 0) or False)
                 })
-        history = fallback_history
+        fallback_window = fallback_history[-memory_service.max_history_len :]
+        end_index = max(0, len(fallback_window) - requested_offset)
+        start_index = max(0, end_index - requested_limit)
+        history = fallback_window[start_index:end_index]
         
     return StandardResponse(data=ConversationHistoryResponse(
         conversation_id=conversation_id,
@@ -1450,7 +1464,6 @@ async def create_chat_completion(
     completion_request: ChatCompletionRequest,
     request: Request,
     user_info: Dict[str, Any] = Depends(require_api_key),
-    db: AsyncSession = Depends(get_db_session)
 ):
     """
     Unified Chat Completion endpoint (V1).
@@ -1573,14 +1586,15 @@ async def create_chat_completion(
         from app.services.embed_identity import resolve_catalog_acl
 
         acl = resolve_catalog_acl(user_info)
-        accessible_resource_snapshot = await fetch_accessible_resource_snapshot(
-            db,
-            user_id=acl.get("user_id"),
-            user_name=acl.get("user_name") or user_info.get("user_name") or user_info.get("username"),
-            is_admin=bool(acl.get("is_admin")),
-            tenant_id=acl.get("tenant_id") or "",
-            isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
-        )
+        async with AsyncSessionLocal() as resource_db:
+            accessible_resource_snapshot = await fetch_accessible_resource_snapshot(
+                resource_db,
+                user_id=acl.get("user_id"),
+                user_name=acl.get("user_name") or user_info.get("user_name") or user_info.get("username"),
+                is_admin=bool(acl.get("is_admin")),
+                tenant_id=acl.get("tenant_id") or "",
+                isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+            )
         authorized_resource_scope = accessible_resource_snapshot.counts
     except Exception as exc:  # 目录统计只用于可观测性，不能阻断聊天请求
         logger.warning("Failed to load authorized resource counts for trace: %s", exc)

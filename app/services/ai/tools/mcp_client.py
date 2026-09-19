@@ -503,7 +503,9 @@ class McpClientService:
         finally:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             try:
-                asyncio.create_task(
+                from app.core.cancellation import spawn_detached
+
+                spawn_detached(
                     record_outbound_audit_log(
                         server_id=server_id,
                         tool_name=tool_name,
@@ -515,7 +517,8 @@ class McpClientService:
                         latency_ms=latency_ms,
                         error_message=call_error,
                         tool_output=call_result,
-                    )
+                    ),
+                    name=f"mcp-outbound-audit-{request_id or tool_name}",
                 )
             except Exception as audit_dispatch_err:
                 logger.warning("[MCP] Failed to dispatch outbound audit log: %s", audit_dispatch_err)

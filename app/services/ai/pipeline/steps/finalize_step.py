@@ -10,24 +10,12 @@ from app.services.ai.pipeline.base import BasePipelineStep
 from app.services.ai.pipeline.context import PipelineContext
 from app.services.ai.audit import AuditManager, aggregate_tokens_from_trace_buffer
 from app.core.cancellation import await_unless_cancelling, current_task_cancelling
+from app.services.ai.turn_status import (
+    SAME_TRACE_RESUME_STATUSES as AWAITING_RESUME_STATUSES,
+    SHORT_CIRCUIT_NO_FINALIZE_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
-
-# 会在同一条 trace 上恢复、因此不能当作本轮终态审计的状态。
-# 提问卡 / 确认卡 / 对话卡片的 awaiting_user 不在此列：下一轮是新回执，本轮必须写入历史。
-AWAITING_RESUME_STATUSES = {
-    "interrupted",
-    "awaiting_permission",
-    "awaiting_external_execution",
-}
-
-# 原版（重构前）在 chat_completion_stream 外层早退、根本没有任何终结产物的状态。
-# 恢复原行为：这些短路态不应产生 run_status 事件，也不应产生审计记录。
-SHORT_CIRCUIT_NO_FINALIZE_STATUSES = {
-    "empty_request",
-    "no_agent_config",
-    "quota_exceeded",
-}
 
 
 def _public_agent_type(agent_config: Any) -> Optional[str]:
@@ -51,7 +39,7 @@ class FinalizeStep(BasePipelineStep):
             # （走完整 finalize）终态收拢语义分裂。这里不再早退，交由下方统一完成收拢，
             # 并保证即使 content 为空也会发射 run_status=cancelled 以对齐取消语义。
             if not context.execution_status:
-                context.execution_status = "cancelled"
+                context.set_execution_status("cancelled")
 
         shared_state = context.shared_state or {}
         agent_config = shared_state.get("agent_config") or getattr(context, "agent_config", None)
@@ -109,18 +97,49 @@ class FinalizeStep(BasePipelineStep):
                     "content": guarded_response_content,
                 }
 
+            timeline_state = shared_state.get("process_timeline")
+            if (
+                context.execution_status == "success"
+                and isinstance(timeline_state, list)
+                and not any(
+                    isinstance(item, dict) and item.get("kind") == "todo"
+                    for item in timeline_state
+                )
+            ):
+                from app.services.ai.hitl_continuation import (
+                    should_restore_hitl_continuation,
+                )
+                from app.services.ai.runtime.agentscope.process_timeline_snapshot import (
+                    latest_assistant_todo_update_from_history,
+                )
+                from app.services.ai.agent_service import _track_process_timeline
+
+                is_hitl_continuation = (
+                    should_restore_hitl_continuation(context.user_query)
+                    or isinstance(shared_state.get("hitl_continuation"), dict)
+                )
+                if is_hitl_continuation:
+                    previous_todos = latest_assistant_todo_update_from_history(
+                        shared_state.get("context_source_history")
+                    )
+                    if previous_todos:
+                        _track_process_timeline(timeline_state, previous_todos)
+                        logger.info(
+                            "[Todo] Restored prior HITL checklist before successful finalization"
+                        )
+
             todo_completion = _finalize_todo_success(
-                shared_state.get("process_timeline"),
+                timeline_state,
                 execution_status=context.execution_status,
             ) or _finalize_todo_cancelled(
-                shared_state.get("process_timeline"),
+                timeline_state,
                 execution_status=context.execution_status,
             )
             if todo_completion:
                 yield todo_completion
 
             final_process_timeline = _final_process_timeline(
-                shared_state.get("process_timeline")
+                timeline_state
             )
             should_persist = bool(
                 conversation_id
@@ -143,7 +162,20 @@ class FinalizeStep(BasePipelineStep):
 
             if should_persist:
                 handled_by = (
-                    getattr(agent_config, "agent_name", None) if agent_config else None
+                    shared_state.get("final_agent_name")
+                    or (getattr(agent_config, "agent_name", None) if agent_config else None)
+                )
+                handled_type = (
+                    shared_state.get("final_agent_type")
+                    or _public_agent_type(agent_config)
+                )
+                handled_display_name = (
+                    shared_state.get("final_agent_display_name")
+                    or (
+                        getattr(agent_config, "agent_display_name", None)
+                        if agent_config
+                        else None
+                    )
                 )
                 u_id = context.lane_user_id
                 await await_unless_cancelling(
@@ -153,10 +185,8 @@ class FinalizeStep(BasePipelineStep):
                         content=context.full_response_content,
                         trace_id=trace_id,
                         agent_name=handled_by,
-                        agent_type=_public_agent_type(agent_config),
-                        agent_display_name=(
-                            getattr(agent_config, "agent_display_name", None) or None
-                        ),
+                        agent_type=handled_type,
+                        agent_display_name=handled_display_name,
                         prompt_tokens=p_tokens,
                         completion_tokens=c_tokens,
                         total_tokens=t_tokens,
