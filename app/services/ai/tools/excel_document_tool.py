@@ -7,7 +7,10 @@ from collections import Counter
 from datetime import date, datetime, time as dt_time
 from typing import Any
 
+from zipfile import BadZipFile
+
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
@@ -142,11 +145,31 @@ async def _input_path(path: str):
     return await resolve_document_input_path(
         path,
         allowed_attachment_paths=context.authorized_attachment_paths,
+        preferred_attachment_paths=context.current_turn_attachment_paths,
         user_id=_workspace_user_id(context),
         conversation_id=context.conversation_id,
         allowed_extensions=_EXTENSIONS,
         user_name=_context_user_name(context),
     )
+
+
+def _load_excel_workbook(input_path, *, read_only: bool = False):
+    try:
+        return load_workbook(input_path, read_only=read_only, data_only=False)
+    except (BadZipFile, InvalidFileException) as exc:
+        head = b""
+        try:
+            with open(input_path, "rb") as handle:
+                head = handle.read(32).lstrip().lower()
+        except OSError:
+            pass
+        if head.startswith((b"<!doctype", b"<html")):
+            raise DocumentPathError(
+                f"{input_path.name} 不是 Excel，而是网页内容。请从电脑里重新选择原始 xlsx 上传，不要用对话里刚下载的副本。"
+            ) from exc
+        raise DocumentPathError(
+            f"{input_path.name} 不是有效的 Excel 工作簿。请从电脑里重新选择原始 xlsx 上传。"
+        ) from exc
 
 
 async def _output_path(filename: str):
@@ -974,7 +997,7 @@ async def excel_document_read(
     """
     action = _normalize_excel_read_action(action, sheet_name, cell_range, filters)
     input_path = await _input_path(path)
-    workbook = load_workbook(input_path, read_only=True, data_only=False)
+    workbook = _load_excel_workbook(input_path, read_only=True)
     try:
         if action == "inspect":
             sheets = []
@@ -1271,7 +1294,7 @@ async def excel_document_write(
     else:
         if not path:
             raise DocumentPathError("修改工作簿需要 path")
-        workbook = load_workbook(await _input_path(path), data_only=False)
+        workbook = _load_excel_workbook(await _input_path(path))
         if not sheet_name:
             raise DocumentPathError("修改工作簿需要 sheet_name")
         if action != "create_sheet":

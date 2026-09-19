@@ -48,6 +48,8 @@ def test_chat_message_attachments_download_instead_of_opening_canvas():
     fn = source[source.index("export async function openChatAttachmentFile") : source.index("export async function downloadWorkspaceFile")]
 
     assert "downloadWorkspaceFile" in fn
+    assert "resolveFsPreviewRequestUrl" in source
+    assert "assertBinaryDownload" in source
     assert "canPreviewWorkspaceFile" not in fn
     assert "options.preview" not in fn
     for page in (embed, debug):

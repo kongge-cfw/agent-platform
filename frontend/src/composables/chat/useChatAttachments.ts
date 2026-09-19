@@ -1,6 +1,30 @@
 import { getServerAttachmentPath, isImageAttachment } from "@/utils/attachmentImages";
+import { visibleUserMessageContent } from "@/utils/hitlReceiptDisplay";
 
 export const USER_MESSAGE_CONTEXT_DIVIDER = "\n\n---\n\n";
+const TRIMMED_CONTEXT_DIVIDER = "---\n\n";
+
+/** 只认平台拼进用户消息的系统说明，避免把用户自己写的「---」或「用户本轮已…」当附件上下文。 */
+const PLATFORM_CONTEXT_MARKERS = [
+  "用户本轮已上传文件附件：",
+  "用户本轮已上传图片：",
+  "用户本轮已从服务器挂载图片：",
+  "用户本轮已挂载服务器本地文件：",
+  "用户本轮已挂载服务器本地目录：",
+  "用户本轮已选择知识库",
+  "用户本轮已选择数据集/数据源",
+  "用户本轮已调用生态技能工作流：",
+  "💡 以下引用的是历史记忆，供参考：",
+  "【被点击的 AI 回复】",
+  "本次为知识库查询，须优先",
+  "本次为数据查询与分析，须优先",
+];
+
+export const isPlatformAttachmentContext = (text: string): boolean => {
+  const head = String(text || "").trim().slice(0, 400);
+  if (!head) return false;
+  return PLATFORM_CONTEXT_MARKERS.some((marker) => head.startsWith(marker) || head.includes(`\n${marker}`));
+};
 
 interface AttachmentSkillMeta {
   name?: string;
@@ -25,18 +49,37 @@ interface ChatAttachmentOptions {
   buildDatasetAttachmentHint?: (datasetIdLine: string) => string;
 }
 
-export const splitUserMessageContent = (text: string) => {
-  const raw = text || "";
-  const idx = raw.indexOf(USER_MESSAGE_CONTEXT_DIVIDER);
-  if (idx === -1) {
-    return { hasContext: false, userPart: raw, contextPart: "" };
-  }
+const splitAtDivider = (raw: string, divider: string) => {
+  const idx = raw.indexOf(divider);
+  if (idx === -1) return null;
   return {
     hasContext: true,
     userPart: raw.slice(0, idx).trim(),
-    contextPart: raw.slice(idx + USER_MESSAGE_CONTEXT_DIVIDER.length).trim(),
+    contextPart: raw.slice(idx + divider.length).trim(),
   };
 };
+
+export const splitUserMessageContent = (text: string) => {
+  const raw = text || "";
+  const exact = splitAtDivider(raw, USER_MESSAGE_CONTEXT_DIVIDER);
+  if (exact && isPlatformAttachmentContext(exact.contextPart)) {
+    return exact;
+  }
+
+  // 无文字只发附件时，正文是 "\n\n---\n\n用户本轮已..."，落库/回显 trim 后变成 "---\n\n..."
+  const trimmed = raw.trim();
+  const trimmedSplit = splitAtDivider(trimmed, TRIMMED_CONTEXT_DIVIDER);
+  if (trimmedSplit && isPlatformAttachmentContext(trimmedSplit.contextPart)) {
+    return trimmedSplit;
+  }
+  if (!trimmedSplit?.userPart && PLATFORM_CONTEXT_MARKERS.some((marker) => trimmed.startsWith(marker))) {
+    return { hasContext: true, userPart: "", contextPart: trimmed };
+  }
+  return { hasContext: false, userPart: raw, contextPart: "" };
+};
+
+export const visibleUserBubbleText = (content: string | undefined | null): string =>
+  splitUserMessageContent(visibleUserMessageContent(content)).userPart;
 
 export const useChatAttachments = ({
   buildKnowledgeBaseAttachmentHint,
@@ -100,12 +143,13 @@ export const useChatAttachments = ({
       if (file.type === "local_dir") {
         return `用户本轮已挂载服务器本地目录：${file.filename}，其真实的绝对路径是：${path}。你可以直接通过系统级执行工具访问、遍历或检索此绝对路径目录下的资料以解答用户的问题。`;
       }
-      return `用户本轮已上传文件附件：${file.filename}，其安全托管后的服务器绝对路径是：${path}。`;
+      return `用户本轮已上传文件附件：${file.filename}，其安全托管后的服务器绝对路径是：${path}。调用 excel_document_read / word_document_read / Read 时，path 必须原样使用该绝对路径；卡片上的文件名只是显示名，托管文件名可能带 _xxxx 后缀，禁止只传显示文件名。`;
     });
 
     const contextBlock = contextLines.filter(Boolean).join("\n\n");
     const userPart = (content || "").trim();
     if (!contextBlock) return userPart;
+    // 无正文时仍带分隔符，模型能区分系统附件说明；展示层按分隔符丢掉后半段。
     if (!userPart) return `${USER_MESSAGE_CONTEXT_DIVIDER}${contextBlock}`;
     return `${userPart}${USER_MESSAGE_CONTEXT_DIVIDER}${contextBlock}`;
   };

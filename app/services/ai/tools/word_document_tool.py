@@ -40,6 +40,7 @@ async def _input_path(path: str):
     return await resolve_document_input_path(
         path,
         allowed_attachment_paths=context.authorized_attachment_paths,
+        preferred_attachment_paths=context.current_turn_attachment_paths,
         user_id=_workspace_user_id(context),
         conversation_id=context.conversation_id,
         allowed_extensions=_EXTENSIONS,

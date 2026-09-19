@@ -440,20 +440,77 @@
           <!-- Normal Mode -->
           <div v-else>
             <div class="flex justify-end items-start space-x-2">
-              <div class="flex max-w-[85%] min-w-0 flex-1 flex-col items-end">
               <div
-                class="max-w-full text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed transition-colors duration-300 relative"
+                class="max-w-[85%] text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed transition-colors duration-300 relative"
                 :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }"
               >
-                <div class="whitespace-pre-wrap">{{ splitUserMessageContent(visibleUserMessageContent(msg.content)).userPart }}</div>
-              </div>
-              <UserMessageAttachments
-                v-if="msg.files && msg.files.length > 0"
-                class="mt-2"
-                :files="msg.files"
-                @open-file="handleOpenAttachedFile"
-                @preview-image="handlePreviewImageUrl"
-              />
+                <template v-for="parts in [splitUserMessageContent(visibleUserMessageContent(msg.content))]" :key="'user-parts'">
+                  <template v-if="parts.hasContext">
+                    <div v-if="parts.userPart" class="whitespace-pre-wrap">{{ parts.userPart }}</div>
+                    <div v-if="parts.userPart" class="my-2.5 border-t border-white/30" role="separator" />
+                    <details class="group/sys mt-2 text-[10px] text-white/70 select-none">
+                      <summary class="cursor-pointer hover:text-white flex items-center gap-1 font-semibold focus:outline-none list-none [&::-webkit-details-marker]:hidden">
+                        <svg class="w-3 h-3 transform transition-transform duration-200 group-open/sys:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                        </svg>
+                        <span>⚙️ 附加系统元数据说明 (点击展开)</span>
+                      </summary>
+                      <div class="mt-1.5 p-2 rounded bg-black/15 text-white/85 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all select-text selection:bg-white/20">
+                        {{ parts.contextPart }}
+                      </div>
+                    </details>
+                  </template>
+                  <div v-else class="whitespace-pre-wrap">{{ visibleUserMessageContent(msg.content) }}</div>
+                </template>
+
+                <!-- Attached Files In Bubble -->
+                <div v-if="msg.files && msg.files.length > 0" class="mt-2 space-y-2 border-t border-white/20 pt-2">
+                    <div v-for="(file, fIdx) in msg.files" :key="fIdx" class="flex items-center bg-white/10 rounded-lg p-1.5 max-w-xs select-none">
+                        <!-- Image Thumb -->
+                        <AttachmentImageThumb
+                          v-if="isImageFile(file)"
+                          :file="file"
+                          clickable
+                          class="mr-2 border-white/10"
+                          @click="(url) => handlePreviewImageUrl(url, file.filename)"
+                        />
+                        <!-- Skill Icon -->
+                        <div v-else-if="file.type === 'skill'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2 font-mono">
+                            ⚙️
+                        </div>
+                        <!-- Metadata Dataset Icon -->
+                        <div v-else-if="file.type === 'metadata_dataset'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
+                            📊
+                        </div>
+                        <!-- Knowledge Base Icon -->
+                        <div v-else-if="file.type === 'knowledge_base'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
+                            📚
+                        </div>
+                        <!-- Memory Icon -->
+                        <div v-else-if="file.type === 'memory'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
+                            🧠
+                        </div>
+                        <!-- File Icon -->
+                        <div v-else class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
+                            📄
+                        </div>
+                        <div class="flex-1 min-w-0 flex flex-col">
+                            <span v-if="file.type === 'skill' || file.type === 'knowledge_base' || file.type === 'metadata_dataset' || file.type === 'memory'" class="text-xs font-bold text-white truncate">{{ file.filename }}</span>
+                            <template v-else>
+                              <span @click="handleOpenAttachedFile(file)" class="text-xs font-bold text-white hover:underline cursor-pointer truncate">{{ file.filename }}</span>
+                            </template>
+                            <span class="text-[9px] text-white/70 font-mono">
+                                {{
+                                    file.type === 'skill' ? '生态技能' :
+                                    file.type === 'knowledge_base' ? '知识库' :
+                                    file.type === 'metadata_dataset' ? '数据集' :
+                                    file.type === 'memory' ? '记忆记录' :
+                                    formatBytes(file.size)
+                                }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
               </div>
               <!-- User Avatar -->
               <div
@@ -2183,7 +2240,6 @@ import ChatSettings from "@/components/embed/ChatSettings.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
 import ChatExecutionTimeline from "@/components/chat/ChatExecutionTimeline.vue";
 import ChatMessageRow from "@/components/chat/ChatMessageRow.vue";
-import UserMessageAttachments from "@/components/chat/UserMessageAttachments.vue";
 import ChatTodoCard from "@/components/chat/ChatTodoCard.vue";
 import BashEnvBanner from "@/components/chat/BashEnvBanner.vue";
 import DockerTerminalModal from "@/components/chat/DockerTerminalModal.vue";
@@ -2214,8 +2270,10 @@ import {
 import type { SavedReportOpenRequest } from "@/utils/savedReportOpenProtocol";
 import SkillCreatedBanner from "@/components/chat/SkillCreatedBanner.vue";
 import { parseSkillCreatedMarker, type SkillCreatedInfo } from "@/utils/skillCreated";
+import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
 import SessionResourceScopeBar from "@/components/embed/SessionResourceScopeBar.vue";
 import ResourceScopeModal from "@/components/embed/ResourceScopeModal.vue";
+import { isImageAttachment } from "@/utils/attachmentImages";
 import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
 import { isPlatformRoutedUrl, withAppBase } from "@/utils/appBase";
 import TraceLogViewer from "@/components/TraceLogViewer.vue";
@@ -2824,6 +2882,16 @@ const handleWorkspaceContentSaved = (payload: { path: string }) => {
   if (showWorkspaceDrawer.value) {
     void workspaceDrawerRef.value?.refreshDirectory(payload.path);
   }
+};
+
+const isImageFile = isImageAttachment;
+
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
 const resolveReqContent = (msg: Message) => {
@@ -5307,6 +5375,7 @@ const handleOpenAttachedFile = (file: any) => {
     name: file?.filename || "download",
     conversationId: conversationId.value,
     showToast,
+    preview: handleWorkspaceFilePreview,
   });
 };
 

@@ -18,22 +18,45 @@ SESSION_DIR_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 UPLOAD_NAME_ALLOCATION_ATTEMPTS = 100
+_OFFICE_ZIP_EXTENSIONS = {".xlsx", ".xlsm", ".docx", ".pptx"}
+_HTML_HEAD_MARKERS = (b"<!doctype", b"<html")
+
+
+def reject_invalid_office_upload(filename: str | None, contents: bytes) -> None:
+    """阻止把 SPA 首页 HTML 等非 zip 内容当成 Office 文档落盘。"""
+    ext = os.path.splitext(str(filename or ""))[1].lower()
+    if ext not in _OFFICE_ZIP_EXTENSIONS:
+        return
+    head = contents.lstrip()[:32].lower()
+    if head.startswith(_HTML_HEAD_MARKERS) or not contents.startswith(b"PK"):
+        raise HTTPException(
+            status_code=400,
+            detail="文件内容不是有效的 Office 文档。请从电脑里重新选择原始文件上传，不要上传刚从对话里下载的副本。",
+        )
+
+
+def sanitize_upload_filename(filename: str | None) -> str:
+    raw_name = str(filename or "").replace("/", "_").replace("\\", "_")
+    clean_name = re.sub(r"[\x00-\x1f\x7f]", "_", raw_name).strip()
+    return clean_name or "upload"
 
 
 def build_upload_storage_name(filename: str | None, suffix: str | None = None) -> str:
-    """保留可读原名，仅清理路径/控制字符，并追加短唯一后缀。"""
-    raw_name = str(filename or "").replace("/", "_").replace("\\", "_")
-    clean_name = re.sub(r"[\x00-\x1f\x7f]", "_", raw_name).strip()
-    if not clean_name:
-        clean_name = "upload"
-
+    """仅在原名已被占用时追加短唯一后缀。"""
+    clean_name = sanitize_upload_filename(filename)
     stem, extension = os.path.splitext(clean_name)
     short_suffix = (suffix or uuid.uuid4().hex[:4]).strip()
     return f"{stem}_{short_suffix}{extension}"
 
 
 def open_upload_storage_file(directory: str, filename: str | None) -> tuple[str, BinaryIO]:
-    """原子地分配上传文件名，避免短后缀碰撞覆盖已有文件。"""
+    """优先保留原文件名；只有目录里已有同名文件时才加 _xxxx。"""
+    original_name = sanitize_upload_filename(filename)
+    original_path = os.path.normpath(os.path.join(directory, original_name))
+    try:
+        return original_path, open(original_path, "xb")
+    except FileExistsError:
+        pass
     for _ in range(UPLOAD_NAME_ALLOCATION_ATTEMPTS):
         storage_name = build_upload_storage_name(filename)
         path = os.path.normpath(os.path.join(directory, storage_name))

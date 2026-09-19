@@ -60,6 +60,22 @@ function prefixPathname(pathname: string): string {
   return `${base}${pathname}`
 }
 
+/** axios 实例已带 baseURL=APP_BASE；href/src 用 withAppBase，请求里必须再剥掉，否则 /zhiyuan/zhiyuan/api 会落到 SPA 首页。 */
+export function toAxiosUrl(url: string): string {
+  const raw = String(url || '').trim()
+  if (!raw) return raw
+  if (
+    /^https?:\/\//i.test(raw) ||
+    raw.startsWith('blob:') ||
+    raw.startsWith('data:') ||
+    raw.startsWith('ws:') ||
+    raw.startsWith('wss:')
+  ) {
+    return raw
+  }
+  return stripAppBase(raw)
+}
+
 export function stripAppBase(path: string): string {
   const hashIdx = path.indexOf('#')
   const hash = hashIdx >= 0 ? path.slice(hashIdx) : ''

@@ -1,6 +1,6 @@
 import axios from '@/utils/axios'
 import { copyToClipboard } from './clipboard'
-import { isPlatformRoutedUrl, withAppBase } from './appBase'
+import { isPlatformRoutedUrl, toAxiosUrl, withAppBase } from './appBase'
 
 export type WorkspaceCanvasType = 'html' | 'code' | 'pdf' | 'csv' | 'image'
 
@@ -186,6 +186,10 @@ export function resolveFsPreviewUrl(path: string, conversationId?: string | null
   return withAppBase(`/api/v1/chat/fs/preview?path=${encodeURIComponent(path)}${convParam}`)
 }
 
+function resolveFsPreviewRequestUrl(path: string, conversationId?: string | null): string {
+  return toAxiosUrl(resolveFsPreviewUrl(path, conversationId))
+}
+
 export function hasWorkspaceGlobPattern(path: string): boolean {
   const name = String(path || '').replace(/\\/g, '/').split('/').pop() || ''
   return /[*?]/.test(name)
@@ -225,6 +229,19 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(blobUrl)
 }
 
+async function assertBinaryDownload(blob: Blob, filename: string) {
+  const ext = getWorkspaceFileExtension(filename)
+  if (!OFFICE_EXTENSIONS.has(ext)) return
+  const head = new Uint8Array(await blob.slice(0, 32).arrayBuffer())
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(head).trimStart().toLowerCase()
+  const isZip = head[0] === 0x50 && head[1] === 0x4b
+  if (isZip) return
+  if (text.startsWith('<!doctype') || text.startsWith('<html')) {
+    throw new Error('下载到的是网页而不是文件，请刷新后重试，并从电脑里选择原始文件重新上传')
+  }
+  throw new Error('下载内容不是有效的 Office 文档，请从电脑里选择原始文件重新上传')
+}
+
 function isZipContentType(contentType: string | undefined): boolean {
   return String(contentType || '').toLowerCase().includes('application/zip')
 }
@@ -248,7 +265,7 @@ export async function openWorkspaceFileInCanvas(options: OpenWorkspacePreviewOpt
 
   const payload = buildWorkspaceCanvasPayload(path, name)
   const filePath = path
-  const resolvedUrl = resolveFsPreviewUrl(filePath, conversationId)
+  const resolvedUrl = resolveFsPreviewRequestUrl(filePath, conversationId)
   const ext = getWorkspaceFileExtension(name)
 
   if (activeBlobUrlRef?.value) {
@@ -343,6 +360,8 @@ export async function openChatAttachmentFile(options: {
   name: string
   conversationId?: string | null
   showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void
+  /** 7f070dc5 气泡仍会传入；对话附件继续只下载，避免点 PDF 整页进画布。 */
+  preview?: unknown
 }) {
   const path = String(options.path || '').trim()
   const name = String(options.name || '').trim() || 'download'
@@ -366,7 +385,7 @@ export async function downloadWorkspaceFile(options: {
   showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void
 }) {
   const { path, name, conversationId, showToast } = options
-  const resolvedUrl = resolveFsPreviewUrl(path, conversationId)
+  const resolvedUrl = resolveFsPreviewRequestUrl(path, conversationId)
 
   try {
     const response = await axios.get(resolvedUrl, { responseType: 'blob' })
@@ -374,6 +393,7 @@ export async function downloadWorkspaceFile(options: {
       path,
       response.headers?.['content-disposition'],
     ) || name || 'download'
+    await assertBinaryDownload(response.data, filename)
     triggerBrowserDownload(response.data, filename)
     showToast(`已开始下载 ${filename}`, 'success')
   } catch (err: any) {

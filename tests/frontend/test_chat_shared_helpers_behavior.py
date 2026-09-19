@@ -88,6 +88,62 @@ const requireModule = id => {
     assert "/app/data/skills/s1/SKILL.md" not in result["skill"]
     assert "物理描述文件绝对路径" not in result["skill"]
     assert "服务器本地目录：jobs" in result["directory"]
+    empty_text = _run_typescript(
+        "frontend/src/composables/chat/useChatAttachments.ts",
+        """
+return {
+  raw: api.splitUserMessageContent('\\n\\n---\\n\\n用户本轮已上传文件附件：a.xlsx，路径：/tmp/a.xlsx'),
+  trimmed: api.splitUserMessageContent('---\\n\\n用户本轮已上传文件附件：a.xlsx，路径：/tmp/a.xlsx'),
+  visible: api.visibleUserBubbleText('\\n\\n---\\n\\n用户本轮已上传文件附件：a.xlsx，路径：/tmp/a.xlsx'),
+  withText: api.visibleUserBubbleText('分析附件\\n\\n---\\n\\n用户本轮已上传文件附件：a.xlsx，路径：/tmp/a.xlsx'),
+};
+""",
+        """
+const requireModule = id => {
+  if (id === '@/utils/attachmentImages') return {
+    getServerAttachmentPath: file => file.url,
+    isImageAttachment: () => false
+  };
+  if (id === '@/utils/hitlReceiptDisplay') return {
+    visibleUserMessageContent: content => String(content || '')
+  };
+  return require(id);
+};
+""",
+    )
+    assert empty_text["raw"]["userPart"] == ""
+    assert empty_text["raw"]["hasContext"] is True
+    assert empty_text["trimmed"]["userPart"] == ""
+    assert empty_text["trimmed"]["hasContext"] is True
+    assert empty_text["visible"] == ""
+    assert empty_text["withText"] == "分析附件"
+    false_positive = _run_typescript(
+        "frontend/src/composables/chat/useChatAttachments.ts",
+        """
+return {
+  already: api.visibleUserBubbleText('用户本轮已经确认，请继续下发'),
+  markdownHr: api.visibleUserBubbleText('第一段\\n\\n---\\n\\n第二段'),
+  leadingHr: api.visibleUserBubbleText('---\\n\\n这是我的分析要点'),
+  continueAsk: api.visibleUserBubbleText('继续分析\\n\\n---\\n\\n【被点击的 AI 回复】\\n昨日结论'),
+};
+""",
+        """
+const requireModule = id => {
+  if (id === '@/utils/attachmentImages') return {
+    getServerAttachmentPath: file => file.url,
+    isImageAttachment: () => false
+  };
+  if (id === '@/utils/hitlReceiptDisplay') return {
+    visibleUserMessageContent: content => String(content || '')
+  };
+  return require(id);
+};
+""",
+    )
+    assert false_positive["already"] == "用户本轮已经确认，请继续下发"
+    assert false_positive["markdownHr"] == "第一段\n\n---\n\n第二段"
+    assert false_positive["leadingHr"] == "---\n\n这是我的分析要点"
+    assert false_positive["continueAsk"] == "继续分析"
 
 
 def test_agentscope_stream_dispatcher_keeps_reasoning_separate_from_answer():

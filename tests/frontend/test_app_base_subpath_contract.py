@@ -67,6 +67,8 @@ def test_frontend_native_navigation_and_storage_are_prefixed():
     assert "withAppBase('/dashboard/personal?tab=skills')" in skills
     assert "withAppBase('/dashboard/personal?tab=mcp')" in mcp_menu
     assert "isPlatformRoutedUrl" in _read("frontend/src/utils/workspaceFilePreview.ts")
+    assert "toAxiosUrl(resolveFsPreviewUrl" in _read("frontend/src/utils/workspaceFilePreview.ts")
+    assert "toAxiosUrl" in app_base
     assert "stripAppBase(file.url)" in _read("frontend/src/utils/attachmentImages.ts")
     assert "isPlatformRoutedUrl(raw)" in _read("frontend/src/utils/messageBrowserLinks.ts")
 

@@ -27,6 +27,7 @@ from app.utils.fs_access import (
     get_user_sessions_dir,
     get_user_uploads_dir,
     open_upload_storage_file,
+    reject_invalid_office_upload,
     is_session_workdir_path,
     is_fs_admin,
     is_fs_virtual_root,
@@ -1062,6 +1063,7 @@ async def upload_to_workspace(
     contents = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="文件大小超出 20MB 限制")
+    reject_invalid_office_upload(file.filename, contents)
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext in FORBIDDEN_UPLOAD_EXTENSIONS:

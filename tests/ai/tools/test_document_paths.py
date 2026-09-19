@@ -46,6 +46,76 @@ async def test_resolve_document_input_accepts_listed_upload(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_resolve_document_input_accepts_display_filename_alias(tmp_path, monkeypatch):
+    from app.services.ai.tools import document_paths
+
+    monkeypatch.setattr(document_paths, "get_data_base_dir", lambda: str(tmp_path))
+    upload = tmp_path / "uploads" / "9.12日企业疲劳驾驶表_d66d.xlsx"
+    upload.parent.mkdir()
+    upload.write_bytes(b"workbook")
+
+    resolved = await document_paths.resolve_document_input_path(
+        "9.12日企业疲劳驾驶表.xlsx",
+        allowed_attachment_paths=[str(upload)],
+        user_id=7,
+        conversation_id="conversation-1",
+        allowed_extensions={".xlsx"},
+    )
+
+    assert resolved == Path(upload).resolve()
+
+
+@pytest.mark.asyncio
+async def test_resolve_document_input_prefers_current_turn_when_suffix_is_stale(
+    tmp_path, monkeypatch
+):
+    from app.services.ai.tools import document_paths
+
+    monkeypatch.setattr(document_paths, "get_data_base_dir", lambda: str(tmp_path))
+    leftover = tmp_path / "9.12日企业疲劳驾驶表_d66d.xlsx"
+    leftover.write_bytes(b"not-a-zip")
+    current = tmp_path / "uploads" / "9.12日企业疲劳驾驶表.xlsx"
+    current.parent.mkdir()
+    current.write_bytes(b"workbook")
+
+    resolved = await document_paths.resolve_document_input_path(
+        "9.12日企业疲劳驾驶表_d66d.xlsx",
+        allowed_attachment_paths=[str(current)],
+        preferred_attachment_paths=[str(current)],
+        user_id=7,
+        conversation_id="conversation-1",
+        allowed_extensions={".xlsx"},
+    )
+
+    assert resolved == Path(current).resolve()
+
+
+@pytest.mark.asyncio
+async def test_resolve_document_input_does_not_prefer_historical_same_name(
+    tmp_path, monkeypatch
+):
+    from app.services.ai.tools import document_paths
+
+    monkeypatch.setattr(document_paths, "get_data_base_dir", lambda: str(tmp_path))
+    old = tmp_path / "uploads" / "9.12日企业疲劳驾驶表.xlsx"
+    old.parent.mkdir()
+    old.write_bytes(b"old-workbook")
+    current = tmp_path / "uploads" / "9.12日企业疲劳驾驶表_8d09.xlsx"
+    current.write_bytes(b"new-workbook")
+
+    resolved = await document_paths.resolve_document_input_path(
+        "9.12日企业疲劳驾驶表.xlsx",
+        allowed_attachment_paths=[str(old), str(current)],
+        preferred_attachment_paths=[str(current)],
+        user_id=7,
+        conversation_id="conversation-1",
+        allowed_extensions={".xlsx"},
+    )
+
+    assert resolved == Path(current).resolve()
+
+
+@pytest.mark.asyncio
 async def test_resolve_document_input_accepts_file_in_current_user_workspace_uploads(
     tmp_path, monkeypatch
 ):

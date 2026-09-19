@@ -19,7 +19,7 @@ from app.core.context import set_debug_context
 from app.core.dependencies import require_api_key
 from app.schemas.response import StandardResponse, ListResponse
 from app.schemas.agent import TraceLogResponse, AgentExecutionHistoryListResponse
-from app.utils.fs_access import get_user_uploads_dir, open_upload_storage_file
+from app.utils.fs_access import get_user_uploads_dir, open_upload_storage_file, reject_invalid_office_upload
 from app.services.permission_service import PermissionService
 from app.services.conversation_resource_service import ConversationResourceService
 from app.services.resource_scope_normalizer import normalize_resource_scope_for_user
@@ -2551,6 +2551,7 @@ async def upload_chat_file(
     contents = await file.read(MAX_SIZE + 1)
     if len(contents) > MAX_SIZE:
         raise HTTPException(status_code=400, detail="文件大小超出 20MB 限制")
+    reject_invalid_office_upload(file.filename, contents)
     
     # 2. 安全危险后缀拦截
     ext = os.path.splitext(file.filename or "")[1].lower()

@@ -1,6 +1,6 @@
 import { onUnmounted, ref, watch } from "vue";
 import axios from "@/utils/axios";
-import { isPlatformRoutedUrl } from "@/utils/appBase";
+import { isPlatformRoutedUrl, toAxiosUrl } from "@/utils/appBase";
 import {
   openWorkspaceFileInCanvas,
   hasWorkspaceGlobPattern,
@@ -104,8 +104,8 @@ export function useWorkspaceCanvas(options: UseWorkspaceCanvasOptions) {
         const leftPath = url.searchParams.get("left") || "";
         const rightPath = url.searchParams.get("right") || "";
         const [leftContent, rightContent] = await Promise.all([
-          axios.get(options.resolveFileUrl(leftPath)).then((response) => response.data),
-          axios.get(options.resolveFileUrl(rightPath)).then((response) => response.data),
+          axios.get(toAxiosUrl(options.resolveFileUrl(leftPath))).then((response) => response.data),
+          axios.get(toAxiosUrl(options.resolveFileUrl(rightPath))).then((response) => response.data),
         ]);
         canvasData.value = {
           type: "compare",
@@ -134,7 +134,7 @@ export function useWorkspaceCanvas(options: UseWorkspaceCanvasOptions) {
         if (filePath.includes("###HTML_TAG_PLACEHOLDER_")) {
           filePath = filePath.replace(/###HTML_TAG_PLACEHOLDER_\d+###/g, "").trim();
         }
-        const resolvedUrl = options.resolveFileUrl(filePath);
+        const resolvedUrl = toAxiosUrl(options.resolveFileUrl(filePath));
         const normalizedPath = ((filePath.toLowerCase().split("?")[0] ?? "").split("#")[0] ?? "");
         const isOfficeFile = [".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".pptx", ".ppt"].some((extension) => normalizedPath.endsWith(extension));
         const isGlobPath = hasWorkspaceGlobPattern(filePath);
@@ -218,7 +218,7 @@ export function useWorkspaceCanvas(options: UseWorkspaceCanvasOptions) {
         isPlatformRoutedUrl(payload.content))
     ) {
       try {
-        const resolvedUrl = options.resolveFileUrl(payload.content);
+        const resolvedUrl = toAxiosUrl(options.resolveFileUrl(payload.content));
         const response = await axios.get(resolvedUrl, { responseType: "text" });
         const htmlContent = typeof response.data === "string" ? response.data : String(response.data || "");
         canvasData.value = {
