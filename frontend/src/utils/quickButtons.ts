@@ -1,5 +1,60 @@
 /** Quick 行动按钮：[标签](quick:命令) → 带 quick-action-btn 的 HTML 链接 */
 
+const LINE_BULLET = /^(?:[-*•+]\s+|\d+[.)]\s+)/;
+const ACTION_PREFIX =
+  /^(谁|哪|怎么|如何|是否|查看|查一下|查下|催|现在|修改|统计|分析|对比|继续|重新|下发|打开|切换|筛选|导出|刷新|追问)/;
+
+function toQuickMarkdown(target: string, indent = ""): string {
+  return `${indent}- [🙋 ${target}](quick:${target})`;
+}
+
+function extractPromotableTarget(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || lineHasQuickButton(trimmed)) return null;
+
+  const withoutBullet = trimmed.replace(LINE_BULLET, "");
+  if (!withoutBullet || /^[|#>`]/.test(withoutBullet) || /^#{1,6}\s/.test(withoutBullet)) {
+    return null;
+  }
+  if (/[|`]/.test(withoutBullet) || /https?:\/\//i.test(withoutBullet)) return null;
+  if (/[。！]$/.test(withoutBullet)) return null;
+  if (withoutBullet.length < 2 || withoutBullet.length > 40) return null;
+  if (!ACTION_PREFIX.test(withoutBullet)) return null;
+  return withoutBullet;
+}
+
+/** 把成功回执文末 2–4 条动作短句提升为平台 quick 协议。不写死具体文案。 */
+export function promoteRecommendedQuestionLines(text: string): string {
+  if (!text) return "";
+  const mapped = text.split(/\r?\n/);
+
+  let end = mapped.length;
+  while (end > 0 && !(mapped[end - 1] || "").trim()) end -= 1;
+
+  const block: number[] = [];
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const line = mapped[index] || "";
+    if (!line.trim()) break;
+    if (lineHasQuickButton(line.trim())) break;
+    if (!extractPromotableTarget(line)) break;
+    block.push(index);
+  }
+  block.reverse();
+
+  const start = block[0];
+  const precededByBlank = start === 0 || (start > 0 && !(mapped[start - 1] || "").trim());
+  if (block.length >= 2 && block.length <= 4 && precededByBlank) {
+    for (const index of block) {
+      const line = mapped[index] || "";
+      const target = extractPromotableTarget(line);
+      if (!target) continue;
+      mapped[index] = toQuickMarkdown(target, line.match(/^\s*/)?.[0] || "");
+    }
+  }
+
+  return mapped.join("\n");
+}
+
 export function encodeQuickTarget(target: string): string {
   const trimmed = target.trim();
   return trimmed.includes("%") ? trimmed : encodeURIComponent(trimmed);
@@ -153,10 +208,81 @@ function stripQuickLinksInText(text: string): string {
   return processed;
 }
 
+const QUICK_ANCHOR_RE =
+  /<a\b[^>]*(?:class=["'][^"']*quick-action-btn[^"']*["']|href=["']quick:[^"']*["'])[^>]*>[\s\S]*?<\/a>/gi;
+
+function stripListMarker(line: string): string {
+  return line.replace(/^\s*(?:[-*•+]|\d+[.)])\s+/, "").trim();
+}
+
+function extractQuickOnlyButtons(line: string): string[] | null {
+  const withoutMarker = stripListMarker(line);
+  if (!withoutMarker) return null;
+
+  const buttons = withoutMarker.match(QUICK_ANCHOR_RE) || [];
+  if (buttons.length === 0) return null;
+
+  const remainder = withoutMarker
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, "")
+    .replace(/&nbsp;/gi, " ")
+    .trim();
+  if (remainder) return null;
+  return buttons;
+}
+
+/** 连续推荐按钮收成一行，避免 Markdown 列表 / 换行把按钮排成一列。 */
+function flattenConsecutiveQuickButtons(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const output: string[] = [];
+  let group: string[] = [];
+  let pendingBlanks = 0;
+
+  const flushGroup = () => {
+    if (group.length === 0) return;
+    output.push(
+      group.length === 1
+        ? group[0]!
+        : `<span class="quick-action-row">${group.join(" ")}</span>`,
+    );
+    group = [];
+  };
+
+  const flushPendingBlanks = () => {
+    for (let index = 0; index < pendingBlanks; index += 1) {
+      output.push("");
+    }
+    pendingBlanks = 0;
+  };
+
+  for (const line of lines) {
+    const buttons = extractQuickOnlyButtons(line);
+    if (buttons) {
+      pendingBlanks = 0;
+      group.push(...buttons);
+      continue;
+    }
+    if (!line.trim()) {
+      if (group.length > 0) {
+        pendingBlanks += 1;
+      } else {
+        output.push(line);
+      }
+      continue;
+    }
+    flushGroup();
+    flushPendingBlanks();
+    output.push(line);
+  }
+
+  flushGroup();
+  flushPendingBlanks();
+  return output.join("\n");
+}
+
 export function parseQuickButtons(text: string): string {
   if (!text) return "";
 
-  let processed = text;
+  let processed = promoteRecommendedQuestionLines(text);
 
   // [label](<quick:...>) — 复杂命令（含 >、引号等）推荐此写法
   processed = processed.replace(
@@ -178,7 +304,7 @@ export function parseQuickButtons(text: string): string {
     },
   );
 
-  return processed;
+  return flattenConsecutiveQuickButtons(processed);
 }
 
 /**
@@ -188,7 +314,7 @@ export function parseQuickButtons(text: string): string {
 export function stripQuickButtons(text: string): string {
   if (!text) return "";
 
-  const lines = text.split(/\r?\n/);
+  const lines = promoteRecommendedQuestionLines(text).split(/\r?\n/);
   const kept: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {

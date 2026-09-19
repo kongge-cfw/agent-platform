@@ -256,7 +256,7 @@ async def test_runtime_tool_serializes_structured_result_as_json():
 @pytest.mark.asyncio
 async def test_runtime_tool_truncates_oversized_result_with_marker():
     async def invoke(**_kwargs):
-        return {"payload": "x" * 5000}
+        return {"payload": "x" * 25000}
 
     spec = RuntimeToolSpec(
         name="mcp-large-result",
@@ -270,7 +270,7 @@ async def test_runtime_tool_truncates_oversized_result_with_marker():
     text = result.content[0].text
 
     assert "… [输出已截断]" in text
-    assert len(text) <= 4000 + len("\n… [输出已截断]")
+    assert len(text) <= 20000 + len("\n… [输出已截断]")
 
 
 @pytest.mark.asyncio

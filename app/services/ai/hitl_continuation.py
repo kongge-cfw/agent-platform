@@ -30,7 +30,16 @@ _SKIP_ATTACHMENT_TYPES = frozenset(
 _NON_ENTITY_RESOLVE_MARKERS = ("relative_date", "relative_dates")
 _RECORD_NAME_KEYS = ("name", "matchedName", "matched_name", "label", "title")
 _GENERIC_ID_KEYS = frozenset({"id", "uuid", "traceid", "requestid", "questionid", "confirmationid"})
+_RESOLVE_OBSERVATION_OPTIONAL_KEYS = (
+    ("enabled", "enabled"),
+    ("matchCount", "matchCount"),
+    ("match_count", "matchCount"),
+)
 _RESOLVED_ENTITIES_FACT = "resolved_entities"
+RESOLVED_ENTITIES_MARKER = "[已解析对象快照]"
+# 纯数字，或数字加字段里自带的短后缀（最多 2 字，原样保留，不维护量词表）
+_COUNT_VALUE_RE = re.compile(r"^(\d+)\s*([^\d\s、，,\n]{0,2})$")
+_FALSEY_ENABLED = frozenset({"false", "0", "no", "off", "disabled"})
 
 _MEMORY_STORE: dict[str, dict[str, Any]] = {}
 
@@ -109,6 +118,20 @@ def empty_continuation() -> dict[str, Any]:
         "todos": None,
         "updated_at": 0,
     }
+
+
+def has_open_hitl_todos(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    raw = payload.get("todos")
+    items = raw.get("todos") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and str(item.get("status") or "").strip() in {"pending", "in_progress"}
+        for item in items
+    )
 
 
 def attachments_from_messages(messages: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -198,13 +221,15 @@ def normalize_skills(skills: list[dict[str, Any]] | None) -> list[dict[str, str]
         if not skill_id or skill_id in seen or skill_id in _sticky_skill_exclude_ids():
             continue
         seen.add(skill_id)
-        items.append(
-            {
-                "id": skill_id,
-                "name": str(skill.get("name") or skill_id).strip() or skill_id,
-                "scope": str(skill.get("scope") or "").strip(),
-            }
-        )
+        item = {
+            "id": skill_id,
+            "name": str(skill.get("name") or skill_id).strip() or skill_id,
+            "scope": str(skill.get("scope") or "").strip(),
+        }
+        content_rev = str(skill.get("content_rev") or "").strip()
+        if content_rev:
+            item["content_rev"] = content_rev
+        items.append(item)
     return items
 
 
@@ -222,42 +247,106 @@ def parse_resolve_tool_fact(tool_name: str | None, tool_output: Any) -> dict[str
     payload = _unwrap_tool_payload(tool_output)
     if not payload:
         return None
-    records = payload.get("records")
-    if not isinstance(records, list):
-        records = payload.get("items")
-    if not isinstance(records, list):
+    records = _resolve_record_list(payload)
+    if records is None:
         return None
     simplified: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
     for record in records:
         if not isinstance(record, dict):
             continue
-        name = ""
-        for key in _RECORD_NAME_KEYS:
-            name = str(record.get(key) or "").strip()
-            if name:
-                break
+        name = _resolve_record_name(record)
         id_key, id_value = _pick_record_id(record)
         found = bool(record.get("found", bool(id_value))) and bool(id_value)
         if not name and not id_value:
             continue
+        if name:
+            seen_names.add(name)
+        item = {
+            "name": name,
+            "found": found,
+            "id_key": id_key,
+            "id_value": id_value if found else "",
+            "matchedName": str(record.get("matchedName") or name).strip(),
+        }
+        _copy_resolve_status_fields(record, item)
+        simplified.append(item)
+    for name in payload.get("missing_names") or []:
+        text = str(name or "").strip()
+        if not text or text in seen_names:
+            continue
+        seen_names.add(text)
         simplified.append(
             {
-                "name": name,
-                "found": found,
-                "id_key": id_key,
-                "id_value": id_value if found else "",
-                "matchedName": str(record.get("matchedName") or name).strip(),
+                "name": text,
+                "found": False,
+                "id_key": "",
+                "id_value": "",
+                "matchedName": text,
             }
         )
     if not simplified:
         return None
+    found_records_n = sum(1 for item in simplified if item["found"])
+    claimed_n = _coerce_int(payload.get("found"), found_records_n)
     return {
         "source_tool": str(tool_name or ""),
         "total": payload.get("total", len(simplified)),
-        "found": payload.get("found", sum(1 for item in simplified if item["found"])),
+        "found": payload.get("found", found_records_n),
+        "found_claimed": claimed_n,
+        "found_records": found_records_n,
         "missing": payload.get("missing", sum(1 for item in simplified if not item["found"])),
+        "integrity": "complete" if claimed_n == found_records_n else "incomplete",
         "records": simplified,
     }
+
+
+def compact_resolve_tool_result_for_model(tool_name: str | None, tool_output: Any) -> str | None:
+    """把解析名单收成可完整解析的短 JSON，禁止从中间切断 records。"""
+    if not is_entity_resolve_tool(tool_name):
+        return None
+    payload = _unwrap_tool_payload(tool_output)
+    if not payload:
+        return None
+    records = _resolve_record_list(payload)
+    if records is None:
+        return None
+
+    found_records: list[dict[str, Any]] = []
+    missing_records: list[dict[str, Any]] = []
+    for record in records:
+        slim = _slim_resolve_observation_record(record)
+        if slim is None:
+            continue
+        if slim.get("found"):
+            found_records.append(slim)
+        else:
+            missing_records.append(slim)
+    if not found_records and not missing_records:
+        return None
+
+    compact = _build_resolve_observation(
+        payload,
+        found_records=found_records,
+        missing_records=missing_records,
+    )
+    from app.services.ai.runtime.agentscope.stream_reconcile import DEFAULT_TOOL_OUTPUT_MAX_LEN
+
+    text = json.dumps(compact, ensure_ascii=False, default=str)
+    if len(text) <= DEFAULT_TOOL_OUTPUT_MAX_LEN or not missing_records:
+        return text
+    compact = _build_resolve_observation(
+        payload,
+        found_records=found_records,
+        missing_records=[],
+        missing_names=[
+            str(item.get("name") or "").strip()
+            for item in missing_records
+            if str(item.get("name") or "").strip()
+        ],
+        missing_collapsed=True,
+    )
+    return json.dumps(compact, ensure_ascii=False, default=str)
 
 
 def resolved_id_map(payload: dict[str, Any] | None) -> dict[str, tuple[str, str]]:
@@ -290,52 +379,64 @@ def enrich_confirmation_fields(
     fields: list[dict[str, Any]],
     continuation: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """若字段值里出现已解析对象名称，则补上工具返回的主键。"""
-    id_map = resolved_id_map(continuation)
-    if not id_map or not fields:
-        return [dict(field) for field in fields]
-    enriched: list[dict[str, Any]] = []
-    wrote_ids = False
-    for field in fields:
-        next_field = dict(field)
-        value_type = str(next_field.get("value_type") or "string")
-        if value_type in {"boolean", "number", "date", "datetime"}:
-            enriched.append(next_field)
-            continue
-        rewritten, matched = _rewrite_if_resolved_names(next_field.get("value"), id_map)
-        if matched:
-            next_field["value"] = rewritten
-            wrote_ids = True
-            if "\n" in str(rewritten or "") and value_type != "boolean":
-                next_field["value_type"] = "text"
-        key_text = str(next_field.get("key") or "")
-        label_text = str(next_field.get("label") or "")
-        if key_text == "resolved_ids" or "已解析主键" in label_text or _looks_like_id_list_key(key_text):
-            wrote_ids = True
-        enriched.append(next_field)
-    if wrote_ids:
-        already = any(
-            str(item.get("key") or "") == "resolved_ids"
-            or _looks_like_id_list_key(str(item.get("key") or ""))
-            or "已解析主键" in str(item.get("label") or "")
-            for item in enriched
-        )
-        if not already:
-            lines = [
-                f"{name}（{id_key}: {id_value}）"
-                for name, (id_key, id_value) in id_map.items()
+    """兼容旧调用：只回写字段，风险提示请用 enrich_confirmation_card。"""
+    next_fields, _ = enrich_confirmation_card(fields, continuation)
+    return next_fields
+
+
+def enrich_confirmation_card(
+    fields: list[dict[str, Any]],
+    continuation: dict[str, Any] | None,
+    *,
+    risk_note: str = "",
+) -> tuple[list[dict[str, Any]], str]:
+    """按完整解析快照回写名称名单和数量字段，不把主键写进名称字段。"""
+    next_fields = [dict(field) for field in fields or []]
+    note = str(risk_note or "").strip()
+    fact = _resolve_fact_from_continuation(continuation)
+    records = fact.get("records") if isinstance(fact, dict) else None
+    if not isinstance(records, list) or not records:
+        return next_fields, note
+
+    eligible_names = _eligible_resolve_names(records)
+    ineligible_names = _ineligible_resolve_names(records, eligible_names)
+    snapshot_names = set(eligible_names) | set(ineligible_names)
+    incomplete = str(fact.get("integrity") or "") == "incomplete"
+    aligned_keys: set[str] = set()
+    listed_count: int | None = None
+    if not incomplete and eligible_names:
+        for field in next_fields:
+            if not _is_name_list_field(field):
+                continue
+            tokens = [
+                _strip_id_annotation(_normalize_entity_token(token))
+                for token in _split_entity_names(field.get("value"))
             ]
-            if lines:
-                enriched.append(
-                    {
-                        "key": "resolved_ids",
-                        "label": "已解析主键",
-                        "value": "\n".join(lines),
-                        "editable": False,
-                        "value_type": "text",
-                    }
-                )
-    return enriched
+            tokens = [token for token in tokens if token]
+            if not _is_snapshot_name_list(tokens, snapshot_names):
+                continue
+            listed_count = len(tokens)
+            raw = str(field.get("value") or "")
+            if "\n" in raw and "、" not in raw:
+                field["value"] = "\n".join(eligible_names)
+                field["value_type"] = "text"
+            else:
+                field["value"] = "、".join(eligible_names)
+            aligned_keys.add(str(field.get("key") or ""))
+        if listed_count is not None:
+            for field in next_fields:
+                if str(field.get("key") or "") in aligned_keys:
+                    continue
+                _sync_count_field(field, listed_count, len(eligible_names))
+
+    if aligned_keys and ineligible_names:
+        extra = (
+            f"另有{len(ineligible_names)}个对象当前无法匹配或不可用："
+            f"{'、'.join(ineligible_names[:40])}"
+        )
+        if extra not in note:
+            note = f"{note} {extra}".strip() if note else extra
+    return next_fields, note
 
 
 def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
@@ -373,17 +474,23 @@ def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
             if path:
                 lines.append(f"  - {filename or path}: {path}")
     records = fact.get("records") if isinstance(fact, dict) else None
+    if isinstance(fact, dict) and str(fact.get("integrity") or "") == "incomplete":
+        lines.append("- 已解析快照不完整，禁止按汇总数字写入，必须再次调用解析工具。")
     if isinstance(records, list) and records:
         lines.append("- 已解析对象主键（以工具返回为准，禁止改写 ID）：")
-        for record in records[:40]:
+        found_lines: list[str] = []
+        missing_lines: list[str] = []
+        for record in records:
             if not isinstance(record, dict):
                 continue
             name = str(record.get("name") or "").strip()
             id_key, id_value = _record_id(record)
             if record.get("found") and id_value:
-                lines.append(f"  - {name} → {id_key}={id_value}")
+                found_lines.append(f"  - {name} → {id_key}={id_value}")
             elif name:
-                lines.append(f"  - {name} → 未解析到主键，不得写入")
+                missing_lines.append(f"  - {name} → 未解析到主键，不得写入")
+        lines.extend(found_lines)
+        lines.extend(missing_lines[:40])
     if todos and isinstance(todos.get("todos"), list) and todos.get("todos"):
         lines.append(
             "- 当前任务清单（回执后已推进，请按此状态继续更新；"
@@ -397,6 +504,218 @@ def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
             if content and status:
                 lines.append(f"  - [{status}] {content}")
     return "\n".join(lines)
+
+
+def build_resolved_entities_prompt_block(payload: dict[str, Any] | None) -> str:
+    """非回执轮：只注入已解析对象快照，不当成确认卡回执。"""
+    if not isinstance(payload, dict):
+        return ""
+    facts = payload.get("facts") or {}
+    fact = facts.get(_RESOLVED_ENTITIES_FACT) or facts.get("enterprise_resolve") or {}
+    records = fact.get("records") if isinstance(fact, dict) else None
+    if not isinstance(records, list) or not records:
+        return ""
+    lines = [
+        RESOLVED_ENTITIES_MARKER,
+        "以下对象已由解析工具返回。仅当本轮仍处理同一批对象时使用；禁止改写 ID，禁止臆造未列出的主键。",
+    ]
+    if str(fact.get("integrity") or "") == "incomplete":
+        lines.append(
+            "- 快照不完整（汇总条数与名单不一致），禁止按汇总数字出卡或写入，必须再次调用解析工具。"
+        )
+    found_lines: list[str] = []
+    missing_lines: list[str] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get("name") or "").strip()
+        id_key, id_value = _record_id(record)
+        if record.get("found") and id_value:
+            found_lines.append(f"  - {name} → {id_key}={id_value}")
+        elif name:
+            missing_lines.append(f"  - {name} → 未解析到主键，不得写入")
+    if found_lines:
+        lines.append("- 已解析对象主键（以工具返回为准）：")
+        lines.extend(found_lines)
+    if missing_lines:
+        lines.append("- 未匹配对象：")
+        lines.extend(missing_lines[:40])
+    return "\n".join(lines)
+
+
+def _resolve_record_list(payload: dict[str, Any]) -> list[Any] | None:
+    records = payload.get("records")
+    if isinstance(records, list):
+        return records
+    items = payload.get("items")
+    if isinstance(items, list):
+        return items
+    return None
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _copy_resolve_status_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for source_key, target_key in _RESOLVE_OBSERVATION_OPTIONAL_KEYS:
+        if source_key in source and target_key not in target:
+            target[target_key] = source.get(source_key)
+
+
+def _resolve_fact_from_continuation(payload: dict[str, Any] | None) -> dict[str, Any]:
+    facts = (payload or {}).get("facts") or {}
+    current = facts.get(_RESOLVED_ENTITIES_FACT)
+    if isinstance(current, dict):
+        return current
+    legacy = facts.get("enterprise_resolve")
+    return legacy if isinstance(legacy, dict) else {}
+
+
+def _is_truthy_enabled(value: Any) -> bool:
+    if value is False or value == 0:
+        return False
+    text = str(value or "").strip().lower()
+    return text not in _FALSEY_ENABLED
+
+
+def _is_eligible_resolve_record(record: dict[str, Any]) -> bool:
+    if not record.get("found"):
+        return False
+    _, id_value = _record_id(record)
+    if not id_value:
+        return False
+    if "enabled" in record and not _is_truthy_enabled(record.get("enabled")):
+        return False
+    if "matchCount" in record or "match_count" in record:
+        raw = record.get("matchCount", record.get("match_count"))
+        try:
+            if int(raw) != 1:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _eligible_resolve_names(records: list[Any]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict) or not _is_eligible_resolve_record(record):
+            continue
+        name = str(record.get("name") or record.get("matchedName") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _ineligible_resolve_names(records: list[Any], eligible_names: list[str]) -> list[str]:
+    eligible = set(eligible_names)
+    names: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get("name") or record.get("matchedName") or "").strip()
+        if not name or name in eligible or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _is_name_list_field(field: dict[str, Any]) -> bool:
+    value_type = str(field.get("value_type") or "string")
+    return value_type not in {"boolean", "number", "date", "datetime"}
+
+
+def _is_snapshot_name_list(tokens: list[str], snapshot_names: set[str]) -> bool:
+    """整段都必须是快照里的对象名，避免长文本里偶然出现一个名称就被整段替换。"""
+    if not tokens or not snapshot_names:
+        return False
+    return all(token in snapshot_names for token in tokens)
+
+
+def _sync_count_field(field: dict[str, Any], listed_count: int, eligible_count: int) -> None:
+    value_type = str(field.get("value_type") or "string")
+    value = field.get("value")
+    if value_type == "number":
+        try:
+            if int(value) == listed_count:
+                field["value"] = eligible_count
+        except (TypeError, ValueError):
+            return
+        return
+    text = str(value or "").strip()
+    matched = _COUNT_VALUE_RE.fullmatch(text)
+    if not matched or int(matched.group(1)) != listed_count:
+        return
+    field["value"] = f"{eligible_count}{matched.group(2) or ''}"
+
+
+def _resolve_record_name(record: dict[str, Any]) -> str:
+    for key in _RECORD_NAME_KEYS:
+        name = str(record.get(key) or "").strip()
+        if name:
+            return name
+    return ""
+
+
+def _slim_resolve_observation_record(record: Any) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    name = _resolve_record_name(record)
+    id_key, id_value = _pick_record_id(record)
+    found = bool(record.get("found", bool(id_value))) and bool(id_value)
+    if not name and not id_value:
+        return None
+    item: dict[str, Any] = {"name": name, "found": found}
+    matched = str(record.get("matchedName") or "").strip()
+    if matched and matched != name:
+        item["matchedName"] = matched
+    for source_key, target_key in _RESOLVE_OBSERVATION_OPTIONAL_KEYS:
+        if source_key in record and target_key not in item:
+            item[target_key] = record.get(source_key)
+    if found and id_value:
+        item[id_key or "id"] = id_value
+    return item
+
+
+def _build_resolve_observation(
+    payload: dict[str, Any],
+    *,
+    found_records: list[dict[str, Any]],
+    missing_records: list[dict[str, Any]],
+    missing_names: list[str] | None = None,
+    missing_collapsed: bool = False,
+) -> dict[str, Any]:
+    records = list(found_records) + list(missing_records)
+    found_records_n = len(found_records)
+    claimed_n = _coerce_int(payload.get("found"), found_records_n)
+    integrity = "complete" if claimed_n == found_records_n else "incomplete"
+    compact: dict[str, Any] = {
+        "total": payload.get("total", len(records) + len(missing_names or [])),
+        "found": payload.get("found", found_records_n),
+        "found_claimed": claimed_n,
+        "found_records": found_records_n,
+        "missing": payload.get("missing", len(missing_names or missing_records)),
+        "integrity": integrity,
+        "records": records,
+        "record_count": len(records),
+    }
+    if integrity == "incomplete":
+        compact["integrity_note"] = (
+            "解析汇总与名单条数不一致，禁止按汇总数字出卡；请用同一批名称再次调用解析工具。"
+        )
+    if missing_collapsed:
+        compact["missing_collapsed"] = True
+        compact["missing_names"] = list(missing_names or [])
+    return compact
 
 
 def _record_id(record: dict[str, Any]) -> tuple[str, str]:
@@ -447,6 +766,15 @@ def _normalize_entity_token(token: str) -> str:
     return cleaned.strip()
 
 
+def _strip_id_annotation(token: str) -> str:
+    cleaned = str(token or "").strip()
+    for marker in ("（", "("):
+        idx = cleaned.find(marker)
+        if idx > 0 and "id" in cleaned[idx:].lower():
+            return cleaned[:idx].strip()
+    return cleaned
+
+
 def _rewrite_if_resolved_names(
     value: Any, id_map: dict[str, tuple[str, str]]
 ) -> tuple[Any, bool]:
@@ -485,12 +813,7 @@ def _split_entity_names(text: str) -> list[str]:
 
 
 def _format_resolved_token(token: str, id_map: dict[str, tuple[str, str]]) -> tuple[str, bool]:
-    cleaned = _normalize_entity_token(token)
-    for marker in ("（", "("):
-        idx = cleaned.find(marker)
-        if idx > 0 and "id" in cleaned[idx:].lower():
-            cleaned = cleaned[:idx].strip()
-            break
+    cleaned = _strip_id_annotation(_normalize_entity_token(token))
     mapped = id_map.get(cleaned) or id_map.get(token.strip())
     if not mapped:
         return token, False
@@ -543,11 +866,16 @@ def _merge_resolved_entities(previous: dict[str, Any], incoming: dict[str, Any])
                 continue
             merged[key] = record
     records = list(merged.values())
+    found_records_n = sum(1 for item in records if item.get("found"))
+    claimed_n = _coerce_int(incoming.get("found_claimed", incoming.get("found")), found_records_n)
     return {
         "source_tool": incoming.get("source_tool") or previous.get("source_tool") or "",
         "total": len(records),
-        "found": sum(1 for item in records if item.get("found")),
+        "found": incoming.get("found", previous.get("found", found_records_n)),
+        "found_claimed": claimed_n,
+        "found_records": found_records_n,
         "missing": sum(1 for item in records if not item.get("found")),
+        "integrity": "complete" if claimed_n == found_records_n else "incomplete",
         "records": records,
     }
 
@@ -686,6 +1014,8 @@ class HitlContinuationStore:
                         item["name"] = prev["name"]
                     if not item.get("scope") and prev.get("scope"):
                         item["scope"] = prev["scope"]
+                    if not item.get("content_rev") and prev.get("content_rev"):
+                        item["content_rev"] = prev["content_rev"]
                 merged[item["id"]] = item
             current["skills"] = list(merged.values())
         if attachments is not None and replace_attachments:
@@ -739,17 +1069,20 @@ class HitlContinuationStore:
         ):
             return
         last_turn = last_user_turn_messages(messages)
+        uid, cid = self._identity(user_info=user_info, conversation_id=conversation_id)
+        current = await self._get(self._key(uid, cid)) if uid and cid else None
+        keep_task = has_open_hitl_todos(current)
         await self.merge(
             user_info=user_info,
             conversation_id=conversation_id,
-            skills=skills if skills is not None else skills_from_messages(last_turn),
-            attachments=attachments_from_messages(last_turn),
-            original_user_query=user_query,
-            replace_attachments=True,
-            replace_skills=True,
-            replace_original_query=True,
-            clear_facts=True,
-            clear_todos=True,
+            skills=skills if skills is not None else (None if keep_task else skills_from_messages(last_turn)),
+            attachments=None if keep_task else attachments_from_messages(last_turn),
+            original_user_query=None if keep_task else user_query,
+            replace_attachments=not keep_task,
+            replace_skills=not keep_task,
+            replace_original_query=not keep_task,
+            clear_facts=not keep_task,
+            clear_todos=not keep_task,
         )
 
     async def remember_skill(
@@ -765,11 +1098,24 @@ class HitlContinuationStore:
         sid = str(skill_id or "").strip()
         if not sid or sid in _sticky_skill_exclude_ids():
             return
+        resolved_user = user_info
+        if resolved_user is None and user_id:
+            resolved_user = {"user_id": user_id}
+        from app.services.ai.skill_revision import current_skill_revision
+
+        content_rev = current_skill_revision(
+            sid,
+            scope=str(scope or "").strip() or None,
+            user_info=resolved_user,
+        )
+        skill_item = {"id": sid, "name": skill_name or sid, "scope": scope}
+        if content_rev:
+            skill_item["content_rev"] = content_rev
         await self.merge(
             user_info=user_info,
             conversation_id=conversation_id,
             user_id=user_id,
-            skills=[{"id": sid, "name": skill_name or sid, "scope": scope}],
+            skills=[skill_item],
         )
 
     async def remember_resolve_tool(

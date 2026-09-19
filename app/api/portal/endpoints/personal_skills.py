@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _mark_personal_skill_changed(skill_id: Optional[str] = None, user: Optional[dict] = None) -> None:
+    from app.services.ai.skill_revision import mark_skill_files_changed
+
+    mark_skill_files_changed(skill_id, scope="personal", user_info=user)
+
+
 # ---------------------------------------------------------------------------
 # 内部辅助：推导并校验个人技能目录
 # ---------------------------------------------------------------------------
@@ -129,6 +135,7 @@ async def create_personal_skill(
         )
         with open(skill_md_path, "w", encoding="utf-8") as f:
             f.write(default_content)
+        _mark_personal_skill_changed(req.id, user)
         return {"status": "success", "message": f"个人技能 {req.id} 创建成功"}
     except HTTPException:
         raise
@@ -266,6 +273,7 @@ async def edit_personal_skill_file(
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(req.content)
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": "保存成功"}
     except HTTPException:
         raise
@@ -307,6 +315,7 @@ async def create_personal_skill_asset(
         else:
             with open(target_path, "x", encoding="utf-8"):
                 pass
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": "创建成功"}
     except HTTPException:
         raise
@@ -339,6 +348,7 @@ async def upload_personal_skill_file(
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, "wb") as f:
             f.write(content)
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": f"文件 {file_name} 上传成功"}
     except HTTPException:
         raise
@@ -363,6 +373,7 @@ async def upload_personal_skill_archive(
 
         file_name = file.filename if file.filename else "archive.zip"
         safe_extract_archive(content, file_name, target_dir)
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": f"技能压缩包 {file_name} 上传解压成功"}
     except HTTPException:
         raise
@@ -392,6 +403,7 @@ async def delete_personal_skill_file(
             shutil.rmtree(target_path)
         else:
             os.remove(target_path)
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": "删除成功"}
     except HTTPException:
         raise
@@ -414,6 +426,7 @@ async def delete_personal_skill(
         if not os.path.exists(skill_dir):
             raise HTTPException(status_code=404, detail="个人技能目录不存在")
         shutil.rmtree(skill_dir)
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": f"个人技能 {skill_id} 已物理删除"}
     except HTTPException:
         raise
@@ -568,6 +581,7 @@ async def import_personal_skill_package(
                 shutil.rmtree(skill_dir)
             raise e
 
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": f"个人技能 {skill_id} 导入成功"}
     except HTTPException:
         raise
@@ -592,6 +606,7 @@ async def toggle_personal_skill(
         success = toggle_skill_enabled_in_file(skill_md_path, enabled)
         if not success:
             raise HTTPException(status_code=500, detail="切换状态失败，请确认技能文件格式正常")
+        _mark_personal_skill_changed(skill_id, user)
         return {"status": "success", "message": f"技能已{'启用' if enabled else '禁用'}"}
     except HTTPException:
         raise

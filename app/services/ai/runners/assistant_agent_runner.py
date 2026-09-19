@@ -2457,13 +2457,19 @@ class AssistantAgentRunner(BaseExecutor):
                             await coordinator.remember_skill(
                                 skill_id=parsed_skill[0],
                                 skill_name=parsed_skill[1],
+                                user_info=self.user_info,
                                 user_id=self._runtime_user_id(),
                                 conversation_id=self.conversation_id,
                             )
                     elif is_entity_resolve_tool(tool_name):
+                        from app.services.ai.runtime.agentscope.hitl_tool_result import (
+                            take_pending_resolve_payload,
+                        )
+
+                        resolve_output = take_pending_resolve_payload(tool_name) or output
                         await coordinator.remember_resolve_tool(
                             tool_name=tool_name,
-                            tool_output=output,
+                            tool_output=resolve_output,
                             user_id=self._runtime_user_id(),
                             conversation_id=self.conversation_id,
                         )
@@ -3730,7 +3736,7 @@ class AssistantAgentRunner(BaseExecutor):
         """本轮是否存在可安全跨轮持久化的最终工具结果。"""
         return bool(self.resolve_tool_run_text())
 
-    def resolve_tool_run_text(self, *, max_total_chars: int = 4000) -> str:
+    def resolve_tool_run_text(self, *, max_total_chars: int = 20000) -> str:
         """仅持久化本轮已收到最终成功状态的工具结果。"""
         return build_final_tool_result_context(
             getattr(self, "_last_turn_tool_meta", None),

@@ -343,7 +343,6 @@ export async function openChatAttachmentFile(options: {
   name: string
   conversationId?: string | null
   showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void
-  preview: (payload: { path: string; name: string }) => void | Promise<void>
 }) {
   const path = String(options.path || '').trim()
   const name = String(options.name || '').trim() || 'download'
@@ -351,10 +350,7 @@ export async function openChatAttachmentFile(options: {
     options.showToast('无法打开该文件：缺少路径', 'error')
     return
   }
-  if (canPreviewWorkspaceFile(name)) {
-    await options.preview({ path, name })
-    return
-  }
+  // 对话气泡附件一律下载；PDF 预览只留给工作区文件浏览器，避免点附件整页跳进画布。
   await downloadWorkspaceFile({
     path,
     name,

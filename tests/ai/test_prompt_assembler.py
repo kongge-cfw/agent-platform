@@ -354,6 +354,8 @@ def test_platform_prompt_exposes_explicit_authority_and_safe_meta_contract():
     assert "quick:" in prompt
     assert "quick 目标必须是自然语言问题" in prompt
     assert "不得把 SQL、代码或物理表名" in prompt
+    assert "禁止把技能正文里的 `quick:` 字面量抄进回复" in prompt
+    assert "确认卡展示中" in prompt or "确认完成前不要输出推荐问" in prompt
 
 
 def test_platform_prompt_separates_current_task_from_historical_context():
@@ -707,6 +709,23 @@ def test_skill_injection_block_lists_sidecar_names_without_bodies():
     assert "sessions/.../skills/" in block
     assert "只注入 SKILL.md" in block
     assert "enterprise_resolve" not in block
+
+
+def test_skill_injection_block_refreshed_requires_reread():
+    block = AgentServicePrompts.skill_full_instruction_block(
+        "演示流程",
+        "demo-skill",
+        "演示描述",
+        "# 最新流程\n必须按新步骤执行。\n",
+        sidecar_files=["SKILL.md", "tools.md"],
+        refreshed=True,
+    )
+
+    assert "该技能文件已更新" in block
+    assert "禁止沿用历史" in block
+    assert '必须重新调用 read_skill_instruction(skill_id="demo-skill")' in block
+    assert "无需再次调用 read_skill_instruction" not in block
+    assert "必须按新步骤执行" in block
 
 
 def test_prompt_includes_normalized_turn_context_without_replacing_agent_prompt():

@@ -221,7 +221,9 @@ def test_create_skills_tool(tmp_path):
     from app.utils.context import current_user_info
 
     # 将 settings.SKILLS_DIR mock 成 pytest 的 tmp_path 隔离真实环境
-    with patch("app.core.config.Settings.SKILLS_DIR", new_callable=PropertyMock) as mock_skills_dir:
+    with patch("app.core.config.Settings.SKILLS_DIR", new_callable=PropertyMock) as mock_skills_dir, patch(
+        "app.services.ai.skill_revision.mark_skill_files_changed"
+    ) as mock_mark:
         mock_skills_dir.return_value = str(tmp_path)
         token = current_user_info.set({"user_id": 1, "user_name": "tester", "role": "admin"})
         try:
@@ -241,6 +243,10 @@ def test_create_skills_tool(tmp_path):
             assert "创建成功" in res
             assert "NANZI_SKILL_CREATED" in res
             assert "test-ai-write" in res
+            mock_mark.assert_called()
+            assert mock_mark.call_args.kwargs.get("scope") == "global" or (
+                len(mock_mark.call_args.args) >= 1 and mock_mark.call_args.args[0] == skill_id
+            )
 
             # 验证物理文件写入
             skill_file = tmp_path / skill_id / "SKILL.md"

@@ -37,6 +37,12 @@ router = APIRouter()
 skill_platform_admin = require_permission("element", "element:skills:admin")
 skill_publication_reviewer = skill_platform_admin
 
+
+def _mark_platform_skill_changed(skill_id: Optional[str] = None) -> None:
+    from app.services.ai.skill_revision import mark_skill_files_changed
+
+    mark_skill_files_changed(skill_id, scope="global")
+
 @router.get("/stats", summary="获取技能调用统计数据")
 async def get_skills_stats(
     user_info: dict = Depends(require_api_key),
@@ -356,6 +362,7 @@ async def approve_skill_publication_request(
 ):
     try:
         data = await approve_publication(session, version_id=version_id, reviewer=user)
+        _mark_platform_skill_changed((data or {}).get("platform_skill_id"))
         return {"status": "success", "data": data}
     except PublicationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -451,7 +458,7 @@ async def create_skill(
         
         with open(skill_md_path, "w", encoding="utf-8") as f:
             f.write(default_content)
-            
+        _mark_platform_skill_changed(req.id)
         return {"status": "success", "message": f"技能 {req.id} 创建成功"}
     except HTTPException:
         raise
@@ -552,7 +559,7 @@ async def edit_skill_file(
         
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(req.content)
-            
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": "保存成功"}
     except HTTPException:
         raise
@@ -581,6 +588,7 @@ async def create_skill_asset(
             with open(target_path, "x", encoding="utf-8"):
                 pass
 
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": "创建成功"}
     except HTTPException:
         raise
@@ -612,7 +620,7 @@ async def upload_skill_file(
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, "wb") as f:
             f.write(content)
-            
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": f"文件 {file_name} 上传成功"}
     except HTTPException:
         raise
@@ -642,7 +650,7 @@ async def delete_skill_file(
             shutil.rmtree(target_path)
         else:
             os.remove(target_path)
-            
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": "删除成功"}
     except HTTPException:
         raise
@@ -664,9 +672,7 @@ async def delete_entire_skill(
 
         unbound_versions = await AgentManagerService.unbind_skill_from_versions(session, skill_id)
         shutil.rmtree(skill_dir)
-        from app.services.ai.skill_resolver import clear_skill_meta_cache
-
-        clear_skill_meta_cache()
+        _mark_platform_skill_changed(skill_id)
         from app.services.ai.router_service import router_service
 
         router_service.invalidate_cache()
@@ -770,7 +776,7 @@ async def upload_skill_archive(
             
         file_name = file.filename if file.filename else "archive.zip"
         safe_extract_archive(content, file_name, target_dir)
-        
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": f"技能压缩包 {file_name} 上传解压成功"}
     except HTTPException:
         raise
@@ -846,7 +852,7 @@ async def import_skill_package(
             if os.path.exists(skill_dir):
                 shutil.rmtree(skill_dir)
             raise e
-            
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": f"技能 {skill_id} 导入成功"}
     except HTTPException:
         raise
@@ -871,6 +877,7 @@ async def toggle_skill(
         success = toggle_skill_enabled_in_file(skill_md_path, enabled)
         if not success:
             raise HTTPException(status_code=500, detail="切换状态失败，请确认技能文件格式正常")
+        _mark_platform_skill_changed(skill_id)
         return {"status": "success", "message": f"技能已{'启用' if enabled else '禁用'}"}
     except HTTPException:
         raise

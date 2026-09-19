@@ -249,6 +249,7 @@ class SkillInjector:
         description: str,
         full_instruction: Optional[str] = None,
         sidecar_files: Optional[List[str]] = None,
+        refreshed: bool = False,
     ) -> str:
         if full_instruction:
             return AgentServicePrompts.skill_full_instruction_block(
@@ -257,6 +258,7 @@ class SkillInjector:
                 description,
                 full_instruction,
                 sidecar_files=sidecar_files,
+                refreshed=refreshed,
             )
         return AgentServicePrompts.skill_summary_injection_block(
             skill_name,
@@ -271,7 +273,12 @@ class SkillInjector:
             f"已识别候选流程「{skill_name}」(ID: {skill_id})。"
             "当前仅加载流程摘要；若本轮确需执行，系统会读取完整流程说明后再处理。"
         )
-        is_full_enabled = "已预载完整" in details or "可直接按该流程执行" in details
+        is_full_enabled = (
+            "已预载完整" in details
+            or "已预载最新" in details
+            or "可直接按该流程执行" in details
+            or "已重新挂载" in details
+        )
         if is_full_enabled:
             return {
                 "type": "log",
@@ -378,33 +385,76 @@ class SkillInjector:
                 if file_obj.get("type") == "skill":
                     active_skills.append(file_obj)
 
-        if conversation_id and should_restore_hitl_continuation(user_query):
+        remembered_skills: List[Dict[str, Any]] = []
+        continuation_coordinator = None
+        if conversation_id:
             try:
-                coordinator = await HitlContinuationCoordinator.from_runtime()
-                continuation = await coordinator.get(
+                continuation_coordinator = await HitlContinuationCoordinator.from_runtime()
+                continuation = await continuation_coordinator.get(
                     user_info=user_info,
                     conversation_id=conversation_id,
                 )
-                mounted_urls = {str(item.get("url") or "") for item in active_skills}
-                for item in (continuation or {}).get("skills") or []:
-                    skill_id = str((item or {}).get("id") or "").strip()
-                    if not skill_id or skill_id in mounted_urls:
-                        continue
-                    mounted_urls.add(skill_id)
-                    active_skills.append(
-                        {
-                            "type": "skill",
-                            "url": skill_id,
-                            "filename": (item or {}).get("name") or skill_id,
-                            "skillMeta": item,
-                            "scope": (item or {}).get("scope"),
-                            "_hitl_restore": True,
-                        }
-                    )
+                remembered_skills = [
+                    item
+                    for item in (continuation or {}).get("skills") or []
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                ]
             except HitlContinuationUnavailableError:
                 raise
             except Exception as restore_err:
-                logger.warning("[Skills] Failed to restore HITL continuation skills: %s", restore_err)
+                logger.warning("[Skills] Failed to load HITL continuation skills: %s", restore_err)
+
+        if conversation_id and should_restore_hitl_continuation(user_query):
+            mounted_urls = {str(item.get("url") or "") for item in active_skills}
+            for item in remembered_skills:
+                skill_id = str(item.get("id") or "").strip()
+                if not skill_id or skill_id in mounted_urls:
+                    continue
+                mounted_urls.add(skill_id)
+                active_skills.append(
+                    {
+                        "type": "skill",
+                        "url": skill_id,
+                        "filename": item.get("name") or skill_id,
+                        "skillMeta": item,
+                        "scope": item.get("scope"),
+                        "_hitl_restore": True,
+                    }
+                )
+
+        if remembered_skills:
+            from app.services.ai.skill_revision import skill_revision_changed
+
+            mounted_by_id = {
+                str(item.get("url") or "").strip(): item
+                for item in active_skills
+                if str(item.get("url") or "").strip()
+            }
+            for item in remembered_skills:
+                skill_id = str(item.get("id") or "").strip()
+                if not skill_id:
+                    continue
+                if not skill_revision_changed(
+                    skill_id,
+                    item.get("content_rev"),
+                    scope=str(item.get("scope") or "") or None,
+                    user_info=user_info,
+                ):
+                    continue
+                existing = mounted_by_id.get(skill_id)
+                if existing is not None:
+                    existing["_skill_refresh"] = True
+                    continue
+                remounted = {
+                    "type": "skill",
+                    "url": skill_id,
+                    "filename": item.get("name") or skill_id,
+                    "skillMeta": item,
+                    "scope": item.get("scope"),
+                    "_skill_refresh": True,
+                }
+                active_skills.append(remounted)
+                mounted_by_id[skill_id] = remounted
 
         scoped_skill_items = [
             item
@@ -485,8 +535,9 @@ class SkillInjector:
                 elif not (meta_override and isinstance(meta_override, dict)):
                     logger.warning("[Skills] Skill markdown not found at %s", skill_md_path)
 
+                skill_refreshed = bool(skill_obj.get("_skill_refresh"))
                 full_instruction = None
-                if cls.should_preload_skill_full_instruction(
+                if skill_refreshed or cls.should_preload_skill_full_instruction(
                     match_source="mounted",
                     policy=full_load_policy,
                     loaded_count=full_loaded_count,
@@ -510,21 +561,43 @@ class SkillInjector:
                         sidecar_files=cls._sidecar_files_for(
                             skill_md_path if os.path.exists(skill_md_path) else None
                         ),
+                        refreshed=skill_refreshed,
                     )
                 )
                 logger.info(
-                    "[Skills] Matched mounted skill %s (%s).",
+                    "[Skills] Matched mounted skill %s (%s%s).",
                     skill_id,
                     "full instruction preloaded" if full_instruction else "summary only",
+                    ", refreshed" if skill_refreshed else "",
                 )
-                activated_skill_metas.append(
-                    {
-                        "id": str(skill_id),
-                        "name": skill_name,
-                        "scope": str(skill_scope or ""),
-                    }
+                from app.services.ai.skill_revision import current_skill_revision
+
+                activated_meta = {
+                    "id": str(skill_id),
+                    "name": skill_name,
+                    "scope": str(skill_scope or ""),
+                }
+                content_rev = current_skill_revision(
+                    str(skill_id),
+                    scope=skill_scope,
+                    user_info=user_info,
                 )
-                if skill_obj.get("_hitl_restore") and skills_log_callback:
+                if content_rev:
+                    activated_meta["content_rev"] = content_rev
+                activated_skill_metas.append(activated_meta)
+                if skill_refreshed and skills_log_callback:
+                    if full_instruction:
+                        details_msg = (
+                            f"检测到技能文件已更新，已重新挂载「{skill_name}」(ID: {skill_id})。"
+                            "已预载最新 SKILL.md；禁止沿用历史中的旧指令，附属文件须按 file= 重读。"
+                        )
+                    else:
+                        details_msg = (
+                            f"检测到技能文件已更新，已重新挂载「{skill_name}」(ID: {skill_id})。"
+                            "未能预载全文，必须重新 read_skill_instruction，禁止沿用历史旧指令。"
+                        )
+                    skills_log_callback(skill_id, skill_name, details_msg)
+                elif skill_obj.get("_hitl_restore") and skills_log_callback:
                     if full_instruction:
                         details_msg = (
                             f"HITL 续跑：已粘贴上一轮已启用流程「{skill_name}」(ID: {skill_id})。"
@@ -583,13 +656,21 @@ class SkillInjector:
                         )
                     )
                     mounted_skill_ids.add(skill_id)
-                    activated_skill_metas.append(
-                        {
-                            "id": str(skill_id),
-                            "name": skill_name,
-                            "scope": str(skill_meta.get("scope") or ""),
-                        }
+                    from app.services.ai.skill_revision import current_skill_revision
+
+                    activated_meta = {
+                        "id": str(skill_id),
+                        "name": skill_name,
+                        "scope": str(skill_meta.get("scope") or ""),
+                    }
+                    content_rev = current_skill_revision(
+                        str(skill_id),
+                        scope=str(skill_meta.get("scope") or "") or None,
+                        user_info=user_info,
                     )
+                    if content_rev:
+                        activated_meta["content_rev"] = content_rev
+                    activated_skill_metas.append(activated_meta)
                     logger.info(
                         "[Skills] Auto-resolved skill %s from query (%s).",
                         skill_id,
@@ -706,13 +787,21 @@ class SkillInjector:
                                 )
                             )
                             mounted_skill_ids.add(skill_id)
-                            activated_skill_metas.append(
-                                {
-                                    "id": str(skill_id),
-                                    "name": skill_name,
-                                    "scope": str(skill_meta.get("scope") or ""),
-                                }
+                            from app.services.ai.skill_revision import current_skill_revision
+
+                            activated_meta = {
+                                "id": str(skill_id),
+                                "name": skill_name,
+                                "scope": str(skill_meta.get("scope") or ""),
+                            }
+                            content_rev = current_skill_revision(
+                                str(skill_id),
+                                scope=str(skill_meta.get("scope") or "") or None,
+                                user_info=user_info,
                             )
+                            if content_rev:
+                                activated_meta["content_rev"] = content_rev
+                            activated_skill_metas.append(activated_meta)
                             logger.info(
                                 "[Skills] Scanned skill %s from query (score=%s, %s).",
                                 skill_id,
@@ -785,13 +874,23 @@ class SkillInjector:
 
         if conversation_id:
             try:
-                coordinator = await HitlContinuationCoordinator.from_runtime()
+                coordinator = continuation_coordinator or await HitlContinuationCoordinator.from_runtime()
+                persist_skills = activated_skill_metas
+                if not persist_skills and remembered_skills:
+                    persist_skills = [
+                        {
+                            key: value
+                            for key, value in item.items()
+                            if key in {"id", "name", "scope", "content_rev"}
+                        }
+                        for item in remembered_skills
+                    ]
                 await coordinator.remember_turn_inputs(
                     user_info=user_info,
                     conversation_id=conversation_id,
                     user_query=user_query,
                     messages=messages,
-                    skills=activated_skill_metas,
+                    skills=persist_skills,
                 )
             except HitlContinuationUnavailableError:
                 raise

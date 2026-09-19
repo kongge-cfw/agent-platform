@@ -784,6 +784,14 @@ def create_skills(
         # 写入物理磁盘
         with open(skill_md_path, "w", encoding="utf-8") as f:
             f.write(skill_md_content)
+
+        from app.services.ai.skill_revision import mark_skill_files_changed
+
+        mark_skill_files_changed(
+            skill_id,
+            scope="global" if resolved_scope == "global" else "personal",
+            user_info=user_info,
+        )
             
         scope_desc = "平台全局" if resolved_scope == "global" else "个人专属"
         marker = (

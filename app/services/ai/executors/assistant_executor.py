@@ -53,7 +53,7 @@ class AssistantExecutor(BaseExecutor):
             return False
         return self._runner.resolve_has_tool_meta()
 
-    def resolve_tool_run_text(self, *, max_total_chars: int = 4000) -> str:
+    def resolve_tool_run_text(self, *, max_total_chars: int = 20000) -> str:
         """A 项：本轮工具调用转录文本（供保存点持久化）。"""
         if self._runner is None:
             return ""

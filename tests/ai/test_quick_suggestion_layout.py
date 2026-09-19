@@ -1,4 +1,8 @@
-from app.services.ai.runtime.agentscope.stream_reconcile import move_quick_suggestions_to_end
+from app.services.ai.runtime.agentscope.stream_reconcile import (
+    move_quick_suggestions_to_end,
+    promote_recommended_questions,
+    suppress_quick_suggestions,
+)
 
 import pytest
 
@@ -53,3 +57,29 @@ def test_move_quick_suggestions_supports_parentheses_in_sql_like_targets():
 
     assert fixed.strip().endswith("统计 COUNT(DISTINCT user_id) 按月趋势)")
     assert fixed.index("正文结果") < fixed.index("您可能还想了解")
+
+
+def test_promote_recommended_questions_lifts_plain_action_tail():
+    content = """## ✅ 任务下发完成
+
+可前往任务跟踪查看办理进度。
+
+谁还没交
+催一下没交的企业
+查看无法匹配的企业名单"""
+    promoted = promote_recommended_questions(content)
+    assert "- [🙋 谁还没交](quick:谁还没交)" in promoted
+    assert "- [🙋 催一下没交的企业](quick:催一下没交的企业)" in promoted
+    assert "- [🙋 查看无法匹配的企业名单](quick:查看无法匹配的企业名单)" in promoted
+
+
+def test_promote_recommended_questions_skips_entity_name_lists():
+    content = "无法匹配企业：\n\n安达危运有限公司\n顺通物流有限公司"
+    assert promote_recommended_questions(content) == content
+
+
+def test_suppress_quick_suggestions_after_promote_clears_plain_tail():
+    content = "结果已生成。\n\n查看任务进度\n继续分析回款结构"
+    cleaned = suppress_quick_suggestions(promote_recommended_questions(content))
+    assert cleaned == "结果已生成。"
+    assert "quick:" not in cleaned

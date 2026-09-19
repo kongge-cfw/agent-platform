@@ -75,3 +75,12 @@ def test_create_skills_emits_machine_marker():
     assert "NANZI_SKILL_CREATED" in text
     assert BANNER.exists()
     assert "parseSkillCreatedMarker" in SKILL_CREATED_UTIL.read_text(encoding="utf-8")
+    assert "mark_skill_files_changed" in text
+
+
+def test_personal_skill_write_hooks_mark_files_changed():
+    source = (ROOT / "app" / "api" / "portal" / "endpoints" / "personal_skills.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def _mark_personal_skill_changed" in source
+    assert source.count("_mark_personal_skill_changed(") >= 9

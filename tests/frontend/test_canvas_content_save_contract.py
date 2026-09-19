@@ -41,6 +41,20 @@ def test_generated_filename_covers_code_html_markdown_and_text():
         assert token in source
 
 
+def test_chat_message_attachments_download_instead_of_opening_canvas():
+    source = _source("frontend/src/utils/workspaceFilePreview.ts")
+    embed = _source("frontend/src/views/EmbedChat.vue")
+    debug = _source("frontend/src/views/AgentDebug.vue")
+    fn = source[source.index("export async function openChatAttachmentFile") : source.index("export async function downloadWorkspaceFile")]
+
+    assert "downloadWorkspaceFile" in fn
+    assert "canPreviewWorkspaceFile" not in fn
+    assert "options.preview" not in fn
+    for page in (embed, debug):
+        assert "openChatAttachmentFile" in page
+        assert "preview: handleWorkspaceFilePreview" not in page[page.index("const handleOpenAttachedFile") : page.index("const handleOpenAttachedFile") + 400]
+
+
 def test_saved_path_is_used_for_existing_file_updates():
     source = _source("frontend/src/components/embed/ChatCanvas.vue")
 

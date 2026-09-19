@@ -189,6 +189,26 @@ return {
     assert result["parsedHasBtn"] is True
 
 
+def test_parse_quick_buttons_promotes_plain_action_tail():
+    result = _run_typescript(
+        "frontend/src/utils/quickButtons.ts",
+        """
+const receipt = '可前往任务跟踪查看办理进度。\\n\\n谁还没交\\n催一下没交的企业\\n查看无法匹配的企业名单';
+const names = '无法匹配企业：\\n\\n安达危运有限公司\\n顺通物流有限公司';
+return {
+  parsed: api.parseQuickButtons(receipt),
+  names: api.promoteRecommendedQuestionLines(names),
+  stripped: api.stripQuickButtons(receipt),
+};
+""",
+    )
+    assert result["parsed"].count("quick-action-btn") == 3
+    assert "谁还没交" in result["parsed"]
+    assert result["names"] == "无法匹配企业：\n\n安达危运有限公司\n顺通物流有限公司"
+    assert "谁还没交" not in result["stripped"]
+    assert "可前往任务跟踪查看办理进度。" in result["stripped"]
+
+
 def test_business_confirmation_infers_date_fields_for_picker():
     result = _run_typescript(
         "frontend/src/utils/businessConfirmation.ts",

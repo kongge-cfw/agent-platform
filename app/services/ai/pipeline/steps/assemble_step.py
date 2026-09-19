@@ -116,10 +116,13 @@ class AssembleStep(BasePipelineStep):
             advance_todo_snapshot_after_hitl_confirm,
             attachment_paths as hitl_attachment_paths,
             build_continuation_prompt_block,
+            build_resolved_entities_prompt_block,
+            has_open_hitl_todos,
             is_hitl_cancel_receipt,
             should_restore_hitl_continuation,
         )
 
+        continuation_kind = ""
         if is_hitl_cancel_receipt(user_query) and context.conversation_id:
             try:
                 coordinator = await HitlContinuationCoordinator.from_runtime()
@@ -128,14 +131,16 @@ class AssembleStep(BasePipelineStep):
                 raise
             except Exception:
                 logger.warning("[AssembleStep] Failed to clear HITL continuation on cancel", exc_info=True)
-        elif should_restore_hitl_continuation(user_query) and context.conversation_id:
+        elif context.conversation_id:
             try:
                 coordinator = await HitlContinuationCoordinator.from_runtime()
-                hitl_continuation = await coordinator.get(
+                loaded = await coordinator.get(
                     user_info=user_info,
                     conversation_id=context.conversation_id,
                 )
-                if isinstance(hitl_continuation, dict):
+                if should_restore_hitl_continuation(user_query) and isinstance(loaded, dict):
+                    hitl_continuation = loaded
+                    continuation_kind = "receipt"
                     advanced_todos = advance_todo_snapshot_after_hitl_confirm(
                         hitl_continuation.get("todos") if isinstance(hitl_continuation.get("todos"), dict) else None
                     )
@@ -146,11 +151,15 @@ class AssembleStep(BasePipelineStep):
                             user_info=user_info,
                             conversation_id=context.conversation_id,
                         )
+                elif has_open_hitl_todos(loaded):
+                    hitl_continuation = loaded
+                    continuation_kind = "facts"
             except HitlContinuationUnavailableError:
                 raise
             except Exception:
                 logger.warning("[AssembleStep] Failed to load HITL continuation", exc_info=True)
         shared_state["hitl_continuation"] = hitl_continuation
+        shared_state["hitl_continuation_kind"] = continuation_kind
 
         if agent_config:
             from app.services.ai.context_manager import AgentContextManager
@@ -403,7 +412,13 @@ class AssembleStep(BasePipelineStep):
             turn_decision=turn_decision,
             prompt_layout_mode=effective_layout_mode,
             user_info=user_info,
-            hitl_continuation_block=build_continuation_prompt_block(hitl_continuation),
+            hitl_continuation_block=(
+                build_continuation_prompt_block(hitl_continuation)
+                if continuation_kind == "receipt"
+                else build_resolved_entities_prompt_block(hitl_continuation)
+                if continuation_kind == "facts"
+                else ""
+            ),
         )
         assembled_prompt = assemble_system_prompt(assembly_input)
 

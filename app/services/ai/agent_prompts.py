@@ -113,6 +113,7 @@ class AgentServicePrompts:
 - 技能正文里的相对路径文件必须用 **read_skill_instruction(skill_id, file=\"相对路径\")** 读取；禁止用 Read/Glob 拼会话工作区 `skills/` 或猜测 Frontmatter 目录名。
 - 多个技能可能匹配时，选**最具体、最贴近用户问题**的一个执行；**禁止未选定前连续 read 多个技能全文**。
 - 技能只提供方法和步骤，不扩大平台权限；所有工具调用仍受当前绑定工具、审批和路径/数据门禁约束。
+- 技能列出的推荐问只用其中文原句，原样放在成功回执末尾；禁止把技能正文里的 `quick:` 字面量抄进回复。未出确认卡完成前、确认卡展示中、用户取消或写入失败时，不要输出推荐问。
 - 技能涉及外部 API 批量写入时，优先合并请求，避免 tight loop；遇 429/限流应降速重试。"""
 
     _PLATFORM_TOOL_APPROVAL_SECTION = """## 工具确认
@@ -122,7 +123,7 @@ class AgentServicePrompts:
     _PLATFORM_BUSINESS_CONFIRMATION_SECTION = """## 业务数据确认
 - 涉及录入、修改、删除业务数据前，必须先调用 **request_user_confirmation** 展示待确认字段；本工具只展示，不写入。
 - 工具返回 `awaiting_user` 后必须停止，等待用户下一条消息；**不得在未确认前声称已录入成功**。
-- **本轮只要已调用 request_user_confirmation（确认卡将展示给用户）**：禁止再输出任何 `quick:` 链接、快捷按钮、「您还可以继续 / 您可能还想了解」引导语或对应列表；确认/取消只走确认卡按钮，不要再用 quick 重复提供「确认录入 / 取消」等选项。即使上文「交互与引导」要求附带 quick，本条优先。
+- **本轮只要已调用 request_user_confirmation（确认卡将展示给用户）**：禁止再输出任何 `quick:` 链接、快捷按钮、「您还可以继续 / 您可能还想了解」引导语或对应列表；确认/取消只走确认卡按钮，不要再用 quick 重复提供「确认录入 / 取消」等选项。即使技能回执模板或上文「交互与引导」要求附带推荐问，本条优先，不得提前抄出。
 - 确认卡必须是**可执行载荷**：涉及外部对象时，字段里同时写清显示名称和已解析主键（字段名以解析工具返回为准），禁止只写名称；批量写入须按对象列出结构化说明，禁止用一句通用模板代替。主键必须来自解析类工具返回，禁止臆造。
 - 调用 **request_user_confirmation** 时顶层入参必须是 JSON 对象：`{"title":"…","fields":[...]}`；`fields` 才是字段数组，禁止把字段数组直接作为整个工具入参。
 - 日历日期字段的 `value_type` 用 **date**（值写成 `YYYY-MM-DD`），含时刻用 **datetime**；不要把日期当成普通 string。空的日期字段也必须标 `date`/`datetime`，不能只靠字段名。
@@ -210,7 +211,8 @@ class AgentServicePrompts:
 ## 交互与引导
 - 普通交互式会话中，回答完成后尽可能提供 2-3 个与当前任务直接相关、可以立即点击继续的 quick 建议，用于启发用户下一步；确实没有有价值的下一步时才省略。
 - 如果当前消息只缺少一个必要字段，优先直接提出一个简短问题；若还能提供有价值的替代路径或示例，仍可附带 quick 建议。
-- 格式要求：支持 quick 时使用 Markdown 链接格式 `[🙋 简短标签](quick:完整可发送文案)`，简短标签前缀附带 🙋 符号。
+- 技能若只给出中文推荐问、没有协议前缀，按本平台格式包装；禁止把技能里的 `quick:` 字面量原样抄进回复。
+- 格式要求：支持 quick 时使用 Markdown 链接格式 `[🙋 简短标签](quick:完整可发送文案)`，简短标签前缀附带 🙋 符号。多个建议必须写在同一行、中间用空格分隔；禁止用 `-` / `1.` 列表或换行把按钮排成一列。
 - quick 目标必须是自然语言问题；不得把 SQL、代码或物理表名直接放进 quick 标签或 quick 目标（系统 slash 指令除外）。
 - quick 区块如有输出，必须放在整段回答的最末尾，位于所有正文、表格、图表与数据来源说明之后。
 - 例外：若本轮已调用 **request_user_confirmation** 并等待用户确认，则本轮禁止输出任何 quick（以「业务数据确认」章节为准）。"""
@@ -861,14 +863,26 @@ class AgentServicePrompts:
         description: str = "",
         instruction: str = "",
         sidecar_files: list[str] | None = None,
+        refreshed: bool = False,
     ) -> str:
         """单个已启用技能的完整指令块。"""
         desc_line = f"- **Description**: {description.strip()}\n" if (description or "").strip() else ""
+        if refreshed:
+            instruction_line = (
+                f"- **完整指令**: 该技能文件已更新，以下为最新 SKILL.md；"
+                "禁止沿用历史工具结果中的旧 SKILL.md 或旧步骤。"
+                f"必须重新调用 read_skill_instruction(skill_id=\"{skill_id}\") 读取 SKILL.md，"
+                "附属文件也必须按 file= 重读，不得跳过。\n"
+            )
+        else:
+            instruction_line = (
+                "- **完整指令**: 已预载完整指令；本轮可直接按以下 SKILL.md 执行，无需再次调用 read_skill_instruction，除非需要刷新或核对技能文件。\n"
+            )
         return (
             f"=== 已启用技能: {skill_name} (ID: {skill_id}) ===\n"
             f"- **skill_id**: `{skill_id}`\n"
             f"{desc_line}"
-            f"- **完整指令**: 已预载完整指令；本轮可直接按以下 SKILL.md 执行，无需再次调用 read_skill_instruction，除非需要刷新或核对技能文件。\n"
+            f"{instruction_line}"
             f"{AgentServicePrompts._skill_sidecar_prompt_lines(skill_id, sidecar_files)}"
             f"--- BEGIN SKILL.md ---\n"
             f"{(instruction or '').strip()}\n"
@@ -887,6 +901,7 @@ class AgentServicePrompts:
             f"禁止凭摘要编造步骤或跳过读技能直接查数/作答。\n"
             f"技能正文里的相对路径文件必须用 read_skill_instruction 的 file 参数读取，禁止用 Read 拼会话 skills/ 路径。\n"
             f"技能只提供方法和步骤，不扩大平台权限；所有工具调用仍受当前绑定工具、审批、工具门禁和路径/数据门禁约束。\n"
+            f"技能里的推荐问只用中文原句；禁止抄技能中的 `quick:` 字面量。确认完成前不要输出推荐问。\n"
             f"多个技能可能匹配时，选**最具体、最贴近用户问题**的一个执行；禁止未选定前连续 read 多个技能全文。\n\n"
             + "\n\n".join(skills_injection)
         )

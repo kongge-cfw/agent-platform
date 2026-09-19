@@ -707,6 +707,32 @@ const segments = computed<ContentSegment[]>(() => {
 }
 
 /* Quick Action Buttons (Universal Styling) */
+.markdown-body :deep(.quick-action-row) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 0 !important;
+}
+
+/* 列表形式的推荐问也强制横向折行，避免有的竖排、有的横排 */
+.markdown-body :deep(ul:has(> li .quick-action-btn):not(:has(> li:not(:has(.quick-action-btn))))),
+.markdown-body :deep(ol:has(> li .quick-action-btn):not(:has(> li:not(:has(.quick-action-btn))))) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  list-style: none !important;
+  padding-left: 0 !important;
+  margin-bottom: 0.5em !important;
+}
+
+.markdown-body :deep(ul:has(> li .quick-action-btn):not(:has(> li:not(:has(.quick-action-btn)))) > li),
+.markdown-body :deep(ol:has(> li .quick-action-btn):not(:has(> li:not(:has(.quick-action-btn)))) > li) {
+  display: inline-flex !important;
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
 .markdown-body :deep(.quick-action-btn),
 .markdown-body :deep(a[href^="quick:"]) {
   display: inline-flex !important;

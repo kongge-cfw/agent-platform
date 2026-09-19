@@ -5,7 +5,8 @@ import re
 # 流式 SSE 已发送正文 vs AgentState 最终 assistant 文本的对齐（通用，不依赖场景 if/else）
 
 DEFAULT_MIN_COMPLETE_CHARS = 32
-DEFAULT_TOOL_OUTPUT_MAX_LEN = 4000
+# 临时放宽：解析名单等结构化结果在 4000 字下会被切坏。后续仍以瘦身/快照为准。
+DEFAULT_TOOL_OUTPUT_MAX_LEN = 20000
 DEFAULT_TOOL_LOG_MAX_LEN = 500
 BOOKKEEPING_TOOL_NAMES = frozenset({"todo_write"})
 
@@ -309,6 +310,71 @@ _QUICK_SECTION_TITLE = re.compile(
     r"^\s*#{2,6}\s*(?:💬\s*)?(?:您可能还想了解|您可以这样继续|一键继续)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_LINE_BULLET = re.compile(r"^(?:[-*•+]\s+|\d+[.)]\s+)")
+_ACTION_PREFIX = re.compile(
+    r"^(谁|哪|怎么|如何|是否|查看|查一下|查下|催|现在|修改|统计|分析|对比|继续|重新|下发|打开|切换|筛选|导出|刷新|追问)"
+)
+
+
+def _to_quick_markdown(target: str, indent: str = "") -> str:
+    return f"{indent}- [🙋 {target}](quick:{target})"
+
+
+def _has_quick_markdown(line: str) -> bool:
+    return bool(_QUICK_MARKDOWN_LINK.search(line or ""))
+
+
+def _extract_promotable_target(line: str) -> str | None:
+    trimmed = str(line or "").strip()
+    if not trimmed or _has_quick_markdown(trimmed):
+        return None
+    without_bullet = _LINE_BULLET.sub("", trimmed, count=1)
+    if not without_bullet or without_bullet[:1] in {"|", "#", "`", ">"}:
+        return None
+    if without_bullet.startswith("#"):
+        return None
+    if "|" in without_bullet or "`" in without_bullet or re.search(r"https?://", without_bullet, re.I):
+        return None
+    if without_bullet.endswith(("。", "！")):
+        return None
+    if len(without_bullet) < 2 or len(without_bullet) > 40:
+        return None
+    if not _ACTION_PREFIX.match(without_bullet):
+        return None
+    return without_bullet
+
+
+def promote_recommended_questions(text: str) -> str:
+    """把成功回执文末 2–4 条动作短句提升为平台 Markdown 协议。不写死具体文案。"""
+    raw = text or ""
+    if not raw:
+        return raw
+    mapped = raw.splitlines()
+    end = len(mapped)
+    while end > 0 and not str(mapped[end - 1] or "").strip():
+        end -= 1
+    block: list[int] = []
+    for index in range(end - 1, -1, -1):
+        line = mapped[index]
+        if not str(line or "").strip():
+            break
+        if _has_quick_markdown(line):
+            break
+        if not _extract_promotable_target(line):
+            break
+        block.append(index)
+    block.reverse()
+    start = block[0] if block else -1
+    preceded_by_blank = start == 0 or (start > 0 and not str(mapped[start - 1] or "").strip())
+    if 2 <= len(block) <= 4 and preceded_by_blank:
+        for index in block:
+            line = mapped[index]
+            target = _extract_promotable_target(line)
+            if not target:
+                continue
+            indent = re.match(r"^\s*", line).group(0) if line else ""
+            mapped[index] = _to_quick_markdown(target, indent)
+    return "\n".join(mapped)
 
 
 def move_quick_suggestions_to_end(text: str) -> str:
@@ -349,4 +415,4 @@ def suppress_quick_suggestions(text: str) -> str:
 def finalize_visible_reply(text: str, *, collapse_duplicates: bool = True) -> str:
     """统一整理用户可见正文：去重后确保 quick 建议位于最后。"""
     normalized = collapse_repeated_reply(text) if collapse_duplicates else (text or "")
-    return move_quick_suggestions_to_end(normalized)
+    return move_quick_suggestions_to_end(promote_recommended_questions(normalized))

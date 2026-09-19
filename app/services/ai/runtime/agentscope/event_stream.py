@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Protocol
 from app.services.ai.context_compaction_log_service import context_compaction_log_service
 from app.services.ai.runtime.agentscope.hitl_tool_result import (
     reset_pending_hitl_ui_payloads,
+    reset_pending_resolve_payloads,
     take_pending_hitl_ui_payload,
 )
 from app.services.ai.runtime.agentscope.tool_result import normalize_tool_result_state
@@ -66,6 +67,7 @@ def new_native_stream_state(
     candidate_answer_enabled: bool = False,
 ) -> Dict[str, Any]:
     reset_pending_hitl_ui_payloads()
+    reset_pending_resolve_payloads()
     return {
         "tool_names": {},
         "tool_args_text": {},

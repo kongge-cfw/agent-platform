@@ -396,3 +396,20 @@ def test_delete_entire_skill_unbinds_agent_versions_before_rmtree(mock_skills_di
     assert response["status"] == "success"
     assert response["unbound_versions"] == 3
     assert not skill_dir.exists()
+
+
+def test_platform_skill_write_hooks_mark_files_changed():
+    source = Path(skills.__file__).read_text(encoding="utf-8")
+    assert "def _mark_platform_skill_changed" in source
+    for needle in (
+        "edit_skill_file",
+        "create_skill_asset",
+        "upload_skill_file",
+        "upload_skill_archive",
+        "import_skill_package",
+        "toggle_skill",
+        "delete_entire_skill",
+        "approve_skill_publication_request",
+    ):
+        assert needle in source
+    assert source.count("_mark_platform_skill_changed(") >= 10

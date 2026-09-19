@@ -200,7 +200,7 @@ class RequestUserConfirmationTool(BaseTool):
             from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
             from app.services.ai.hitl_continuation import (
                 HitlContinuationCoordinator,
-                enrich_confirmation_fields,
+                enrich_confirmation_card,
             )
 
             agent_ctx = get_current_agent_context()
@@ -209,9 +209,13 @@ class RequestUserConfirmationTool(BaseTool):
             if conversation_id:
                 coordinator = await HitlContinuationCoordinator.from_runtime()
                 continuation = await coordinator.get(user_id=user_id, conversation_id=conversation_id)
-                fields = normalize_confirmation_field_types(
-                    enrich_confirmation_fields(fields, continuation)
+                fields, risk_note = enrich_confirmation_card(
+                    fields,
+                    continuation,
+                    risk_note=args.risk_note or "",
                 )
+                fields = normalize_confirmation_field_types(fields)
+                args.risk_note = risk_note
         except HitlContinuationUnavailableError:
             raise
         except Exception:

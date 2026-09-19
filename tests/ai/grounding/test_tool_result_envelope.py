@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -347,3 +348,34 @@ def test_final_tool_context_excludes_process_and_failed_result_text():
     assert "暂不可用" not in context
     assert "思考" not in context
     assert "执行日志" not in context
+
+
+def test_final_tool_context_keeps_compact_resolve_without_800_cut():
+    records = [
+        {
+            "name": f"测试运输有限公司{index:02d}",
+            "found": True,
+            "enabled": True,
+            "matchCount": 1,
+            "enterpriseId": str(1000 + index),
+        }
+        for index in range(11)
+    ]
+    output = json.dumps(
+        {"total": 11, "found": 11, "missing": 0, "records": records},
+        ensure_ascii=False,
+    )
+    assert len(output) > 800
+    context = build_final_tool_result_context(
+        {
+            "tool_names": {"call-1": "mcp_org_enterprise_resolve_abcd"},
+            "tool_args_text": {"call-1": '{"names":["a"]}'},
+            "tool_outputs": {"call-1": output},
+            "tool_result_states": {"call-1": "success"},
+            "tool_data": {},
+        }
+    )
+    assert "输出已截断" not in context
+    for index in range(11):
+        assert f"测试运输有限公司{index:02d}" in context
+        assert str(1000 + index) in context

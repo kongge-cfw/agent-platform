@@ -272,6 +272,24 @@ def test_chat_surfaces_share_terminal_reducer_and_safe_message_row_boundary():
         assert source.count("applyRunStatusEvent(agentMsg.value, data, streamMessages)") >= 2
         assert "applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))" in source
         assert "<ChatMessageRow" in source
+        assert "<UserMessageAttachments" in source
+        assert "Attached Files In Bubble" not in source
+        assert "附加系统元数据说明" not in source
+        assert "parts.contextPart" not in source
+
+
+def test_chat_input_composer_attachments_match_message_cards():
+    chat_input = _read("frontend/src/components/embed/ChatInput.vue")
+    cards = _read("frontend/src/components/chat/UserMessageAttachments.vue")
+
+    assert "<UserMessageAttachments" in chat_input
+    assert ':columns="5"' in chat_input
+    assert "show-clear-all" in chat_input
+    assert "clearComposerAttachments" in chat_input
+    assert "清空附件" in cards
+    assert "已添加" in cards
+    assert "--file-card-columns" in cards
+    assert "max-w-[200px]" not in chat_input
         assert f'surface="{surface}"' in source
         assert ':key="chatMessageRenderKey(msg)"' in source
         assert "v-memo" not in source

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, nextTick, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from "vue";
 import MentionList from "@/components/agent/MentionList.vue";
-import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
+import UserMessageAttachments from "@/components/chat/UserMessageAttachments.vue";
 import SkillCascadeMenu from "@/components/embed/SkillCascadeMenu.vue";
 import type { SkillItem } from "@/components/embed/SkillCascadeMenu.vue";
 import McpCascadeMenu from "@/components/embed/McpCascadeMenu.vue";
@@ -12,7 +12,6 @@ import type { ContextCompactionRecord } from "@/api/agent";
 import ContextCompactionTimeline from "@/components/chat/ContextCompactionTimeline.vue";
 import { formatContextTokens, type ContextUsage } from "@/composables/useContextUsage";
 import ConfirmModal from "@/components/ConfirmModal.vue";
-import { isImageAttachment } from "@/utils/attachmentImages";
 import {
   collectClipboardFiles,
   collectFilesFromList,
@@ -921,8 +920,12 @@ const isKnowledgePortalDisabled = computed(() => {
   return !!props.slashCommands?.find(c => c.id === 'sys_knowledge_portal')?.disabled;
 });
 
+const composerAttachments = computed(() =>
+  uploadedFiles.value.filter((file) => file.type !== "knowledge_settings"),
+);
+
 const canSend = computed(
-  () => !!props.modelValue.trim() || uploadedFiles.value.filter(f => f.type !== 'knowledge_settings').length > 0,
+  () => !!props.modelValue.trim() || composerAttachments.value.length > 0,
 );
 
 const modelLabel = computed(() => {
@@ -1795,22 +1798,17 @@ watch(showPlusMenu, (open) => {
   }
 });
 
-const isImage = isImageAttachment;
-
 const openImagePreview = (url: string) => {
   window.open(url, "_blank");
 };
 
-const formatSize = (bytes: number) => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+const removeComposerFile = (file: { type?: string; filename?: string; url?: string }) => {
+  const index = uploadedFiles.value.indexOf(file);
+  if (index >= 0) uploadedFiles.value.splice(index, 1);
 };
 
-const removeFile = (index: number) => {
-  uploadedFiles.value.splice(index, 1);
+const clearComposerAttachments = () => {
+  uploadedFiles.value = uploadedFiles.value.filter((file) => file.type === "knowledge_settings");
 };
 
 const fileNoticeVisible = ref(false);
@@ -1995,74 +1993,19 @@ defineExpose({
             </button>
         </div>
 
-        <!-- Attachments Preview Bar -->
-        <div v-if="uploadedFiles.filter(f => f.type !== 'knowledge_settings').length > 0" class="flex flex-wrap gap-2 px-1 mb-2 max-h-36 overflow-y-auto no-scrollbar py-1">
-            <template v-for="(file, idx) in uploadedFiles" :key="idx">
-              <div v-if="file.type !== 'knowledge_settings'" class="relative flex items-center group bg-gray-100/80 dark:bg-gray-800/80 border border-gray-200/30 dark:border-gray-700/30 rounded-lg p-1.5 pr-8 max-w-[200px] transition-all hover:bg-white dark:hover:bg-gray-800 hover:shadow-sm" :title="file.type === 'metadata_dataset' ? `已选择本轮数据集【${file.filename}】，本次提问将优先锁定在此范围内检索。` : ''">
-                  <!-- Image Preview -->
-                  <AttachmentImageThumb
-                    v-if="isImage(file)"
-                    :file="file"
-                    clickable
-                    class="mr-2"
-                    @click="openImagePreview"
-                  />
-                  <!-- Metadata Dataset Icon -->
-                  <div v-else-if="file.type === 'metadata_dataset'" class="w-8 h-8 rounded bg-purple-500/10 dark:bg-purple-500/20 flex items-center justify-center text-purple-500 text-sm flex-shrink-0 mr-2">
-                      📊
-                  </div>
-                  <!-- Knowledge Base Icon -->
-                  <div v-else-if="file.type === 'knowledge_base'" class="w-8 h-8 rounded bg-emerald-500/10 dark:bg-emerald-500/20 flex items-center justify-center text-emerald-500 text-sm flex-shrink-0 mr-2">
-                      📚
-                  </div>
-                  <!-- Skill Icon -->
-                  <div v-else-if="file.type === 'skill'" class="w-8 h-8 rounded bg-amber-500/10 dark:bg-amber-500/20 flex items-center justify-center text-amber-500 text-sm flex-shrink-0 mr-2 font-mono">
-                      ⚙️
-                  </div>
-                  <!-- Memory Icon -->
-                  <div v-else-if="file.type === 'memory'" class="w-8 h-8 rounded bg-indigo-500/10 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-500 text-sm flex-shrink-0 mr-2">
-                      🧠
-                  </div>
-                  <!-- Server File Icon -->
-                  <div v-else-if="file.type === 'local_file'" class="w-8 h-8 rounded bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center text-blue-500 text-sm flex-shrink-0 mr-2">
-                      💻
-                  </div>
-                  <!-- Server Dir Icon -->
-                  <div v-else-if="file.type === 'local_dir'" class="w-8 h-8 rounded bg-yellow-500/10 dark:bg-yellow-500/20 flex items-center justify-center text-yellow-500 text-sm flex-shrink-0 mr-2">
-                      📁
-                  </div>
-                  <!-- File Icon -->
-                  <div v-else class="w-8 h-8 rounded bg-primary/10 dark:bg-primary/20 flex items-center justify-center text-primary text-sm flex-shrink-0 mr-2">
-                      📄
-                  </div>
-                  <!-- Metadata -->
-                  <div class="flex-1 min-w-0 flex flex-col">
-                      <span class="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">{{ file.filename }}</span>
-                      <span class="text-[9px] text-gray-400 font-mono">
-                          {{ 
-                            file.type === 'skill' ? '生态技能' : 
-                            file.type === 'knowledge_base' ? '知识库' : 
-                            file.type === 'metadata_dataset' ? '数据集' :
-                            file.type === 'memory' ? '记忆记录' : 
-                            file.type === 'local_file' ? (isImage(file) ? '服务器图片' : '服务器文件') :
-                            file.type === 'local_dir' ? '服务器目录' :
-                            formatSize(file.size) 
-                          }}
-                      </span>
-                  </div>
-                  <!-- Remove Button -->
-                  <button @click="removeFile(idx)" class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-gray-200/50 hover:bg-red-500 hover:text-white dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-all duration-150 focus:outline-none">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-              </div>
-            </template>
-            
-            <!-- Uploading indicator -->
-            <div v-if="isUploading" class="flex items-center space-x-2 bg-gray-100/50 dark:bg-gray-800/50 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg px-3 py-1.5 max-w-[200px]">
-                <div class="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                <span class="text-[10px] text-gray-400 font-medium">正在上传...</span>
-            </div>
-        </div>
+        <UserMessageAttachments
+          v-if="composerAttachments.length || isUploading"
+          class="mb-2"
+          :files="composerAttachments"
+          :columns="5"
+          align="start"
+          removable
+          show-clear-all
+          :uploading="isUploading"
+          @preview-image="openImagePreview"
+          @remove="removeComposerFile"
+          @clear="clearComposerAttachments"
+        />
 
         <!-- Input Box -->
         <div

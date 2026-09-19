@@ -2506,9 +2506,13 @@ class AgentService:
             if "agent_name" in chunk:
                 agent_name_resp = chunk["agent_name"]
 
-        if self._should_forbid_quick_suggestions(user_info):
-            from app.services.ai.runtime.agentscope.stream_reconcile import suppress_quick_suggestions
+        from app.services.ai.runtime.agentscope.stream_reconcile import (
+            promote_recommended_questions,
+            suppress_quick_suggestions,
+        )
 
+        full_content = promote_recommended_questions(full_content)
+        if self._should_forbid_quick_suggestions(user_info):
             full_content = suppress_quick_suggestions(full_content)
 
         from app.services.ai.runtime.agentscope.text_sanitize import strip_model_reasoning_from_answer

@@ -10,6 +10,10 @@ from typing import Any
 from app.services.ai.error_response_service import sanitize_error_text
 from app.services.ai.grounding.ledger import classify_evidence_result
 from app.services.ai.grounding.models import EvidenceStatus, ToolResultEnvelope
+from app.services.ai.hitl_continuation import (
+    compact_resolve_tool_result_for_model,
+    is_entity_resolve_tool,
+)
 from app.services.ai.runtime.agentscope.stream_reconcile import truncate_for_context
 from app.services.ai.runtime.agentscope.tool_result_context import (
     TOOL_CALL_ID_METADATA_KEY,
@@ -257,7 +261,7 @@ def build_tool_result_envelope(
 def build_final_tool_result_context(
     meta: dict[str, Any] | None,
     *,
-    max_total_chars: int = 4000,
+    max_total_chars: int = 20000,
 ) -> str:
     """只把已收到最终成功状态的工具结果编成跨轮模型上下文。
 
@@ -301,9 +305,13 @@ def build_final_tool_result_context(
         if not envelope.evidence_eligible:
             continue
         block_note = f" (data_blocks={len(data_blocks)})" if data_blocks else ""
+        if is_entity_resolve_tool(name):
+            preview = compact_resolve_tool_result_for_model(name, output) or output
+        else:
+            preview = truncate_for_context(output, max_len=800)
         lines.append(
             f"{name}: {arg_preview} -> "
-            f"{_escape_tool_context_text(truncate_for_context(output, max_len=800))}{block_note}"
+            f"{_escape_tool_context_text(preview)}{block_note}"
         )
     return "\n".join(lines)[:max_total_chars] if lines else ""
 
