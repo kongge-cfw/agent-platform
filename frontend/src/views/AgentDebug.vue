@@ -120,12 +120,11 @@ import MemoryBrowserDrawer from "@/components/embed/MemoryBrowserDrawer.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
 import ChatExecutionTimeline from "@/components/chat/ChatExecutionTimeline.vue";
 import ChatMessageRow from "@/components/chat/ChatMessageRow.vue";
+import UserMessageAttachments from "@/components/chat/UserMessageAttachments.vue";
 import ChatTodoCard from "@/components/chat/ChatTodoCard.vue";
 import ChatModelCallStatsModal from "@/components/chat/ChatModelCallStatsModal.vue";
 import DataPortalReportCreateModal from "@/components/data-portal/DataPortalReportCreateModal.vue";
 import SavedReportRunModal from "@/components/chat/SavedReportRunModal.vue";
-import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
-import { isImageAttachment } from "@/utils/attachmentImages";
 import { isDirectRenderableUrl, openChatAttachmentFile, resolvePublicUploadsPreviewUrl } from "@/utils/workspaceFilePreview";
 import { isPlatformRoutedUrl, withAppBase } from "@/utils/appBase";
 import { copyToClipboard } from "@/utils/clipboard";
@@ -2193,16 +2192,6 @@ const handleOpenAttachedFile = (file: any) => {
     showToast,
     preview: handleWorkspaceFilePreview,
   });
-};
-
-const isImageFile = isImageAttachment;
-
-const formatBytes = (bytes: number) => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
 const resolveReqContent = (msg: Message) => {
@@ -4559,76 +4548,42 @@ onUnmounted(() => {
             </div>
 
             <!-- Normal Mode -->
-            <div v-else class="flex flex-col items-end">
-              <div
-                class="bg-primary text-white px-5 py-3.5 rounded-2xl rounded-tr-none shadow-sm text-sm leading-relaxed text-left relative"
+            <div v-else class="flex w-full max-w-[85%] flex-col items-end self-end">
+              <template
+                v-for="parts in [splitUserMessageContent(visibleUserMessageContent(msg.content))]"
+                :key="'user-parts'"
               >
-                <template v-for="parts in [splitUserMessageContent(visibleUserMessageContent(msg.content))]" :key="'user-parts'">
-                  <template v-if="parts.hasContext">
-                    <MessageRenderer v-if="parts.userPart" :content="parts.userPart" @open-canvas="handleOpenCanvas" />
-                    <div v-if="parts.userPart" class="my-2.5 border-t border-white/30" role="separator" />
-                    <details class="group/sys mt-2 text-[10px] text-white/70 select-none">
-                      <summary class="cursor-pointer hover:text-white flex items-center gap-1 font-semibold focus:outline-none list-none [&::-webkit-details-marker]:hidden">
-                        <svg class="w-3 h-3 transform transition-transform duration-200 group-open/sys:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                        </svg>
-                        <span>⚙️ 附加系统元数据说明 (点击展开)</span>
-                      </summary>
-                      <div class="mt-1.5 p-2 rounded bg-black/15 text-white/85 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all select-text selection:bg-white/20">
-                        {{ parts.contextPart }}
-                      </div>
-                    </details>
-                  </template>
-                  <MessageRenderer v-else :content="visibleUserMessageContent(msg.content)" @open-canvas="handleOpenCanvas" />
-                </template>
-
-                <!-- Attached Files In Bubble -->
-                <div v-if="msg.files && msg.files.length > 0" class="mt-2 space-y-2 border-t border-white/20 pt-2">
-                    <div v-for="(file, fIdx) in msg.files" :key="fIdx" class="flex items-center bg-white/10 rounded-lg p-1.5 max-w-xs select-none">
-                        <!-- Image Thumb -->
-                        <AttachmentImageThumb
-                          v-if="isImageFile(file)"
-                          :file="file"
-                          clickable
-                          class="mr-2 border-white/10"
-                          @click="openImagePreview"
-                        />
-                        <!-- Skill Icon -->
-                        <div v-else-if="file.type === 'skill'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2 font-mono">
-                            ⚙️
-                        </div>
-                        <!-- Metadata Dataset Icon -->
-                        <div v-else-if="file.type === 'metadata_dataset'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
-                            📊
-                        </div>
-                        <!-- Knowledge Base Icon -->
-                        <div v-else-if="file.type === 'knowledge_base'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
-                            📚
-                        </div>
-                        <!-- Memory Icon -->
-                        <div v-else-if="file.type === 'memory'" class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
-                            🧠
-                        </div>
-                        <!-- File Icon -->
-                        <div v-else class="w-8 h-8 rounded bg-white/20 flex items-center justify-center text-white text-sm flex-shrink-0 mr-2">
-                            📄
-                        </div>
-                        <div class="flex-1 min-w-0 flex flex-col">
-                            <span v-if="file.type === 'skill' || file.type === 'knowledge_base' || file.type === 'metadata_dataset' || file.type === 'memory'" class="text-xs font-bold text-white truncate">{{ file.filename }}</span>
-                            <span v-else @click="handleOpenAttachedFile(file)" class="text-xs font-bold text-white hover:underline cursor-pointer truncate">{{ file.filename }}</span>
-                            <span class="text-[9px] text-white/70 font-mono">
-                                {{
-                                    file.type === 'skill' ? '生态技能' :
-                                    file.type === 'knowledge_base' ? '知识库' :
-                                    file.type === 'metadata_dataset' ? '数据集' :
-                                    file.type === 'memory' ? '记忆记录' :
-                                    formatBytes(file.size)
-                                }}
-                            </span>
-                        </div>
-                    </div>
+                <div
+                  v-if="parts.userPart"
+                  class="bg-primary text-white px-5 py-3.5 rounded-2xl rounded-tr-none shadow-sm text-sm leading-relaxed text-left relative max-w-full"
+                >
+                  <MessageRenderer :content="parts.userPart" @open-canvas="handleOpenCanvas" />
                 </div>
-              </div>
+                <details
+                  v-if="parts.hasContext"
+                  class="group/sys mt-1.5 w-full bg-transparent text-right text-[10px] text-gray-400 select-none"
+                >
+                  <summary class="ml-auto inline-flex cursor-pointer items-center justify-end gap-1 font-semibold text-gray-400 hover:text-gray-600 focus:outline-none list-none [&::-webkit-details-marker]:hidden">
+                    <svg class="w-3 h-3 transform transition-transform duration-200 group-open/sys:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                    </svg>
+                    <span>⚙️ 附加系统元数据说明 (点击展开)</span>
+                  </summary>
+                  <div class="mt-1.5 bg-transparent text-right font-mono text-[10px] leading-relaxed text-gray-500 whitespace-pre-wrap break-all select-text">
+                    {{ parts.contextPart }}
+                  </div>
+                </details>
+              </template>
+              <UserMessageAttachments
+                v-if="msg.files && msg.files.length > 0"
+                class="mt-2"
+                :files="msg.files"
+                :columns="5"
+                align="end"
+                plain
+                @open-file="handleOpenAttachedFile"
+                @preview-image="openImagePreview"
+              />
               <!-- User Actions -->
               <div
                 class="flex items-center space-x-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity"

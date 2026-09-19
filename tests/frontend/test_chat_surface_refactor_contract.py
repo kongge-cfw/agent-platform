@@ -272,9 +272,13 @@ def test_chat_surfaces_share_terminal_reducer_and_safe_message_row_boundary():
         assert source.count("applyRunStatusEvent(agentMsg.value, data, streamMessages)") >= 2
         assert "applyResumeRunStatusEvent(msg, data, messagesOwningAgent(msg))" in source
         assert "<ChatMessageRow" in source
-        assert "Attached Files In Bubble" in source
+        assert "<UserMessageAttachments" in source
+        assert "Attached Files In Bubble" not in source
+        assert ':columns="5"' in source
+        assert "plain" in source
         assert "附加系统元数据说明" in source
         assert "parts.contextPart" in source
+        assert "text-right" in source
         assert "splitUserMessageContent(visibleUserMessageContent(msg.content))" in source
         assert f'surface="{surface}"' in source
         assert ':key="chatMessageRenderKey(msg)"' in source

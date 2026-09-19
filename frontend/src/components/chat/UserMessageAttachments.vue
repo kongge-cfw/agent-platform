@@ -31,6 +31,7 @@
         :key="`${file.filename || 'file'}-${index}`"
         :type="removable ? undefined : 'button'"
         class="user-message-file-card group min-w-0 text-left"
+        :class="{ 'is-plain': plain }"
         :title="file.filename"
         @click="onClick(file)"
       >
@@ -72,6 +73,7 @@
       <div
         v-if="uploading"
         class="user-message-file-card is-uploading"
+        :class="{ 'is-plain': plain }"
       >
         <span class="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <span class="truncate text-xs text-[rgba(0,0,0,0.45)] dark:text-gray-400">正在上传...</span>
@@ -133,12 +135,14 @@ withDefaults(defineProps<{
   removable?: boolean;
   showClearAll?: boolean;
   uploading?: boolean;
+  plain?: boolean;
 }>(), {
   columns: 4,
   align: "end",
   removable: false,
   showClearAll: false,
   uploading: false,
+  plain: false,
 });
 
 const emit = defineEmits<{
@@ -257,6 +261,11 @@ const onClick = (file: UserMessageAttachment) => {
   cursor: default;
 }
 
+.user-message-file-card.is-plain {
+  background: transparent;
+  box-shadow: none;
+}
+
 .user-message-file-card:hover {
   border-color: var(--primary-color, #1677ff);
 }
@@ -304,6 +313,10 @@ const onClick = (file: UserMessageAttachment) => {
 .dark .user-message-file-card {
   background: rgb(31 41 55);
   border-color: rgb(75 85 99);
+}
+
+.dark .user-message-file-card.is-plain {
+  background: transparent;
 }
 
 .dark .user-message-file-card.is-uploading:hover {
