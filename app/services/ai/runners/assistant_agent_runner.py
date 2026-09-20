@@ -2443,7 +2443,9 @@ class AssistantAgentRunner(BaseExecutor):
                     yield skill_flow_log
             try:
                 maybe_resolve = "resolve" in str(tool_name or "").lower()
-                if tool_name == "read_skill_instruction" or maybe_resolve:
+                from app.services.ai.hitl_continuation import is_write_tool
+
+                if tool_name == "read_skill_instruction" or maybe_resolve or is_write_tool(tool_name):
                     from app.services.ai.hitl_continuation import (
                         HitlContinuationCoordinator,
                         is_entity_resolve_tool,
@@ -2470,6 +2472,15 @@ class AssistantAgentRunner(BaseExecutor):
                         await coordinator.remember_resolve_tool(
                             tool_name=tool_name,
                             tool_output=resolve_output,
+                            user_id=self._runtime_user_id(),
+                            conversation_id=self.conversation_id,
+                        )
+                    elif is_write_tool(tool_name):
+                        await coordinator.remember_write_tool(
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            tool_output=output,
+                            tool_result_state=tool_result_state,
                             user_id=self._runtime_user_id(),
                             conversation_id=self.conversation_id,
                         )

@@ -1,4 +1,4 @@
-"""HITL 确认卡 / 提问卡回执轮的续跑上下文（技能、附件、已解析主键、todo）。"""
+"""HITL 确认卡 / 提问卡回执轮的续跑上下文（技能、附件、已解析主键、待写入快照、todo）。"""
 from __future__ import annotations
 
 import copy
@@ -36,6 +36,24 @@ _RESOLVE_OBSERVATION_OPTIONAL_KEYS = (
     ("match_count", "matchCount"),
 )
 _RESOLVED_ENTITIES_FACT = "resolved_entities"
+_PENDING_WRITE_FACT = "pending_write"
+_WRITE_TOOL_NAMES = frozenset({"write", "write_file"})
+_PENDING_WRITE_DIR = "pending_write"
+_MAX_PENDING_WRITE_ITEMS = 40
+_WRITE_FAIL_MARKERS = (
+    "错误：",
+    "错误:",
+    "失败：",
+    "失败:",
+    "写入文件失败",
+    "文件访问被拒绝",
+    "error:",
+    "traceback",
+    "permission denied",
+)
+_WRITE_FAIL_STATES = frozenset(
+    {"error", "failed", "failure", "denied", "interrupted", "timeout", "timed_out"}
+)
 RESOLVED_ENTITIES_MARKER = "[已解析对象快照]"
 # 纯数字，或数字加字段里自带的短后缀（最多 2 字，原样保留，不维护量词表）
 _COUNT_VALUE_RE = re.compile(r"^(\d+)\s*([^\d\s、，,\n]{0,2})$")
@@ -239,6 +257,103 @@ def is_entity_resolve_tool(tool_name: str | None) -> bool:
     if "resolve" not in name:
         return False
     return not any(marker in name for marker in _NON_ENTITY_RESOLVE_MARKERS)
+
+
+def is_write_tool(tool_name: str | None) -> bool:
+    """会话工作区写入工具（AgentScope Write / 平台 write_file）。"""
+    return str(tool_name or "").strip().lower() in _WRITE_TOOL_NAMES
+
+
+def is_pending_write_path(path: str | None) -> bool:
+    """确认前待提交正文的约定目录：路径中含 pending_write 段。"""
+    parts = str(path or "").replace("\\", "/").strip().lower().split("/")
+    return _PENDING_WRITE_DIR in [part for part in parts if part]
+
+
+def parse_pending_write_item(
+    tool_name: str | None,
+    tool_args: Any,
+    tool_output: Any = None,
+    tool_result_state: Any = None,
+) -> dict[str, str] | None:
+    if not is_write_tool(tool_name):
+        return None
+    if _write_result_failed(tool_result_state) or _write_output_failed(tool_output):
+        return None
+    path = _write_path_from_args(tool_args)
+    if not path or not is_pending_write_path(path):
+        return None
+    filename = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return {"path": path, "filename": filename or path}
+
+
+def _write_path_from_args(tool_args: Any) -> str:
+    if not isinstance(tool_args, dict):
+        return ""
+    for key in ("file_path", "path"):
+        text = str(tool_args.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _write_result_failed(tool_result_state: Any) -> bool:
+    state = str(getattr(tool_result_state, "value", tool_result_state) or "").strip().lower()
+    return state in _WRITE_FAIL_STATES
+
+
+def _write_output_failed(tool_output: Any) -> bool:
+    if tool_output is None:
+        return False
+    if isinstance(tool_output, dict):
+        text = str(tool_output.get("raw") or tool_output.get("text") or tool_output or "").strip()
+    else:
+        text = str(tool_output or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in text or marker in lowered for marker in _WRITE_FAIL_MARKERS)
+
+
+def _pending_write_items(payload: dict[str, Any] | None) -> list[dict[str, str]]:
+    facts = (payload or {}).get("facts") or {}
+    current = facts.get(_PENDING_WRITE_FACT)
+    items = current.get("items") if isinstance(current, dict) else None
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        filename = str(item.get("filename") or "").strip() or path.replace("\\", "/").rsplit("/", 1)[-1]
+        result.append({"path": path, "filename": filename})
+    return result
+
+
+def _pending_write_prompt_lines(payload: dict[str, Any] | None) -> list[str]:
+    items = _pending_write_items(payload)
+    attachments = (payload or {}).get("attachments") or []
+    lines = [
+        "- 禁止凭记忆编造源材料中的标识、人员、数值或明细行；没有依据的字段省略或写「无」，不得用示例值填充。",
+        "- 确认后优先提交确认前已生成的待写入快照，禁止重写其中的标识与数值。",
+    ]
+    if items:
+        lines.append("- 确认前已生成的待写入文件（必须 Read 后原样提交，禁止凭记忆重写）：")
+        for item in items[:_MAX_PENDING_WRITE_ITEMS]:
+            filename = item["filename"]
+            path = item["path"]
+            lines.append(f"  - {filename}: {path}")
+        return lines
+    if any(isinstance(item, dict) and str(item.get("path") or "").strip() for item in attachments):
+        lines.append(
+            "- 当前没有待写入快照。写入前必须先读取上一轮附件或工具结果，禁止用记忆补全明细。"
+        )
+    return lines
 
 
 def parse_resolve_tool_fact(tool_name: str | None, tool_output: Any) -> dict[str, Any] | None:
@@ -448,7 +563,8 @@ def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
     facts = payload.get("facts") or {}
     fact = facts.get(_RESOLVED_ENTITIES_FACT) or facts.get("enterprise_resolve") or {}
     todos = payload.get("todos") if isinstance(payload.get("todos"), dict) else None
-    if not skills and not attachments and not original and not fact and not todos:
+    pending_write = _pending_write_items(payload)
+    if not skills and not attachments and not original and not fact and not todos and not pending_write:
         return ""
 
     lines = [
@@ -458,6 +574,7 @@ def build_continuation_prompt_block(payload: dict[str, Any] | None) -> str:
         "- 禁止臆造外部主键；快照只有名称时必须使用下方已解析 ID，或再次调用解析工具。",
         "- 需要附件内容时直接读取下列路径，不要声称文件不存在。",
     ]
+    lines.extend(_pending_write_prompt_lines(payload))
     if skills:
         skill_text = "、".join(f"{item['name']}（ID: {item['id']}）" for item in skills)
         lines.append(f"- 上一轮已启用技能：{skill_text}")
@@ -540,6 +657,7 @@ def build_resolved_entities_prompt_block(payload: dict[str, Any] | None) -> str:
     if missing_lines:
         lines.append("- 未匹配对象：")
         lines.extend(missing_lines[:40])
+    lines.extend(_pending_write_prompt_lines(payload))
     return "\n".join(lines)
 
 
@@ -880,6 +998,27 @@ def _merge_resolved_entities(previous: dict[str, Any], incoming: dict[str, Any])
     }
 
 
+def _merge_pending_write(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    by_path: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    for source in (previous, incoming):
+        items = source.get("items") if isinstance(source, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            filename = str(item.get("filename") or "").strip() or path.replace("\\", "/").rsplit("/", 1)[-1]
+            entry = {"path": path, "filename": filename or path}
+            if path not in by_path:
+                order.append(path)
+            by_path[path] = entry
+    return {"items": [by_path[path] for path in order[-_MAX_PENDING_WRITE_ITEMS:]]}
+
+
 def _as_dict(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
@@ -1042,6 +1181,8 @@ class HitlContinuationStore:
             name = str(fact_name)
             if name == _RESOLVED_ENTITIES_FACT and isinstance(facts.get(name), dict):
                 facts[name] = _merge_resolved_entities(facts[name], fact_payload)
+            elif name == _PENDING_WRITE_FACT and isinstance(facts.get(name), dict):
+                facts[name] = _merge_pending_write(facts[name], fact_payload)
             else:
                 facts[name] = fact_payload
             current["facts"] = facts
@@ -1136,6 +1277,33 @@ class HitlContinuationStore:
             user_id=user_id,
             fact_name=_RESOLVED_ENTITIES_FACT,
             fact_payload=fact,
+        )
+
+    async def remember_write_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_args: Any,
+        tool_output: Any = None,
+        tool_result_state: Any = None,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        item = parse_pending_write_item(
+            tool_name,
+            tool_args,
+            tool_output,
+            tool_result_state=tool_result_state,
+        )
+        if not item:
+            return
+        await self.merge(
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            fact_name=_PENDING_WRITE_FACT,
+            fact_payload={"items": [item]},
         )
 
     async def remember_todos(
@@ -1310,6 +1478,27 @@ class HitlContinuationCoordinator:
         await self._store.remember_resolve_tool(
             tool_name=tool_name,
             tool_output=tool_output,
+            user_info=user_info,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    async def remember_write_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_args: Any = None,
+        tool_output: Any = None,
+        tool_result_state: Any = None,
+        user_info: Any = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        await self._store.remember_write_tool(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_output=tool_output,
+            tool_result_state=tool_result_state,
             user_info=user_info,
             conversation_id=conversation_id,
             user_id=user_id,

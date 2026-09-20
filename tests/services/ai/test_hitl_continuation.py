@@ -583,6 +583,98 @@ def test_continuation_prompt_block_includes_facts_and_skills():
     assert "不要把已完成项改回进行中" in block
 
 
+def test_is_write_tool_and_pending_write_path():
+    from app.services.ai.hitl_continuation import (
+        is_pending_write_path,
+        is_write_tool,
+        parse_pending_write_item,
+    )
+
+    assert is_write_tool("Write")
+    assert is_write_tool("write_file")
+    assert not is_write_tool("Read")
+    assert is_pending_write_path("pending_write/a.html")
+    assert is_pending_write_path("/workspace/sessions/x/pending_write/a.html")
+    assert not is_pending_write_path("docs/pending_write.html")
+    assert parse_pending_write_item(
+        "Write",
+        {"file_path": "pending_write/a.html"},
+        "Successfully wrote file",
+    ) == {"path": "pending_write/a.html", "filename": "a.html"}
+    assert parse_pending_write_item("Write", {"file_path": "docs/a.html"}, "ok") is None
+    assert parse_pending_write_item(
+        "write_file",
+        {"path": "pending_write/a.html"},
+        "错误：路径越界",
+    ) is None
+    assert parse_pending_write_item(
+        "write_file",
+        {"path": "pending_write/a.html"},
+        "写入文件失败: 路径越界",
+    ) is None
+    assert parse_pending_write_item(
+        "Write",
+        {"file_path": "pending_write/a.html"},
+        "ok",
+        tool_result_state="error",
+    ) is None
+
+
+def test_continuation_prompt_block_includes_pending_write_snapshot():
+    block = build_continuation_prompt_block(
+        {
+            "attachments": [{"filename": "src.pdf", "path": "/tmp/src.pdf", "type": "file"}],
+            "facts": {
+                "pending_write": {
+                    "items": [
+                        {
+                            "path": "pending_write/对象甲.html",
+                            "filename": "对象甲.html",
+                        }
+                    ]
+                }
+            },
+        }
+    )
+    assert "禁止凭记忆编造源材料中的标识、人员、数值或明细行" in block
+    assert "pending_write/对象甲.html" in block
+    assert "必须 Read 后原样提交" in block
+    assert "当前没有待写入快照" not in block
+
+
+def test_continuation_prompt_block_requires_reread_without_snapshot():
+    block = build_continuation_prompt_block(
+        {
+            "attachments": [{"filename": "src.pdf", "path": "/tmp/src.pdf", "type": "file"}],
+            "original_user_query": "根据附件写入",
+        }
+    )
+    assert "当前没有待写入快照" in block
+    assert "禁止用记忆补全明细" in block
+
+
+@pytest.mark.asyncio
+async def test_remember_write_tool_merges_pending_write_paths():
+    store = HitlContinuationStore(None, allow_memory_fallback=True)
+    await store.remember_write_tool(
+        tool_name="Write",
+        tool_args={"file_path": "pending_write/a.html"},
+        tool_output="ok",
+        user_id="u1",
+        conversation_id="c1",
+    )
+    await store.remember_write_tool(
+        tool_name="write_file",
+        tool_args={"path": "pending_write/b.html"},
+        tool_output="物理写入成功！路径：pending_write/b.html，写入大小：12 字节。",
+        user_id="u1",
+        conversation_id="c1",
+    )
+    payload = await store.get(user_id="u1", conversation_id="c1")
+    items = payload["facts"]["pending_write"]["items"]
+    assert [item["filename"] for item in items] == ["a.html", "b.html"]
+
+
 @pytest.mark.asyncio
 async def test_store_merges_skills_and_does_not_overwrite_names_with_ids():
     store = HitlContinuationStore(None, allow_memory_fallback=True)

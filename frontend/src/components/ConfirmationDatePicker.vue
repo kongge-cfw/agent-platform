@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: #fff;
   padding: 4px 11px;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5714285714;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;

@@ -109,7 +109,7 @@ function submit(confirmed: boolean) {
 
 <template>
   <section
-    class="bc-antd-card mt-2.5 w-full min-w-0 max-w-[42rem] lg:max-w-[48rem] 2xl:max-w-[52rem] overflow-hidden rounded-lg border border-[#d9d9d9] bg-white text-sm text-[rgba(0,0,0,0.88)] dark:border-gray-500 dark:bg-gray-800 dark:text-gray-100"
+    class="bc-antd-card mt-2.5 w-full min-w-0 max-w-[42rem] lg:max-w-[48rem] 2xl:max-w-[52rem] overflow-hidden rounded-lg border border-[#d9d9d9] bg-white text-xs text-[rgba(0,0,0,0.88)] dark:border-gray-500 dark:bg-gray-800 dark:text-gray-100"
     role="group"
     :aria-label="payload.title || '业务数据确认'"
   >
@@ -124,12 +124,12 @@ function submit(confirmed: boolean) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4" />
           </svg>
         </span>
-        <div class="min-w-0 truncate text-base font-semibold leading-6">
+        <div class="min-w-0 truncate text-sm font-semibold leading-5">
           {{ payload.title || '请确认以下信息' }}
         </div>
         <span
           v-if="!expanded && payload.summary"
-          class="min-w-0 flex-1 truncate text-sm font-normal text-[rgba(0,0,0,0.45)] dark:text-gray-400"
+          class="min-w-0 flex-1 truncate text-xs font-normal text-[rgba(0,0,0,0.45)] dark:text-gray-400"
         >
           {{ payload.summary }}
         </span>
@@ -168,7 +168,7 @@ function submit(confirmed: boolean) {
     <div v-show="expanded" class="px-4 pb-4 pt-3">
       <p
         v-if="payload.summary"
-        class="break-words text-sm leading-6 text-[rgba(0,0,0,0.65)] dark:text-gray-300"
+        class="break-words text-xs leading-5 text-[rgba(0,0,0,0.65)] dark:text-gray-300"
       >
         {{ payload.summary }}
       </p>
@@ -179,7 +179,7 @@ function submit(confirmed: boolean) {
           :key="field.key || field.label"
           class="flex items-start gap-3 py-3"
         >
-          <label class="w-[28%] shrink-0 pt-1 text-right text-sm leading-8 text-[rgba(0,0,0,0.88)] dark:text-gray-200">
+          <label class="w-[19%] shrink-0 pt-1 text-right text-xs leading-7 text-[rgba(0,0,0,0.88)] dark:text-gray-200">
             {{ field.label }}<span class="ml-0.5">:</span>
           </label>
           <div class="min-w-0 flex-1 pt-0.5">
@@ -228,7 +228,7 @@ function submit(confirmed: boolean) {
 
       <div
         v-if="payload.risk_note"
-        class="mt-2 flex items-start gap-2 rounded-md border border-[#ffe58f] bg-[#fffbe6] px-3 py-2 text-sm leading-6 text-[rgba(0,0,0,0.88)] dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+        class="mt-2 flex items-start gap-2 rounded-md border border-[#ffe58f] bg-[#fffbe6] px-3 py-2 text-xs leading-5 text-[rgba(0,0,0,0.88)] dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
       >
         <span class="mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[#faad14] text-white" aria-hidden="true">
           <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -241,7 +241,7 @@ function submit(confirmed: boolean) {
       <div v-if="payload.status === 'pending'" class="mt-4 flex items-center justify-end gap-2">
         <button
           type="button"
-          class="inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-[15px] text-sm text-[rgba(0,0,0,0.88)] transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+          class="inline-flex h-7 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-xs text-[rgba(0,0,0,0.88)] transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
           :disabled="locked"
           @click="submit(false)"
         >
@@ -249,7 +249,7 @@ function submit(confirmed: boolean) {
         </button>
         <button
           type="button"
-          class="inline-flex h-8 items-center justify-center rounded-md bg-primary px-[15px] text-sm text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-primary px-3 text-xs text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="locked"
           @click="submit(true)"
         >
@@ -271,7 +271,7 @@ function submit(confirmed: boolean) {
   border-radius: 6px;
   background: #fff;
   padding: 4px 11px;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5714285714;
   color: rgba(0, 0, 0, 0.88);
   outline: none;
