@@ -37,12 +37,15 @@ def resolve_reasoning_settings(
 ) -> ReasoningSettings:
     """Apply request-level overrides to a registered model's default reasoning state.
 
-    ``thinking_only`` is the registered default state, while ``thinking_enable``
-    is the model capability. Explicit session values may override the default;
-    disabling is additionally gated by ``allow_disable_thinking``.
+    ``thinking_enable`` is the model capability and the platform default: capable
+    models start with thinking on. ``thinking_only`` is retained for registry
+    compatibility and does not turn the default off. Explicit session values may
+    override the default; disabling is gated by ``allow_disable_thinking``.
     """
     supported = _supported_efforts(supported_reasoning_efforts)
-    effective_thinking = bool(thinking_enable and thinking_only)
+    effective_thinking = bool(thinking_enable)
+    if thinking_only and not thinking_enable:
+        logger.debug("Ignoring thinking_only for a non-thinking model")
     effective_effort = normalize_legacy_reasoning_effort(reasoning_effort)
     options = overrides or {}
 

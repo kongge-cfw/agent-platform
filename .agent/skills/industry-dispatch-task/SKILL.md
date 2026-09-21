@@ -99,7 +99,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 
 - `summary` 只能是 `将向N家企业立即下发，完成时限D。` 这里的 N 必须等于 `enterpriseCount` 的可下发家数。
 - 有无法匹配：`立即下发后不可修改、不可删除。另有M家企业当前无法匹配，本次不会下发。`；无则去掉后半句。M 不计入 `enterpriseCount`，也不出现在 `enterprises`。
-- `N家`/`M家` 无空格；`D` 为 `yyyy-MM-dd` 或 `不限期`。无时限时 `deadlineDate` 的 `value` 为 `不限期`，`value_type` 为 `string`；有日期时 `value_type` 为 `date`。写入时「不限期」不传 `deadlineDate`。
+- `N家`/`M家` 无空格。有时限时 `D` 为 `yyyy-MM-dd`；无时限时 `D` 为 `不限期`。`deadlineDate` 的 `value_type` 必须始终为 `date`，禁止改成 `string`，以便确认卡用日期选择器且用户可改。无时限时 `value` 为空字符串，禁止填「不限期」。确认后：值为 `yyyy-MM-dd` 则传入 `deadlineDate`；仍为空则不传。
 - `enterpriseCount`、`enterprises` 只读。`enterprises` 仅为可下发全称 `join('、')`。`needAudit` 为 JSON 布尔。
 - 禁止第七字段，禁止 `requirement` 进确认卡，禁止企业 ID 出现在 key/label。可下发名单按用户原始顺序去重。
 - 确认后无 `taskType`、无 `enterpriseCount`、无 `enterprises` 禁止调用 create。

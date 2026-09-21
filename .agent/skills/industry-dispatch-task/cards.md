@@ -43,7 +43,7 @@
 - `enterprises` 只读且 `value_type=string`，必须用**可下发**企业全称数组 `join('、')` 生成，值中禁止 `\n`、编号和项目符号。无法匹配、停用、重名禁止写入。`enterpriseCount` 的 N 必须等于该名单家数。缺这两字段、N=0、名单为空或家数对不上：禁止出卡。
 - 无法匹配家数只写入 `risk_note`，必须是准确数字，禁止写「若干」「部分」。有无法匹配时用「另有M家企业当前无法匹配，本次不会下发。」；为0时不要提。不要在确认卡列无法匹配企业名单，不要把名单做成用户可下载文件或承诺下载。写入 `pending_write/` 的待提交正文除外。
 - 文档解析/点名全称：能否下发只看本次 `enterprise_resolve` 的 `found` / `enabled` / `matchCount`。条件圈选：看 `enterprise_list` 的 `enabled`（不要 keyword）；`truncated=true` 先补全再出卡。口语检索：`enterprise_list(keyword)` 仅对话使用，唯一启用命中后按点名处理。文档里的名称禁止走 keyword。用户主动要求看名单时，再按用户原始顺序每批最多展示 10 家。
-- `deadlineDate` 无时限填「不限期」，禁止空字符串。用户改成日期后，写入前规范为 `yyyy-MM-dd`；仍为「不限期」则不传 `deadlineDate`。
+- `deadlineDate` 的 `value_type` 必须始终为 `date`。无时限 `value` 为空字符串，禁止把「不限期」写入字段值。用户可在日期选择器中填写或修改；写入前有日期则规范为 `yyyy-MM-dd`，仍为空则不传 `deadlineDate`。
 - 不要放 `publish` 勾选。确认后一律 `publish=true`。
 - 卡上只展示企业名称，不展示 ID。文档解析、点名全称或口语唯一命中：确定后再 `enterprise_resolve` 取 ID；条件圈选用出卡前 list 的 ID。禁止把本卡名称填进 `items[].enterpriseId`。
 - 反查 ID 后只调 `dispatch_task_create(publish=true)`，禁止 `publish=false`，禁止 `dispatch_task_issue`。

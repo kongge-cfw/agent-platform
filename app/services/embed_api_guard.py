@@ -26,6 +26,8 @@ _EMBED_ALLOWED = (
     ("GET", "/api/portal/portal-prefs"),
     ("PUT", "/api/portal/portal-prefs"),
     ("PUT", "/api/portal/portal-prefs/routing"),
+    ("GET", "/api/portal/chat-runtime-prefs"),
+    ("PUT", "/api/portal/chat-runtime-prefs"),
     ("GET", "/api/portal/metadata/datasets/accessible"),
     ("GET", "/api/portal/ragflow/config"),
     ("GET", "/api/portal/ragflow/datasets"),

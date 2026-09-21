@@ -45,7 +45,7 @@ ID 均为示意。确认卡字段见 [cards.md](cards.md)。规程以 SKILL.md �
 
 1. 说明本技能不能保存草稿，只能立即下发。
 2. `enterprise_resolve`：`{"names": ["安达危运有限公司"]}`。旁白判定为工作部署/一般通知，写入同一份 `pending_write/problems.md`（`# 安达危运有限公司` + 短 Markdown）。
-3. 仍出立即下发确认卡：`title`「确认立即下发」，`summary`「将向1家企业立即下发，完成时限不限期。」，按钮「立即下发」。禁止 `publish=false`。
+3. 仍出立即下发确认卡：`title`「确认立即下发」，`summary`「将向1家企业立即下发，完成时限不限期。」；`deadlineDate` 的 `value` 为空、`value_type` 必须为 `date`（日期选择器，用户可改），禁止把「不限期」写入字段值。按钮「立即下发」。禁止 `publish=false`。
 4. 确定后：全称再 `enterprise_resolve`，一次 `Read pending_write/problems.md`，一次 `dispatch_task_create`（`publish=true`）。禁止 `dispatch_task_issue`。
 
 ## 3. 催办 + 驳回
@@ -62,7 +62,7 @@ ID 均为示意。确认卡字段见 [cards.md](cards.md)。规程以 SKILL.md �
 
 1. 抽出文档中的企业全称，一次 `enterprise_resolve`（全称精确匹配）。**禁止**对文档名称用 `enterprise_list(keyword)` 模糊补全。假设 2 家可下发，23 家无法匹配。旁白认表，可补读。有事实则一次写入 `pending_write/problems.md`，只含可下发 2 家的一级标题。
 2. 不为无法匹配名单生成用户下载文件，确认卡不列无法匹配企业名单。出卡前旁白纳入核对。
-3. 确认卡：`summary` 严格写「将向2家企业立即下发，完成时限不限期。」；`enterpriseCount`=`2家`；`enterprises` 只列那 2 家可下发全称。`risk_note` 严格写「立即下发后不可修改、不可删除。另有23家企业当前无法匹配，本次不会下发。」不得把 23 家写进下发名单，不得增加 `skippedCount`、`skipped` 字段。缺家数或名单不准出卡。
+3. 确认卡：`summary` 严格写「将向2家企业立即下发，完成时限不限期。」；`deadlineDate` 的 `value` 为空、`value_type` 必须为 `date`；`enterpriseCount`=`2家`；`enterprises` 只列那 2 家可下发全称。`risk_note` 严格写「立即下发后不可修改、不可删除。另有23家企业当前无法匹配，本次不会下发。」不得把 23 家写进下发名单，不得增加 `skippedCount`、`skipped` 字段。缺家数或名单不准出卡。
 4. 确定后：用卡上 2 家全称再 `enterprise_resolve`，一次 `Read pending_write/problems.md`，再一次 `dispatch_task_create`（`publish=true` + `items`）。读不到则停止并重新出卡。不要再调 `dispatch_task_issue`。
 
 若 25 家全部无法匹配：列出前 10 家并写明剩余 15 家，请用户改全称；用户要求时继续按每批 10 家展示。**不要** `dispatch_task_create`，不要保存 0 家任务。

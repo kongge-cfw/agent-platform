@@ -141,7 +141,7 @@ const selectedModelConfig = computed(() => {
 
 const thinkingEnabledForTask = computed(() => {
   if (!selectedModelConfig.value?.thinking_enable) return false
-  return props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_only)
+  return props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_enable)
 })
 
 const canToggleThinking = computed(() => Boolean(

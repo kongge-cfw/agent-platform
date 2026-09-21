@@ -2253,6 +2253,7 @@ import { normalizeAgentSwitchCommand } from "@/utils/agentSwitchCommands";
 import { createSseLineParser } from "@/utils/sseLineParser";
 import type { ChatMessageBase } from "@/types/chat";
 import { modelApi, type AIModel, type ReasoningEffort } from "@/api/model";
+import { fetchChatRuntimePrefs, saveChatRuntimePrefs } from "@/utils/chatRuntimePrefs";
 import {
   type TurnType,
 } from "@/utils/turnLogDisplay";
@@ -3177,6 +3178,9 @@ const updateBrowserApprovalMode = async (mode: BrowserApprovalMode) => {
 const thinkingEnableOverride = ref<boolean | null>(null);
 const reasoningEffortOverride = ref<ReasoningEffort | null>(null);
 const temperatureOverride = ref<number | null>(null);
+const chatRuntimePrefsPersistable = ref(false);
+let chatRuntimePrefsHydrated = false;
+let persistChatRuntimePrefsTimer: ReturnType<typeof setTimeout> | null = null;
 const welcomeCards = ref<Array<{ icon: string; title: string; subtitle: string; prompt: string }>>([]);
 const showPersonalResources = ref(false);
 const personalResourcesTab = ref<PersonalResourceTab>("tokens");
@@ -3406,7 +3410,6 @@ const handleEmbedModelSelection = (model: string) => {
         return;
     }
     config.overrideModel = model;
-    thinkingEnableOverride.value = null;
     reasoningEffortOverride.value = null;
     temperatureOverride.value = null;
     saveRoutingSettings();
@@ -3418,10 +3421,61 @@ const handleEmbedModelSelection = (model: string) => {
         showToast("已恢复为默认模型", "info");
     }
 };
-const resetEmbedThinkingOverrides = () => {
-    thinkingEnableOverride.value = null;
-    reasoningEffortOverride.value = null;
-    temperatureOverride.value = null;
+const persistChatRuntimePrefsNow = async () => {
+    if (!chatRuntimePrefsPersistable.value) return;
+    try {
+        const saved = await saveChatRuntimePrefs({
+            override_model: config.overrideModel || null,
+            thinking_enable: thinkingEnableOverride.value,
+            reasoning_effort: reasoningEffortOverride.value,
+            temperature: temperatureOverride.value,
+        });
+        chatRuntimePrefsPersistable.value = saved.persistable !== false;
+        if (config.overrideModel) {
+            localStorage.setItem("yovole_override_model", config.overrideModel);
+        } else {
+            localStorage.removeItem("yovole_override_model");
+        }
+    } catch (error) {
+        console.warn("Failed to save chat runtime prefs", error);
+    }
+};
+const schedulePersistChatRuntimePrefs = () => {
+    if (!chatRuntimePrefsHydrated || !chatRuntimePrefsPersistable.value) return;
+    if (persistChatRuntimePrefsTimer) clearTimeout(persistChatRuntimePrefsTimer);
+    persistChatRuntimePrefsTimer = setTimeout(() => {
+        persistChatRuntimePrefsTimer = null;
+        void persistChatRuntimePrefsNow();
+    }, 400);
+};
+watch(
+    [() => config.overrideModel, thinkingEnableOverride, reasoningEffortOverride, temperatureOverride],
+    () => schedulePersistChatRuntimePrefs(),
+);
+const loadChatRuntimePrefs = async () => {
+    chatRuntimePrefsHydrated = false;
+    const localModel = (localStorage.getItem("yovole_override_model") || "").trim();
+    try {
+        const prefs = await fetchChatRuntimePrefs();
+        chatRuntimePrefsPersistable.value = prefs.persistable !== false;
+        const storedModel = String(prefs.override_model || "").trim();
+        if (storedModel) {
+            config.overrideModel = storedModel;
+        } else if (localModel) {
+            config.overrideModel = localModel;
+        }
+        thinkingEnableOverride.value = typeof prefs.thinking_enable === "boolean" ? prefs.thinking_enable : null;
+        reasoningEffortOverride.value = (prefs.reasoning_effort as ReasoningEffort | null | undefined) ?? null;
+        temperatureOverride.value = typeof prefs.temperature === "number" ? prefs.temperature : null;
+        chatRuntimePrefsHydrated = true;
+        if (chatRuntimePrefsPersistable.value && !storedModel && localModel) {
+            await persistChatRuntimePrefsNow();
+        }
+    } catch (error) {
+        console.warn("Failed to fetch chat runtime prefs", error);
+        chatRuntimePrefsPersistable.value = false;
+        chatRuntimePrefsHydrated = true;
+    }
 };
 const switchToAuto = () => {
     if (isRoutingSettingsLocked.value) {
@@ -4305,7 +4359,6 @@ const generateNewConversation = (opts?: { stash?: boolean }) => {
   // 工作台等入口通过 INIT_CONFIG 写入的 resume id，新会话时必须清掉，
   // 否则随后 initChat() 会再次强制切回旧会话并重载历史。
   requestedConversationId = "";
-  resetEmbedThinkingOverrides();
   resourceScopeLoadSequence += 1;
   conversationId.value = createConversationId();
   resourceScope.value = emptyResourceScopeState();
@@ -4431,8 +4484,8 @@ const fetchAllowedAgents = async (force = false) => {
     if (hasFetchedAgents.value && !force) return;
     isLoadingAgents.value = true;
     try {
-        // 先获取用户在后端 Redis 持久化的排版与路由偏好
-        await fetchUserPortalPreferences();
+        // 先获取用户在后端 Redis 持久化的排版与路由偏好，以及数据库中的模型/思考偏好
+        await Promise.all([fetchUserPortalPreferences(), loadChatRuntimePrefs()]);
 
         const res = await axios.get("/api/portal/agents/allowed");
         if (res.data) {
@@ -5020,7 +5073,6 @@ const handleHistoryClick = (item: any) => {
     }
 
     // Switch to this conversation
-    resetEmbedThinkingOverrides();
     conversationId.value = item.conversation_id;
     persistConversationId(item.conversation_id);
     updateActiveConversationOnServer(item.conversation_id);
@@ -8933,6 +8985,10 @@ onUnmounted(() => {
   disposePortalTimers();
   stopPortalLoadingTips();
   if (thoughtTimer) clearInterval(thoughtTimer);
+  if (persistChatRuntimePrefsTimer) {
+    clearTimeout(persistChatRuntimePrefsTimer);
+    persistChatRuntimePrefsTimer = null;
+  }
 });
 // --- Typewriter Effect ---
 const displayedWelcomeMessage = ref("");

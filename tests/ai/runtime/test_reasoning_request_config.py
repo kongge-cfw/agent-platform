@@ -7,17 +7,20 @@ import pytest
 pytestmark = pytest.mark.no_infrastructure
 
 
-def test_reasoning_defaults_to_thinking_only_for_registered_model():
+def test_reasoning_defaults_on_when_model_is_thinking_capable():
     from app.services.ai.reasoning import resolve_reasoning_settings
 
-    assert resolve_reasoning_settings(
-        thinking_enable=True,
-        thinking_only=True,
-        reasoning_effort="high",
-    ).thinking_enable is True
-    assert resolve_reasoning_settings(
+    on_even_if_thinking_only_off = resolve_reasoning_settings(
         thinking_enable=True,
         thinking_only=False,
+        reasoning_effort="high",
+        supported_reasoning_efforts=["low", "high"],
+    )
+    assert on_even_if_thinking_only_off.thinking_enable is True
+    assert on_even_if_thinking_only_off.reasoning_effort == "high"
+    assert resolve_reasoning_settings(
+        thinking_enable=False,
+        thinking_only=True,
         reasoning_effort="high",
     ).thinking_enable is False
 
@@ -124,7 +127,7 @@ async def test_runtime_model_info_carries_registered_reasoning_configuration(mon
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_info_keeps_thinking_capable_when_default_thinking_is_off(monkeypatch):
+async def test_runtime_model_info_defaults_thinking_on_when_model_is_capable(monkeypatch):
     from app.services.ai import config as config_module
 
     monkeypatch.setattr(
@@ -152,9 +155,9 @@ async def test_runtime_model_info_keeps_thinking_capable_when_default_thinking_i
 
     info = await config_module.resolve_runtime_model_info(model_override="thinking-model")
 
-    assert info.thinking_enable is False
+    assert info.thinking_enable is True
     assert info.thinking_capable is True
-    assert info.reasoning_effort is None
+    assert info.reasoning_effort == "high"
 
 
 @pytest.mark.asyncio

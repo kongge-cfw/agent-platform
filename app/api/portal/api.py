@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.dependencies import require_admin, require_api_key
-from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, personal_skills, memory, saved_reports, portal_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, embed_apps
+from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, personal_skills, memory, saved_reports, portal_prefs, chat_runtime_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, embed_apps
 
 portal_router = APIRouter()
 
@@ -84,6 +84,7 @@ portal_router.include_router(workbench.router, prefix="/workbench", tags=["个�
 
 # 20. 数据门户个人偏好 (Portal Preferences)
 portal_router.include_router(portal_prefs.router, prefix="/portal-prefs", tags=["门户偏好"], dependencies=[Depends(require_api_key)])
+portal_router.include_router(chat_runtime_prefs.router, prefix="/chat-runtime-prefs", tags=["对话运行时偏好"], dependencies=[Depends(require_api_key)])
 
 # 21. Token 额度 (Quota)
 portal_router.include_router(quota.router, prefix="/quota", tags=["Token额度"], dependencies=[Depends(require_api_key)])

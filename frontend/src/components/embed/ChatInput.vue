@@ -941,7 +941,7 @@ const selectedModelConfig = computed(() => {
 
 const thinkingEnabledForSession = computed(() => {
   if (!selectedModelConfig.value?.thinking_enable) return false;
-  return props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_only);
+  return props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_enable);
 });
 
 const canToggleThinking = computed(() => Boolean(
@@ -984,7 +984,7 @@ const thinkingSummaryLabel = computed(() => {
 
 const thinkingPanelSubtitle = computed(() => {
   const name = selectedModelConfig.value?.name || selectedModelConfig.value?.model_id || "当前模型";
-  return `${name} · 本次会话`;
+  return `${name} · 个人偏好`;
 });
 
 const modelSearchQuery = ref("");
@@ -3314,7 +3314,7 @@ defineExpose({
                                         v-if="model.thinking_enable"
                                         type="button"
                                         class="inline-flex items-center gap-0.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600 hover:bg-violet-100 dark:bg-violet-950/50 dark:text-violet-300 dark:hover:bg-violet-900/50"
-                                        :title="isMobileViewport ? '思考与参数设置' : '调整本次会话思考与温度'"
+                                        :title="isMobileViewport ? '思考与参数设置' : '调整个人偏好思考与温度'"
                                         @click="openThinkingSettings(model, $event)"
                                       >
                                         <span>{{ selectedModel === model.model_id ? (thinkingSummaryLabel || '思考') : '思考' }}</span>
@@ -3385,8 +3385,8 @@ defineExpose({
                                       :class="thinkingEnabledForSession ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'"
                                       @click="toggleThinkingForSession"
                                       :aria-pressed="thinkingEnabledForSession"
-                                      aria-label="切换本次会话思考模式"
-                                      :title="thinkingEnabledForSession ? '关闭本次会话思考' : '开启本次会话思考'"
+                                      aria-label="切换个人偏好思考模式"
+                                      :title="thinkingEnabledForSession ? '关闭个人偏好思考' : '开启个人偏好思考'"
                                     >
                                       <span class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" :class="thinkingEnabledForSession ? 'translate-x-5' : 'translate-x-0.5'"></span>
                                     </button>
@@ -3399,7 +3399,7 @@ defineExpose({
                                 <!-- 思考模块（仅在模型支持思考时显示） -->
                                 <template v-if="selectedModelConfig.thinking_enable">
                                   <div v-if="isMobileViewport" class="mb-3 flex items-center justify-between">
-                                    <div class="text-[10px] font-semibold text-gray-500 dark:text-gray-400">本次会话思考</div>
+                                    <div class="text-[10px] font-semibold text-gray-500 dark:text-gray-400">个人偏好思考</div>
                                     <button
                                       v-if="canToggleThinking"
                                       type="button"
@@ -3407,8 +3407,8 @@ defineExpose({
                                       :class="thinkingEnabledForSession ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'"
                                       @click="toggleThinkingForSession"
                                       :aria-pressed="thinkingEnabledForSession"
-                                      aria-label="切换本次会话思考模式"
-                                      :title="thinkingEnabledForSession ? '关闭本次会话思考' : '开启本次会话思考'"
+                                      aria-label="切换个人偏好思考模式"
+                                      :title="thinkingEnabledForSession ? '关闭个人偏好思考' : '开启个人偏好思考'"
                                     >
                                       <span class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" :class="thinkingEnabledForSession ? 'translate-x-5' : 'translate-x-0.5'"></span>
                                     </button>
@@ -3458,7 +3458,7 @@ defineExpose({
                                     class="mb-2 w-full rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-left text-[10px] text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
                                     @click="toggleThinkingForSession"
                                   >
-                                    关闭思考后，本次会话将以非思考模式发送。
+                                    关闭思考后，将以非思考模式发送。
                                   </button>
                                 </template>
 

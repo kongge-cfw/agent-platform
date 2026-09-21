@@ -324,7 +324,6 @@ const continueChatFromTrace = () => {
             finalizeConversationInBackground(previousId);
         }
         conversationId.value = targetId;
-        resetDebugThinkingOverrides();
         localStorage.setItem("agent_debug_conv_id", targetId);
         if (restoreInflightConversation(targetId)) {
             afterConversationActivated(targetId);
@@ -340,6 +339,7 @@ const continueChatFromTrace = () => {
 
 
 import { modelApi, type AIModel, type ReasoningEffort } from "../api/model";
+import { fetchChatRuntimePrefs, saveChatRuntimePrefs } from "@/utils/chatRuntimePrefs";
 
 import ConfirmModal from "@/components/ConfirmModal.vue";
 
@@ -662,7 +662,6 @@ const generateNewConversation = (isManual = false) => {
     finalizeConversationInBackground(previousId);
   }
   conversationId.value = createConversationId();
-  resetDebugThinkingOverrides();
   debugConfig.enableGrounding = false;
   localStorage.setItem("agent_debug_conv_id", conversationId.value);
   if (isManual) {
@@ -820,6 +819,7 @@ const fetchCurrentUser = async () => {
   } catch (e) {
     console.error("Failed to fetch user info", e);
   }
+  await loadChatRuntimePrefs();
 };
 
 onMounted(() => {
@@ -1523,6 +1523,70 @@ const debugConfig = reactive({
   systemPromptOverride: "", // Prompt Engineering
   injectedContext: [] as { key: string; value: string }[], // Manual Context Injection
 });
+const chatRuntimePrefsPersistable = ref(false);
+let chatRuntimePrefsHydrated = false;
+let persistChatRuntimePrefsTimer: ReturnType<typeof setTimeout> | null = null;
+
+const persistChatRuntimePrefsNow = async () => {
+  if (!chatRuntimePrefsPersistable.value) return;
+  try {
+    const payload: {
+      override_model: string | null;
+      thinking_enable: boolean | null;
+      reasoning_effort: ReasoningEffort | null;
+      temperature?: number | null;
+    } = {
+      override_model: debugConfig.model || null,
+      thinking_enable: debugConfig.thinkingEnableOverride,
+      reasoning_effort: debugConfig.reasoningEffortOverride,
+    };
+    if (debugConfig.temperature > 0) {
+      payload.temperature = debugConfig.temperature;
+    }
+    const saved = await saveChatRuntimePrefs(payload);
+    chatRuntimePrefsPersistable.value = saved.persistable !== false;
+  } catch (error) {
+    console.warn("Failed to save chat runtime prefs", error);
+  }
+};
+const schedulePersistChatRuntimePrefs = () => {
+  if (!chatRuntimePrefsHydrated || !chatRuntimePrefsPersistable.value) return;
+  if (persistChatRuntimePrefsTimer) clearTimeout(persistChatRuntimePrefsTimer);
+  persistChatRuntimePrefsTimer = setTimeout(() => {
+    persistChatRuntimePrefsTimer = null;
+    void persistChatRuntimePrefsNow();
+  }, 400);
+};
+const loadChatRuntimePrefs = async () => {
+  chatRuntimePrefsHydrated = false;
+  try {
+    const prefs = await fetchChatRuntimePrefs();
+    chatRuntimePrefsPersistable.value = prefs.persistable !== false;
+    const storedModel = String(prefs.override_model || "").trim();
+    if (storedModel) {
+      debugConfig.model = storedModel;
+    }
+    debugConfig.thinkingEnableOverride = typeof prefs.thinking_enable === "boolean" ? prefs.thinking_enable : null;
+    debugConfig.reasoningEffortOverride = (prefs.reasoning_effort as ReasoningEffort | null | undefined) ?? null;
+    if (typeof prefs.temperature === "number") {
+      debugConfig.temperature = prefs.temperature;
+    }
+  } catch (error) {
+    console.warn("Failed to fetch chat runtime prefs", error);
+    chatRuntimePrefsPersistable.value = false;
+  } finally {
+    chatRuntimePrefsHydrated = true;
+  }
+};
+watch(
+  [
+    () => debugConfig.model,
+    () => debugConfig.thinkingEnableOverride,
+    () => debugConfig.reasoningEffortOverride,
+    () => debugConfig.temperature,
+  ],
+  () => schedulePersistChatRuntimePrefs(),
+);
 
 const handleDebugModelSelection = (model: string) => {
   const previousModel = debugConfig.model;
@@ -1530,7 +1594,6 @@ const handleDebugModelSelection = (model: string) => {
     return;
   }
   debugConfig.model = model;
-  debugConfig.thinkingEnableOverride = null;
   debugConfig.reasoningEffortOverride = null;
   if (model) {
     const found = availableModels.value.find((m) => m.model_id === model);
@@ -3067,6 +3130,10 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", handleRunStatusVisibilityChange);
   clearHydrateRetryTimer();
   disposePortalTimers();
+  if (persistChatRuntimePrefsTimer) {
+    clearTimeout(persistChatRuntimePrefsTimer);
+    persistChatRuntimePrefsTimer = null;
+  }
 });
 
 const citationPopover = ref<{

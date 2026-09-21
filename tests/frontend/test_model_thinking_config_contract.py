@@ -274,19 +274,19 @@ def test_chat_input_keeps_model_menu_compact_and_surfaces_current_thinking_mode(
     assert "overflow-y-auto" in source
 
 
-def test_chat_input_uses_thinking_only_for_default_state_only():
+def test_chat_input_uses_thinking_enable_for_default_state():
     source = CHAT_INPUT.read_text(encoding="utf-8")
 
-    assert "props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_only)" in source
+    assert "props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_enable)" in source
     assert "const canToggleThinking = computed" in source
     assert "selectedModelConfig.value.allow_disable_thinking" in source
     assert "&& !selectedModelConfig.value.thinking_only" not in source
 
 
-def test_task_prompt_composer_uses_thinking_only_for_default_state_only():
+def test_task_prompt_composer_uses_thinking_enable_for_default_state():
     source = (ROOT / "frontend/src/components/task/TaskPromptComposer.vue").read_text(encoding="utf-8")
 
-    assert "props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_only)" in source
+    assert "props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_enable)" in source
     assert "const canToggleThinking = computed" in source
     assert "&& !selectedModelConfig.value.thinking_only" not in source
 

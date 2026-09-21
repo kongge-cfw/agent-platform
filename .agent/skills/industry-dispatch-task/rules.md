@@ -14,7 +14,7 @@
 - 确认卡取消后禁止调用任何写入 MCP，禁止立刻再弹确认卡。
 - 确认卡字段恰好 6 个，顺序固定为：任务名称、任务类型、完成时限、企业提交后需行业审核、可下发企业数、可下发企业清单。缺 `enterpriseCount` 或 `enterprises` 禁止出卡。两字段只含可下发企业（点名：`found=true && enabled=true && matchCount=1`；圈选：`enabled=true`）。无法匹配、停用、重名不进家数、不进名单，总家数只写入 `risk_note`。`enterpriseCount` 必须为 `N家` 且 N 等于名单按 `、` 拆开的家数。`taskType` 必须是中文下拉：`value_type=enum`，`options=["通知", "工作部署", "问题处置", "材料报送"]`。确认后 create 必须带卡上中文原值。`enterprises` 用 `value_type=string`，值由可下发名称数组 `join('、')` 生成，禁止换行和编号。禁止增加 `skippedCount`、`skipped`、共性任务要求或无法下发企业名单字段。出卡前旁白纳入核对。确认后只 Read `pending_write/problems.md`，原样拷进 `items[].requirement`，禁止压成摘要。读不到文件则停止并重新出卡，禁止在确认轮读 PDF 后直接 create。
 - 调用确认工具前校验 `fields.length=6` 且 key 顺序严格为 `name, taskType, deadlineDate, needAudit, enterpriseCount, enterprises`。字段 label、`value_type`、`editable` 及对应模式的标题、按钮、风险提示必须与 SKILL.md 完整模板一致；禁止企业名称充当 label，禁止 label 出现企业 ID，禁止动态生成每企业字段。
-- summary 只允许使用 SKILL.md 的立即下发句式；risk_note 只允许使用两个立即下发固定句式；家数写 `N家`，日期写 `yyyy-MM-dd` 或 `不限期`。可下发企业名单按用户原始顺序去重后展示，禁止重新排序。
+- summary 只允许使用 SKILL.md 的立即下发句式；risk_note 只允许使用两个立即下发固定句式；家数写 `N家`；summary 中的时限写 `yyyy-MM-dd` 或 `不限期`。确认卡 `deadlineDate` 的 `value_type` 必须始终为 `date`：有时限填 `yyyy-MM-dd`，无时限 `value` 为空，禁止把「不限期」写入字段值。可下发企业名单按用户原始顺序去重后展示，禁止重新排序。
 - 同时校验顶层不是数组、`title` 为非空字符串、`fields` 为真实数组；不满足时先重建完整对象，不得尝试调用。
 - 部分名称匹配失败或非本账号企业：确认卡只在 `risk_note` 写**总家数**，不列名单。用户要求时再按每批最多 10 家展示。禁止把无法匹配名单做成用户可下载文件或调用不存在的文件发布工具。写入 `pending_write/` 的待提交正文除外。点「立即下发」=只发唯一匹配且启用的。
 - 可下发为 0 家：禁止出下发确认卡，禁止 `dispatch_task_create`。
