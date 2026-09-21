@@ -1,16 +1,17 @@
 # 示例
 
-规程以 SKILL.md 为准。所有下发内容只冻结在 `pending_write/create.json`。问题处置冻结结构化 `problems`，不要手写 Markdown 表；确认后按 SKILL.md 模板拼成 `requirement` 再提交。
+规程以 SKILL.md 为准。所有下发内容只冻结在 `pending_write/create.json`。问题处置冻结结构化 `problems`；出卡前脚本 `check`，确认后脚本 `render` 成四列表，禁止手写 Markdown 表。
 
 ## 问题处置
 
 用户上传超速、疲劳驾驶、轨迹异常明细，要求给可匹配企业下发整改：
 
-1. 读全明细，一次 `enterprise_resolve` 全称匹配。
-2. 每个可下发企业生成一个 item。只写 `enterpriseId` + `problems` 对象数组，一车/一人一条。
-3. Write `pending_write/create.json`，再 Read 检查每条 `problems` 及源明细行数。
-4. 出 6 字段确认卡。
-5. 用户确定后 Read JSON，剔除 `enterpriseNames`、`unmatchedCount`，把 `problems` 拼成 Markdown 表写入 `requirement` 后删除 `problems`，再提交 `items`。
+1. 读全明细，一次 `enterprise_resolve` 全称匹配，并写入 `pending_write/allowed_ids.json`。
+2. 每个可下发企业生成一个 item。只写 `enterpriseId` + `problems` 对象数组，一车/一人一条。同一车牌多种问题分成多条。
+3. Write `pending_write/create.json`（禁止 Edit）。
+4. Bash：`python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json --allowed-ids pending_write/allowed_ids.json`（路径不存在则改 `skills/industry-dispatch-task/validate.py`，或 `find skills /workspace/skills -name validate_create_json.py`）。禁止 Read `.py`。退出码必须为 0。
+5. 出 6 字段确认卡。
+6. 用户确定后 Write 完整 create.json 写入卡上字段（禁止 Edit），`render` 出 `pending_write/submit.json`，`check-submit` 通过后再提交。
 
 ```json
 {
@@ -26,14 +27,16 @@
       "enterpriseId": "1987654321098765432",
       "problems": [
         {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋L68222", "problemType": "超速", "fact": "超速7次，已处理7次"},
-        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LS0715", "problemType": "轨迹异常", "fact": "总里程530.25km，完整率97.69%"}
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LB1516", "problemType": "超速", "fact": "超速1次，已处理1次"},
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LB1516", "problemType": "轨迹异常", "fact": "总里程163.21km，完整率74.99%"},
+        {"kind": "DRIVER", "occurredAt": "2026-09-12", "driverName": "张三", "problemType": "疲劳驾驶", "fact": "疲劳驾驶1次，已处理1次"}
       ]
     }
   ]
 }
 ```
 
-上面这份 JSON 更容易生成。禁止在冻结文件里写 `requirement` 的 Markdown 管道表或把对象数组再 `JSON.stringify` 成字符串。提交 MCP 时才按模板拼成：
+脚本渲染后的车辆/人员表必须是：
 
 ```text
 ## 车辆问题
@@ -41,7 +44,14 @@
 | 发生时间 | 车牌号 | 问题类型 | 事实 |
 | --- | --- | --- | --- |
 | 2026-09-12 | 晋L68222 | 超速 | 超速7次，已处理7次 |
-| 2026-09-12 | 晋LS0715 | 轨迹异常 | 总里程530.25km，完整率97.69% |
+| 2026-09-12 | 晋LB1516 | 超速 | 超速1次，已处理1次 |
+| 2026-09-12 | 晋LB1516 | 轨迹异常 | 总里程163.21km，完整率74.99% |
+
+## 驾驶员问题
+
+| 发生时间 | 姓名 | 问题类型 | 事实 |
+| --- | --- | --- | --- |
+| 2026-09-12 | 张三 | 疲劳驾驶 | 疲劳驾驶1次，已处理1次 |
 ```
 
 ## 多个问题维度
@@ -50,7 +60,7 @@
 
 ## 禁止
 
-以下都不能进入 `problems`，也不能作为提交给 MCP 的 `items[].requirement`：
+以下都不能进入 `problems`，脚本 `check` 会失败：
 
 ```text
 1. 疲劳驾驶1次（未处理）
@@ -59,17 +69,16 @@
 ```
 
 ```json
+[
+  {"enterpriseId":"5","name":"某公司","fatigue":1,"speed":17,"track_issue":true}
+]
+```
+
+```json
 {"issues": ["疲劳驾驶1次（未处理）", "超速17次"]}
 ```
 
-```markdown
-## 车辆问题
-
-- 晋L68222超速7次
-- 晋LS0715轨迹完整率97.69%
-```
-
-它们是概况、摘要数组或 Markdown 列表，不是一对象一行的 `problems`。
+它们是企业合计概况，不是一车/一人一条的 `problems`。
 
 ## 部分企业无法匹配
 

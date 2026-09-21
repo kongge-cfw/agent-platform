@@ -7,13 +7,13 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 
 仅服务行业账号 `/office/task-track`。查企业只有两个 MCP：`enterprise_resolve`（营业执照全称精确反查）、`enterprise_list`（圈选名录；口语对话里才可用 `keyword` 查找）。只调用本文件列出的 MCP。`dispatch_task_search` 只查任务，不查企业。禁止 `dispatch_inbox_*`。禁止用 resolve 圈危货。禁止用 list 的 `keyword` 去圈全市/危货，也禁止用它解析文档里的企业名称。写入只走 `dispatch_task_create(publish=true)`。禁止 `publish=false`，禁止 `dispatch_task_issue`，禁止 `show_ui_card`，禁止 `todo_write` 串主路径。运行时名称带前缀时按短名匹配。
 
-平台只注入本文件。Java 业务系统直接展示接口收到的 `items[].requirement`，不会替智能体把概况转换成表格。因此问题处置必须先冻结结构化 `problems`，确认后再按本文件模板拼成 Markdown 表提交。
+平台只注入本文件。Java 把 `items[].requirement` 展示在企业页「任务说明」；「问题详述」是另一字段，MCP 创建时会被清空，不要指望表格出现在那里。四列表必须写进 `items[].requirement`。问题处置先冻结 `problems`，确认后必须用脚本 `render` 成四列表再提交。禁止手写合计句（如「疲劳驾驶1次未处理、超速17次、轨迹完整率低于100%」）。禁止 `dispatch_items.json`。禁止 Read `scripts/validate_create_json.py`（会被截成半截函数）。根目录短脚本 `render.py` 找不到 Bash 路径时，允许 `read_skill_instruction(file="render.py")` 后 Write 到 `pending_write/render.py` 再执行。JSON 可以 Read；改 `pending_write/` 只用 Write 整文件，禁止 Edit。
 
 ## 规程裁定
 
-1. **准优先于快。** 出卡前读全源明细；确认后禁止再读附件、禁止改写 facts，只允许按模板把 `problems` 拼成 `requirement`。
-2. **只维护 `pending_write/create.json`。** 检查失败只覆盖这同一 JSON，不生成其它中间正文。
-3. **JSON 冻结明细，提交前才拼表格。** 问题处置在 `create.json` 里用 `items[].problems` 存结构化行，不要手写 Markdown 表。确认后按本文件固定模板把 `problems` 拼成 `items[].requirement` 字符串再提交。Java 原样展示该字符串。
+1. **准优先于快。** 出卡前读全源明细；确认后禁止再读附件、禁止改写 facts，只允许脚本把 `problems` 渲成 `requirement`。
+2. **只维护 `pending_write/create.json` 与 `allowed_ids.json`。** 这两个文件和 `submit.json` 一律用 **Write 整文件覆盖**，禁止 `Edit`（Edit 未先 Read 会直接失败）。检查失败也是 Write 完整 create.json，不要打补丁。禁止 `dispatch_items.json`、`issues`、`fatigue`/`speed`/`track_issue` 合计文件。
+3. **JSON 冻结明细，脚本校验并拼表。** 问题处置只写 `items[].problems`。出卡前 `check` 必须退出码 0；确认后 `render` 生成 `pending_write/submit.json`，禁止手写 `requirement` 表格。车辆/人员表头固定为截图四列。
 4. **一对象一行。** `problems` 每条必须是一个车辆或一个驾驶员（或一条企业事项）。禁止概况、合计、列表、建议句。
 5. **企业合计页只用于核对，不得下发。** 源材料有分车/分人明细时，只写对象级明细。企业问题只收制度、台账、许可，或全文确实没有车牌和姓名的事项。
 6. **文档提到即下发。** 可下发企业在源材料中出现的问题，不论轻微、已处理、次数少、完整率高，全部写入 `problems`；仅原文明示无需处理/不纳入整改/仅供参考时省略。
@@ -31,6 +31,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
    - 条件圈选：一次 `enterprise_list`（不要 keyword），补齐全部分页。
    - 口语简称：`enterprise_list(keyword=用户原词)`；唯一启用命中后再 resolve。
    - 可下发为 0：禁止出卡、禁止 create。
+   - 立刻 Write `pending_write/allowed_ids.json`，值为可下发 `enterpriseId` 字符串数组，例如 `["1987654321098765432"]`。禁止把合计表里的行号写成 ID。
 2. **读全源明细。** Excel/PDF/Word 截断必须续读。先按企业，再按车辆/驾驶员切分。禁止从企业合计页生成正文。
 3. **生成并写入 `pending_write/create.json`。** 顶层只能是下列字段；无时限时省略 `deadlineDate`。`enterpriseNames` 与 `unmatchedCount` 只供确认卡使用。问题处置每个 item 只放 `enterpriseId` + `problems` 数组，不要写 `requirement`。
 
@@ -49,7 +50,9 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
       "enterpriseId": "1987654321098765432",
       "problems": [
         {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋L68222", "problemType": "超速", "fact": "超速7次，已处理7次"},
-        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LS0715", "problemType": "轨迹异常", "fact": "总里程530.25km，完整率97.69%"}
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LB1516", "problemType": "超速", "fact": "超速1次，已处理1次"},
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LB1516", "problemType": "轨迹异常", "fact": "总里程163.21km，完整率74.99%"},
+        {"kind": "DRIVER", "occurredAt": "2026-09-12", "driverName": "张三", "problemType": "疲劳驾驶", "fact": "疲劳驾驶1次，已处理1次"}
       ]
     }
   ]
@@ -67,11 +70,33 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 - `occurredAt` 无则填 `—`；`problemType`、`fact` 必填，事实保留原文次数、已处理、里程、完整率。
 - 同一车牌或同一人的多种问题分成多条。禁止「超速17次」「疲劳驾驶1次（未处理）」这种无对象合计。
 
-4. **Read 并检查 `create.json`，不可凭记忆检查。** 逐条核对 `problems` 与源明细行数。任一家失败，补读源明细并覆盖同一 JSON，然后再次 Read。全部通过才出卡。
-5. **出确认卡。** `enterpriseCount=items.length`，`enterprises=enterpriseNames.join('、')`，无法匹配数来自 `unmatchedCount`。确认卡不展示企业明细。
-6. **用户已确定。** 只 `Read pending_write/create.json`。用卡上 name/taskType/deadlineDate/needAudit 覆盖对应值。删除 `enterpriseNames`、`unmatchedCount`。每个 item **按下面模板**把 `problems` 拼成 `requirement` 字符串，然后删除 `problems`。一次 `dispatch_task_create`，只传 `items`（含拼好的 `requirement`），禁止传 `enterpriseIds`。禁止再 resolve、再读附件或改写 facts。取消则不调 MCP。
+4. **脚本校验 `create.json`，禁止凭记忆检查。** 先 Read `pending_write/create.json` 核对 `problems` 与源明细行数；再用 Bash 执行。禁止 Read `scripts/validate_create_json.py`。会话里脚本常在 `skills/.seed/`，按顺序试，找到即停：
 
-拼表规则（按 kind 分组，顺序：企业问题 → 车辆问题 → 驾驶员问题；空组不输出；组内保持原数组顺序）：
+```text
+python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json --allowed-ids pending_write/allowed_ids.json
+python3 skills/industry-dispatch-task/validate.py check pending_write/create.json --allowed-ids pending_write/allowed_ids.json
+```
+
+都失败则 `find skills /workspace/skills . -name 'validate.py' -o -name 'render.py' | head -5`。仍没有：`read_skill_instruction(skill_id="industry-dispatch-task", file="render.py")`，Write 到 `pending_write/render.py`。出卡前至少要能跑 `check` 或确认 `create.json` 的 `problems` 为一车/一人一条。退出码非 0：Write 完整 `create.json` 后重跑，禁止 Edit，禁止出卡。没有四列表禁止 create。
+5. **出确认卡。** `enterpriseCount=items.length`，`enterprises=enterpriseNames.join('、')`，无法匹配数来自 `unmatchedCount`。确认卡不展示企业明细。
+6. **用户已确定。** 用卡上 name/taskType/deadlineDate/needAudit 更新后 **Write 完整** `create.json`（禁止 Edit）。然后：
+
+```text
+python3 skills/.seed/industry-dispatch-task/validate.py render pending_write/create.json pending_write/submit.json --allowed-ids pending_write/allowed_ids.json
+python3 skills/.seed/industry-dispatch-task/validate.py check-submit pending_write/submit.json
+```
+
+若 `validate.py` 不存在，改跑：
+
+```text
+python3 pending_write/render.py render pending_write/create.json pending_write/submit.json
+```
+
+没有 `pending_write/render.py` 时先 `read_skill_instruction(file="render.py")` 再 Write 该短文件。`submit.json` 每个 `items[].requirement` 必须含 `##` 和 `| --- |` 四列表。禁止把「疲劳驾驶1次未处理、超速17次」这种合计句写入 requirement。没有表格禁止 `dispatch_task_create`。
+
+Read `pending_write/submit.json` 一次 `dispatch_task_create`，只传其中字段，禁止传 `enterpriseIds`，禁止改 `items[].requirement`。禁止再 resolve、再读附件或改写 facts。取消则不调 MCP。
+
+脚本按 kind 分组渲染（顺序：企业问题 → 车辆问题 → 驾驶员问题；空组不输出；组内保持原数组顺序）。车辆/人员必须是下面这种四列表，同一车牌或同一人多种问题分行：
 
 ```text
 VEHICLE →

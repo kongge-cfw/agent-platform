@@ -10,7 +10,7 @@
 
 工具顶层入参必须是包含 `title, summary, confirm_label, cancel_label, risk_note, fields` 的 JSON 对象。禁止把字段数组直接作为顶层入参；`fields` 必须是真实数组，不能是 JSON 字符串。
 
-出卡当轮不要写「汇总工具结果」、指标口径长文或 todo。允许出卡前一段「纳入核对」旁白。确认卡本身只展示任务级信息和企业范围。问题整改必须先有 `pending_write/create.json`，其中每个 `items[].problems` 已是对象数组，一车一条或一驾驶员一条。缺文件、缺家、或 JSON 检查不通过：禁止出卡。确认后只 Read 这一份 JSON，把 `problems` 拼成 `requirement` 后提交。读不到则停止并重新出卡。
+出卡当轮不要写「汇总工具结果」、指标口径长文或 todo。允许出卡前一段「纳入核对」旁白。确认卡本身只展示任务级信息和企业范围。问题整改必须先有 `pending_write/create.json`，且 `validate.py check` 退出码 0。缺文件、缺家、或脚本检查不通过：禁止出卡。确认后脚本 `render` 生成 `pending_write/submit.json` 再提交。读不到则停止并重新出卡。禁止 Read `.py` 正文。
 
 `title` 与主按钮只能是「确认立即下发」+「立即下发」。禁止「保存草稿」。
 
@@ -48,7 +48,7 @@
 - 卡上只展示企业名称，不展示 ID。ID 已在出卡前由 resolve/list 取得并冻结进 `create.json`；确认后不再反查。禁止把卡上名称填进 `items[].enterpriseId`。
 - 反查 ID 后只调 `dispatch_task_create(publish=true)`，禁止 `publish=false`，禁止 `dispatch_task_issue`。
 - **可下发企业数为 0 时不要出本卡、不要 create**。改用短问请用户改全称；无法下发清单按每批最多 10 家展示。
-- 按任务类型选用结构，见 [item-requirement.md](item-requirement.md)。整改冻结 `problems` 对象数组，提交时再拼表；会议通知等不要套整改三类表。
+- 按任务类型选用结构，见 [item-requirement.md](item-requirement.md)。整改冻结 `problems` 对象数组，提交前用脚本渲成四列表；会议通知等不要套整改三类表。
 
 调用 `request_user_confirmation` 前强制校验：
 

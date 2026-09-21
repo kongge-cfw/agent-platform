@@ -1,6 +1,6 @@
 # 企业任务明细
 
-任务有两层说明。企业端「任务跟踪」由任务系统把收到的 `items[].requirement` 原样展示。问题处置在冻结 JSON 里写结构化 `problems`，确认后按 SKILL.md 模板拼成 Markdown 表再提交；不要写 HTML。
+任务有两层说明。企业端「任务跟踪」由任务系统把收到的 `items[].requirement` 原样展示。问题处置在冻结 JSON 里写结构化 `problems`，出卡前用 Bash 跑 `validate.py check` 校验；确认后用同一脚本 `render` 成四列 Markdown 表再提交。车辆表头：发生时间 / 车牌号 / 问题类型 / 事实。人员表头：发生时间 / 姓名 / 问题类型 / 事实。不要写 HTML。禁止 Read `.py` 正文。
 
 | 层 | MCP 字段 | 写什么 |
 |----|----------|--------|
@@ -9,7 +9,7 @@
 
 先判断任务类型，再套对应结构。**不要**把会议通知写成三类问题表。
 
-问题整改、会议通知等统一冻结在 `pending_write/create.json`。每个可下发企业对应一个 `items[]`。问题处置冻结 `problems` 对象数组，不含企业全称；确认后拼成 Markdown 表写入 `requirement` 再提交。会议/培训/材料报送直接写短 Markdown 到 `requirement`。
+问题整改、会议通知等统一冻结在 `pending_write/create.json`。每个可下发企业对应一个 `items[]`。问题处置冻结 `problems` 对象数组，不含企业全称；出卡前脚本校验，确认后脚本渲染 `requirement`。会议/培训/材料报送直接写短 Markdown 到 `requirement`。
 
 ## 如何选型
 
@@ -61,7 +61,7 @@
 ]
 ```
 
-三类都有时放在同一个 `problems` 数组里。提交时按 SKILL.md 模板分组拼成三段 `##` 表，不要拼成一张宽表，也不要把数组再编码成 JSON 字符串。
+三类都有时放在同一个 `problems` 数组里。提交时由 `scripts/validate_create_json.py render` 分组拼成三段 `##` 四列表，不要手写管道表，也不要把数组再编码成 JSON 字符串。
 
 **反例（禁止）：**
 
@@ -71,7 +71,7 @@
 【建议】核查当日行车轨迹。
 ```
 
-写入 `pending_write/create.json` 的 `items[].problems`，条数对不上则补读源表后覆盖同一 JSON。出卡前必须检查：对象数组；一车一条或一驾驶员一条。手写 Markdown 表、多个对象挤一条、或「超速N次」无车牌/姓名 = 不通过。确认后禁止再读源附件、禁止改写 facts，只按模板拼表。单家接近 20 万字符时按时间段拆任务，禁止截断。
+写入 `pending_write/create.json` 的 `items[].problems`，条数对不上则补读源表后 **Write 完整** 同一 JSON（禁止 Edit）。出卡前必须 `python3 ... validate.py check` 退出码 0。手写 Markdown 表、`dispatch_items.json`、多个对象挤一条、或「超速N次」无车牌/姓名 = 不通过。确认后禁止再读源附件、禁止改写 facts，只跑 `render`。单家接近 20 万字符时按时间段拆任务，禁止截断。
 
 ---
 
@@ -122,4 +122,4 @@
 
 ## 确认卡
 
-确认卡不展示各企业明细或摘要。缺 `pending_write/create.json`、缺卡上任一家 item、或任一 `problems` 检查不通过：禁止出卡。确认后只 Read 这一份 JSON，拼表后提交。读不到则停止并重新出卡。
+确认卡不展示各企业明细或摘要。缺 `pending_write/create.json`、缺卡上任一家 item、或脚本 `check` 未通过：禁止出卡。确认后只跑 `render` + `check-submit`，再提交 `submit.json`。读不到则停止并重新出卡。
