@@ -7,64 +7,96 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 
 仅服务行业账号 `/office/task-track`。查企业只有两个 MCP：`enterprise_resolve`（营业执照全称精确反查）、`enterprise_list`（圈选名录；口语对话里才可用 `keyword` 查找）。只调用本文件列出的 MCP。`dispatch_task_search` 只查任务，不查企业。禁止 `dispatch_inbox_*`。禁止用 resolve 圈危货。禁止用 list 的 `keyword` 去圈全市/危货，也禁止用它解析文档里的企业名称。写入只走 `dispatch_task_create(publish=true)`。禁止 `publish=false`，禁止 `dispatch_task_issue`，禁止 `show_ui_card`，禁止 `todo_write` 串主路径。运行时名称带前缀时按短名匹配。
 
-平台只注入本文件。禁止为读规则去打开附属 md。用户上传的 Excel/PDF 按主路径读写。源附件只 Read，不要另存 records.json 或按家 html。
+平台只注入本文件。Java 业务系统直接展示接口收到的 `items[].requirement`，不会替智能体把概况转换成表格。因此问题处置必须先冻结结构化 `problems`，确认后再按本文件模板拼成 Markdown 表提交。
 
-## 规程裁定（后面章节不得写相反要求）
+## 规程裁定
 
-1. **准优先于快。** 出卡前允许按表补读源附件。确认后禁止再读源附件，禁止再生成正文。
-2. **只写一份 Markdown。** 出卡前只 `Write` 一次 `pending_write/problems.md`。禁止 `records.json`，禁止按家写 html，禁止把同一份事实再写成第二份文件。
-3. **企业合计页不是企业问题。** 有分车或分人明细时，合计不要写入问题清单。企业问题只收制度/台账/许可，或全文既无车牌也无驾驶员姓名的事项。
-4. **确认轮只提交冻结结果。** 文档解析或点名全称：卡上全称再 `enterprise_resolve`。口语检索唯一命中后也按点名：卡上全称再 `enterprise_resolve`。条件圈选：用出卡前 `enterprise_list` 的 `enterpriseId`，禁止再 list、禁止再 resolve。然后一次 `Read pending_write/problems.md`（无该文件的通知可跳过 Read）→ 一次 `dispatch_task_create`。按一级标题切成各家 Markdown，**原样**填入 `items[].requirement`，一个字都不改。读不到该有的文件：停止，禁止 create，禁止在确认轮读 PDF 补写后直接下发。`truncated=true` 禁止当全集下发。
-5. **禁止编造。** 车牌、姓名、次数、里程、完整率、时间必须在源材料原文中逐字出现。禁止连续重复数字号牌。找不到就省略该列，不准补号。
-6. **文档提到即下发。** 源材料列出、点名或要求整改的问题，不论轻微、一般、提示、预警、次数少、已处理、完整率高，一律写入问题清单并下发给对应企业。禁止自行判断「太小不用发」。仅当该条在源材料中明确标注「无需处理 / 不纳入整改 / 仅供参考不下发」等，才可省略。
-7. **企业端看到的就是 `items[].requirement`。** 任务跟踪「任务说明」直接展示该字段。写成摘要，企业端就只看到摘要。问题整改有车牌/人员/记录时，该字段**必须**含 `##` 节标题和 Markdown 表（含 `|` 行），禁止一句话、禁止「超速N次」这种合计句、禁止把多行表压成一段话。确认轮禁止为省 token 压缩、改写或补建议。
-8. **禁止建议句和分析句。** 不要写「请核查…并加强教育」「请落实整改」这类套话进企业明细。不要「二、问题分析」「三、整改建议」。空类不要写对应 `##` 节。
-9. **确认卡恰好 6 个字段，不能多也不能少。** 顺序与 label 必须是：任务名称、任务类型、完成时限、企业提交后需行业审核、可下发企业数、可下发企业清单。禁止增加共性任务要求或任何第七字段。缺一个、多一个、label 不一致、或 key 顺序不对：禁止出卡。
-10. **无任务类型禁止出卡、禁止 create。** 第二字段必须是 `taskType`，`value_type=enum`，`options=["通知", "工作部署", "问题处置", "材料报送"]`。确认后 `dispatch_task_create.taskType` 必须等于卡上中文原值。
-11. **无可下发企业数或可下发企业清单禁止出卡。** `enterpriseCount`、`enterprises` 只含可下发企业：文档解析/点名全称/口语唯一命中后 resolve=`found=true && enabled=true && matchCount=1`；条件圈选=`enabled=true`。无法匹配、停用、重名、不在权限内的不进家数、不进名单，其总家数只写 `risk_note`。`enterpriseCount` 必须是 `N家`（N 为正整数、无空格），且 N 等于 `enterprises` 按 `、` 拆开后的家数。`enterprises` 必须是可下发全称 `join('、')`，禁止空、禁止换行、禁止编号。缺字段、N=0、名单为空、家数与名单不一致、或把不符合条件的企业写进去：禁止出卡。
-12. **文档用 resolve，口语才用 list.keyword。** Excel/PDF/附件/源表里的企业名称必须 `enterprise_resolve` 全称精确匹配，禁止对文档名称用 `enterprise_list(keyword)` 模糊补全。`enterprise_list` 的 `keyword` **仅**用于口语对话（用户当场说简称、「查一下 XX」）。圈选全市/危货不要 keyword。禁止用 `dispatch_task_search` 或 `dispatch_inbox_*` 查企业。
+1. **准优先于快。** 出卡前读全源明细；确认后禁止再读附件、禁止改写 facts，只允许按模板把 `problems` 拼成 `requirement`。
+2. **只维护 `pending_write/create.json`。** 检查失败只覆盖这同一 JSON，不生成其它中间正文。
+3. **JSON 冻结明细，提交前才拼表格。** 问题处置在 `create.json` 里用 `items[].problems` 存结构化行，不要手写 Markdown 表。确认后按本文件固定模板把 `problems` 拼成 `items[].requirement` 字符串再提交。Java 原样展示该字符串。
+4. **一对象一行。** `problems` 每条必须是一个车辆或一个驾驶员（或一条企业事项）。禁止概况、合计、列表、建议句。
+5. **企业合计页只用于核对，不得下发。** 源材料有分车/分人明细时，只写对象级明细。企业问题只收制度、台账、许可，或全文确实没有车牌和姓名的事项。
+6. **文档提到即下发。** 可下发企业在源材料中出现的问题，不论轻微、已处理、次数少、完整率高，全部写入 `problems`；仅原文明示无需处理/不纳入整改/仅供参考时省略。
+7. **禁止编造。** 企业名、车牌、姓名、时间、次数、里程、完整率必须来自原文。
+8. **确认卡恰好 6 字段。** 任务名称、任务类型、完成时限、企业提交后需行业审核、可下发企业数、可下发企业清单，不能多不能少。
+9. **问题处置只提交 `items`。** 禁止使用 `enterpriseIds`，否则企业会沿用任务要求。冻结阶段每个 item 必须有字符串 ID 和非空 `problems`；调用 MCP 时每个 item 必须有字符串 ID 和非空 Markdown `requirement`，不要把 `problems` 传给接口。
+10. **文档用 resolve，口语才用 list.keyword。** 文档、Excel、PDF、粘贴名单里的全称一次 `enterprise_resolve`；条件圈选用 `enterprise_list` 且不传 keyword；keyword 只用于用户口语简称。
 
-## 主路径（问题整改）
+## 主路径
 
-缺任务名时一句短问。未提时限通常不限期；重大事故隐患、立即整改、证照失效必须有明确时限。问题处置默认 `needAudit=true`。用户说「先存草稿」也只出立即下发卡。任务类型必填，确认卡与 create 都用中文：通知、工作部署、问题处置、材料报送。会议/培训/一般告知用通知，专项整治/贯彻文件用工作部署，整改/隐患/责令改正用问题处置，报表/台账/核查名单用材料报送。
+缺任务名时一句短问。未提时限通常不限期；重大事故隐患、立即整改、证照失效必须有明确时限。问题处置默认 `needAudit=true`。任务类型使用中文：通知、工作部署、问题处置、材料报送。
 
-文档解析与点名全称：可下发 = `found=true && enabled=true && matchCount=1`。条件圈选：可下发 = `enabled=true`。为 0：禁止出卡、禁止 create。
+1. **认企业。**
+   - 文档/附件名单/点名全称：一次 `enterprise_resolve`。仅 `found=true && enabled=true && matchCount=1` 可下发。
+   - 条件圈选：一次 `enterprise_list`（不要 keyword），补齐全部分页。
+   - 口语简称：`enterprise_list(keyword=用户原词)`；唯一启用命中后再 resolve。
+   - 可下发为 0：禁止出卡、禁止 create。
+2. **读全源明细。** Excel/PDF/Word 截断必须续读。先按企业，再按车辆/驾驶员切分。禁止从企业合计页生成正文。
+3. **生成并写入 `pending_write/create.json`。** 顶层只能是下列字段；无时限时省略 `deadlineDate`。`enterpriseNames` 与 `unmatchedCount` 只供确认卡使用。问题处置每个 item 只放 `enterpriseId` + `problems` 数组，不要写 `requirement`。
 
-1. **认企业（三条路径互斥）。**
-   - **文档解析 / 附件名单 / 用户给出全称：** Excel、PDF、源表、用户粘贴的企业名称一律一次 `enterprise_resolve`，`names` 提交文档中的营业执照全称（去空格后精确匹配）。禁止对文档里的名称用 `enterprise_list` 或 `keyword` 模糊补全。对不上的不进确认卡，总家数写入 `risk_note`；不要用相似名称替换。
-   - **条件圈选：** 用户说危货/客运/某地/全市且未给名单、也没有上传企业名单 → 一次 `enterprise_list`（`businessScopes` 可用「危货」等口语，空条件=权限内全部启用）。**不要传 `keyword`。** `truncated=true` 先问是否扩大 `size`（最大 1000）或分页，禁止只拿一页当下发全集。班线/包车企业主档没有，先按客运圈并旁白说明。
-   - **口语检索（仅对话，不是文档）：** 用户当场说简称、「查一下 XX」、没有上传名单也不是圈选全市 → 一次 `enterprise_list(keyword=用户原词)`。命中 1 家且 `enabled=true`：用返回的 `name` 全称进可下发名单，确认后再 `enterprise_resolve` 取 ID。命中 0：请用户改成营业执照全称。命中多家：列出返回的全称请用户点名，再 `enterprise_resolve`。禁止把模糊命中的多家直接当下发全集。
-2. **认表并可补读。** 旁白列出源表。禁止因完整率 ≥95%、已处理、次数少、轻微或「看起来不大」丢掉某张表或某行。截断则再 `Read` 该表。仅源材料对该条写明无需处理时才跳过。
-3. **一次写入 `pending_write/problems.md`。** 每个可下发企业一个一级标题，标题必须是营业执照全称。节名只用 `## 企业问题` / `## 车辆问题` / `## 驾驶员问题`。有车牌 → 车辆；无车牌有姓名 → 驾驶员；都无 → 企业。同一车牌多种问题分行。文档提到的问题全部入表，禁止因达标、已处理、次数少或程度轻删行。有分车/分人时禁止把「超速6次」这类合计写入企业问题。
-
-```markdown
-# 安达危运有限公司
-
-## 车辆问题
-
-| 发生时间 | 车牌号 | 问题类型 | 事实 |
-| --- | --- | --- | --- |
-| 2026-09-12 | 晋L68222 | 超速 | 超速7次，已处理7次 |
-| 2026-09-12 | 晋LS0715 | 轨迹异常 | 总里程530.25km，完整率97.69% |
-
-# 顺通物流有限公司
-
-## 车辆问题
-
-| 发生时间 | 车牌号 | 问题类型 | 事实 |
-| --- | --- | --- | --- |
-| 2026-09-12 | 晋A12345 | 超速 | 超速1次，已处理1次 |
+```json
+{
+  "name": "9月12日疲劳驾驶/超速/轨迹异常问题整改",
+  "taskType": "问题处置",
+  "requirement": "请按本任务所列问题核查原因、落实整改，并在完成时限前提交整改材料。",
+  "publish": true,
+  "needAudit": true,
+  "deadlineDate": "2026-09-26",
+  "enterpriseNames": ["侯马经济开发区盛达聚危货运输有限公司"],
+  "unmatchedCount": 0,
+  "items": [
+    {
+      "enterpriseId": "1987654321098765432",
+      "problems": [
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋L68222", "problemType": "超速", "fact": "超速7次，已处理7次"},
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LS0715", "problemType": "轨迹异常", "fact": "总里程530.25km，完整率97.69%"}
+      ]
+    }
+  ]
+}
 ```
 
-**禁止写成：**
+问题处置 JSON 硬约束：
+
+- `publish` 必须为 true；`items.length == enterpriseNames.length`，顺序一致；ID 必须是 resolve/list 返回的字符串。
+- 每个 item 只能有 `enterpriseId`、`problems`；禁止 `issues`、`summary`、`name`、手写 `requirement`。
+- `problems` 必须是对象数组，至少 1 条。`kind` 只能是 `VEHICLE` / `DRIVER` / `ENTERPRISE`。
+- `VEHICLE`：`vehiclePlate` 必填且只能有一个车牌；不要填 `driverName`。
+- `DRIVER`：`driverName` 必填且只能有一个姓名；不要填 `vehiclePlate`。
+- `ENTERPRISE`：必须有 `problemCategory`、`problemType`、`fact`；有分车/分人时不要把合计写进这里。
+- `occurredAt` 无则填 `—`；`problemType`、`fact` 必填，事实保留原文次数、已处理、里程、完整率。
+- 同一车牌或同一人的多种问题分成多条。禁止「超速17次」「疲劳驾驶1次（未处理）」这种无对象合计。
+
+4. **Read 并检查 `create.json`，不可凭记忆检查。** 逐条核对 `problems` 与源明细行数。任一家失败，补读源明细并覆盖同一 JSON，然后再次 Read。全部通过才出卡。
+5. **出确认卡。** `enterpriseCount=items.length`，`enterprises=enterpriseNames.join('、')`，无法匹配数来自 `unmatchedCount`。确认卡不展示企业明细。
+6. **用户已确定。** 只 `Read pending_write/create.json`。用卡上 name/taskType/deadlineDate/needAudit 覆盖对应值。删除 `enterpriseNames`、`unmatchedCount`。每个 item **按下面模板**把 `problems` 拼成 `requirement` 字符串，然后删除 `problems`。一次 `dispatch_task_create`，只传 `items`（含拼好的 `requirement`），禁止传 `enterpriseIds`。禁止再 resolve、再读附件或改写 facts。取消则不调 MCP。
+
+拼表规则（按 kind 分组，顺序：企业问题 → 车辆问题 → 驾驶员问题；空组不输出；组内保持原数组顺序）：
 
 ```text
-9月12日存在问题：超速6次。请核查超速原因并加强驾驶员教育。
+VEHICLE →
+## 车辆问题
+
+| 发生时间 | 车牌号 | 问题类型 | 事实 |
+| --- | --- | --- | --- |
+| {occurredAt} | {vehiclePlate} | {problemType} | {fact} |
+
+DRIVER →
+## 驾驶员问题
+
+| 发生时间 | 姓名 | 问题类型 | 事实 |
+| --- | --- | --- | --- |
+| {occurredAt} | {driverName} | {problemType} | {fact} |
+
+ENTERPRISE →
+## 企业问题
+
+| 发生时间 | 问题类别 | 问题事项 | 事实 |
+| --- | --- | --- | --- |
+| {occurredAt} | {problemCategory} | {problemType} | {fact} |
 ```
 
-列：车辆用发生时间、车牌号、问题类型、事实；驾驶员用发生时间、姓名、问题类型、事实；企业用发生时间、问题类别、问题事项、事实。事实须含源材料已有的次数、已处理、里程、完整率。旁白：`已写入 pending_write/problems.md：可下发2家，超速18条，轨迹2条。` 行数对不上则补读后**覆盖写同一文件**，不要另存。写入后自检：每家必须有 `##` 和至少一行 `|` 表；缺表则覆盖重写，禁止出卡。
-4. **旁白纳入核对后出卡。** 缺 `problems.md`、或缺卡上任一家的一级标题、或任一家没有 `##`+表：禁止出卡。确认卡不放各家问题明细。不出推荐问。
-5. **用户已确定。** 文档解析、点名全称或口语唯一命中：卡上全称再 `enterprise_resolve`（集合必须与卡一致），`enterpriseId` 用本次反查字符串。条件圈选：用出卡前 list 的 ID，按卡上全称对齐。一次 `Read pending_write/problems.md`。一次 `create(publish=true)`：`taskType` 必须等于卡上中文原值；任务级 `requirement` 用下方固定句，不要另写；每家 `items[].requirement` 为该一级标题下的 Markdown **原文**（不含 `# 企业全称` 行）。调用前再检：任一家缺少 `##` 或 `|` → 停止，禁止 create。禁止再读附件，禁止再 `Write`，禁止凭记忆改表，禁止把表压成摘要。创建失败且内容不变时可重试 create。
+多组之间空一行。单元格里的 `|` 换成 `｜`。得到的字符串原样写入 `items[].requirement`。
 
 任务级 `requirement`（不进确认卡，create 必填）按类型原样使用，不要改写：
 
@@ -73,7 +105,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 - 工作部署：`请按部署要求贯彻执行并按时反馈。`
 - 材料报送：`请按报送清单准备材料并按时提交。`
 
-会议/培训/材料报送：未给名单则先 `enterprise_list` 圈企业。旁白一句类型，仍写入同一 `problems.md`（各家一级标题 + 对应 `##` 节，不要整改三类表），再出卡。催办/通过/驳回：查到对象后各出一张确认卡。查询进度不出确认卡。
+会议/培训/材料报送：未给名单则先 `enterprise_list` 圈企业，仍冻结在 `create.json`。非问题处置的 item 直接写短 Markdown 到 `requirement`，不要 `problems`，不套整改三类表。催办/通过/驳回：查到对象后各出一张确认卡。查询进度不出确认卡。
 
 ## 确认卡
 

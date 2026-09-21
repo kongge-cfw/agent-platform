@@ -23,7 +23,51 @@ const emit = defineEmits<{
   (e: 'select-directory', path: string): void
   (e: 'delete-file', path: string): void
   (e: 'context-menu', data: { event: MouseEvent, node: FileNode }): void
+  (e: 'drop-files', data: { event: DragEvent, folderPath: string }): void
+  (e: 'drag-hover-folder', path: string): void
 }>()
+
+const dropHoverPath = ref('')
+
+const isOsFileDrag = (e: DragEvent) => {
+  return Array.from(e.dataTransfer?.types || []).includes('Files')
+}
+
+const parentDirectory = (path: string) => {
+  if (!path || !path.includes('/')) return ''
+  return path.substring(0, path.lastIndexOf('/'))
+}
+
+const setDropHover = (path: string) => {
+  dropHoverPath.value = path
+  emit('drag-hover-folder', path)
+}
+
+const onFolderDragOver = (e: DragEvent, path: string) => {
+  if (!isOsFileDrag(e)) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  if (dropHoverPath.value !== path) setDropHover(path)
+}
+
+const onFolderDragLeave = (e: DragEvent, path: string) => {
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as HTMLElement).contains(related)) return
+  if (dropHoverPath.value === path) setDropHover('')
+}
+
+const onFolderDrop = (e: DragEvent, path: string) => {
+  if (!isOsFileDrag(e)) return
+  e.preventDefault()
+  e.stopPropagation()
+  setDropHover('')
+  emit('drop-files', { event: e, folderPath: path })
+}
+
+const onFileDrop = (e: DragEvent, path: string) => {
+  onFolderDrop(e, parentDirectory(path))
+}
 
 const collapsedDirs = ref<Record<string, boolean>>({})
 
@@ -104,8 +148,17 @@ const getFileIcon = (name: string, isDir: boolean) => {
         <div 
           @click="selectAndToggleDir(node.path)"
           @contextmenu.prevent="emit('context-menu', { event: $event, node })"
+          @dragover="onFolderDragOver($event, node.path)"
+          @dragleave="onFolderDragLeave($event, node.path)"
+          @drop="onFolderDrop($event, node.path)"
           class="flex items-center justify-between py-1.5 px-2 rounded-lg cursor-pointer group transition-all"
-          :class="selectedDirectoryPath === node.path ? 'bg-amber-50 ring-1 ring-amber-200' : 'hover:bg-gray-100'"
+          :class="[
+            dropHoverPath === node.path
+              ? 'bg-primary/10 ring-2 ring-primary/40'
+              : selectedDirectoryPath === node.path
+                ? 'bg-amber-50 ring-1 ring-amber-200'
+                : 'hover:bg-gray-100'
+          ]"
         >
           <div class="flex items-center space-x-2 text-gray-700 min-w-0">
             <svg 
@@ -139,7 +192,13 @@ const getFileIcon = (name: string, isDir: boolean) => {
         </div>
         
         <transition name="fade">
-          <div v-show="!isCollapsed(node.path)" class="pl-4 border-l border-gray-150 ml-3.5 mt-0.5 space-y-0.5">
+          <div
+            v-show="!isCollapsed(node.path)"
+            class="pl-4 border-l border-gray-150 ml-3.5 mt-0.5 space-y-0.5"
+            @dragover="onFolderDragOver($event, node.path)"
+            @dragleave="onFolderDragLeave($event, node.path)"
+            @drop="onFolderDrop($event, node.path)"
+          >
             <SkillFileTree 
               :tree-data="node.children || []" 
               :selected-path="selectedPath"
@@ -150,6 +209,8 @@ const getFileIcon = (name: string, isDir: boolean) => {
               @select-directory="(path) => emit('select-directory', path)"
               @delete-file="(path) => emit('delete-file', path)"
               @context-menu="(data) => emit('context-menu', data)"
+              @drop-files="(data) => emit('drop-files', data)"
+              @drag-hover-folder="(path) => emit('drag-hover-folder', path)"
             />
           </div>
         </transition>
@@ -160,6 +221,8 @@ const getFileIcon = (name: string, isDir: boolean) => {
         <div 
           @click="emit('select-file', node.path)"
           @contextmenu.prevent="emit('context-menu', { event: $event, node })"
+          @dragover="onFolderDragOver($event, parentDirectory(node.path))"
+          @drop="onFileDrop($event, node.path)"
           class="flex items-center justify-between py-1.5 px-2 rounded-lg cursor-pointer group transition-all"
           :class="[
             selectedPath === node.path 

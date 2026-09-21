@@ -333,6 +333,104 @@ const createAssetTargetLabel = computed(() => {
 const uploadFolder = ref('') // 上传到技能目录下的子文件夹路径 (可选)
 const uploading = ref(false)
 const uploadType = ref<'normal' | 'archive'>('normal')
+const isAssetDragOver = ref(false)
+const assetDragDepth = ref(0)
+const dropHoverFolderPath = ref('')
+
+const dropTargetLabel = computed(() => {
+  return dropHoverFolderPath.value || selectedDirectoryPath.value || '技能根目录'
+})
+
+const isOsFileDrag = (e: DragEvent) => {
+  return Array.from(e.dataTransfer?.types || []).includes('Files')
+}
+
+const isArchiveFilename = (name: string) => {
+  const n = name.toLowerCase()
+  return n.endsWith('.zip')
+    || n.endsWith('.tar.gz')
+    || n.endsWith('.tgz')
+    || n.endsWith('.tar.bz2')
+    || n.endsWith('.tbz')
+    || n.endsWith('.tar')
+}
+
+const collectDroppedFiles = (e: DragEvent) => {
+  const files: File[] = []
+  let skippedDirectory = false
+  const items = e.dataTransfer?.items
+  if (items && items.length > 0) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind !== 'file') continue
+      const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null
+      if (entry?.isDirectory) {
+        skippedDirectory = true
+        continue
+      }
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+    return { files, skippedDirectory }
+  }
+  return { files: Array.from(e.dataTransfer?.files || []), skippedDirectory }
+}
+
+const resetAssetDragState = () => {
+  assetDragDepth.value = 0
+  isAssetDragOver.value = false
+  dropHoverFolderPath.value = ''
+}
+
+const onAssetDragEnter = (e: DragEvent) => {
+  if (!isOsFileDrag(e) || uploading.value) return
+  e.preventDefault()
+  assetDragDepth.value += 1
+  isAssetDragOver.value = true
+}
+
+const onAssetDragOver = (e: DragEvent) => {
+  if (!isOsFileDrag(e) || uploading.value) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+}
+
+const onAssetDragLeave = (e: DragEvent) => {
+  if (!isOsFileDrag(e)) return
+  e.preventDefault()
+  assetDragDepth.value = Math.max(0, assetDragDepth.value - 1)
+  if (assetDragDepth.value === 0) resetAssetDragState()
+}
+
+const ingestDroppedFiles = async (files: File[] | FileList, folderPath: string, skippedDirectory = false) => {
+  const list = Array.from(files)
+  if (skippedDirectory && list.length === 0) {
+    showToast('暂不支持拖入文件夹，请拖入文件或压缩包', 'warning')
+    return
+  }
+  if (list.length === 0) return
+  if (skippedDirectory) {
+    showToast('已忽略拖入的文件夹，仅上传文件', 'warning')
+  }
+  selectedDirectoryPath.value = folderPath
+  await uploadFiles(list, { folder: folderPath, type: 'auto' })
+}
+
+const onAssetDrop = async (e: DragEvent) => {
+  if (!isOsFileDrag(e)) return
+  e.preventDefault()
+  const { files, skippedDirectory } = collectDroppedFiles(e)
+  resetAssetDragState()
+  if (uploading.value) return
+  await ingestDroppedFiles(files, selectedDirectoryPath.value, skippedDirectory)
+}
+
+const onTreeDropFiles = async (data: { event: DragEvent, folderPath: string }) => {
+  const { files, skippedDirectory } = collectDroppedFiles(data.event)
+  resetAssetDragState()
+  if (uploading.value) return
+  await ingestDroppedFiles(files, data.folderPath, skippedDirectory)
+}
 
 // 右键菜单相关
 const contextMenu = ref({
@@ -998,14 +1096,21 @@ const handleFileUpload = async (event: Event) => {
   const files = target.files
   if (!files || files.length === 0) return
   await uploadFiles(files)
+  target.value = ''
 }
 
 // 物理上传执行 (单文件限 10MB / 压缩包限 20MB)
-const uploadFiles = async (files: FileList) => {
+const uploadFiles = async (
+  files: FileList | File[],
+  options?: { folder?: string; type?: 'normal' | 'archive' | 'auto' }
+) => {
+  if (!activeSkillId.value) return
+  const folder = (options?.folder ?? uploadFolder.value).trim()
+  const mode = options?.type ?? uploadType.value
   uploading.value = true
   try {
     for (const file of Array.from(files)) {
-      const isArchive = uploadType.value === 'archive'
+      const isArchive = mode === 'archive' || (mode === 'auto' && isArchiveFilename(file.name))
       const limit = isArchive ? 20 * 1024 * 1024 : 10 * 1024 * 1024
       if (file.size > limit) {
         showToast(`文件 ${file.name} 超过限制大小 (${isArchive ? '20MB' : '10MB'})，已拦截上传`, 'warning')
@@ -1014,8 +1119,8 @@ const uploadFiles = async (files: FileList) => {
 
       const formData = new FormData()
       formData.append('file', file)
-      if (uploadFolder.value.trim()) {
-        formData.append('folder', uploadFolder.value.trim())
+      if (folder) {
+        formData.append('folder', folder)
       }
 
       const apiPrefix = resolveSkillApiPrefix(activeSkillId.value)
@@ -2569,12 +2674,12 @@ description: 专门审查 Markdown 与技术文档的格式与结构守则。当
                       </svg>
                     </button>
                   </div>
-                  <span class="flex items-center gap-1.5 text-[10px] text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full font-medium shadow-sm transition-all hover:border-slate-350" title="鼠标右键点击文件或空白区域可进行新建或上传">
+                  <span class="flex items-center gap-1.5 text-[10px] text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full font-medium shadow-sm transition-all hover:border-slate-350" title="可拖入文件到列表，或右键新建/上传">
                   <span class="relative flex h-1.5 w-1.5">
                     <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
                   </span>
-                  右键菜单操作
+                  右键或拖入文件
                 </span>
                 </div>
               </div>
@@ -2604,9 +2709,33 @@ description: 专门审查 Markdown 与技术文档的格式与结构守则。当
               </div>
 
               <!-- 文件树渲染 -->
-              <div @contextmenu.self.prevent="handleEmptyAreaContextMenu" class="flex-1 flex flex-col border border-gray-200 rounded-2xl p-4 bg-gray-50/50 overflow-y-auto min-h-[180px] custom-scrollbar mb-3">
+              <div
+                @contextmenu.self.prevent="handleEmptyAreaContextMenu"
+                @dragenter="onAssetDragEnter"
+                @dragover="onAssetDragOver"
+                @dragleave="onAssetDragLeave"
+                @drop="onAssetDrop"
+                class="relative flex-1 flex flex-col border rounded-2xl p-4 overflow-y-auto min-h-[180px] custom-scrollbar mb-3 transition-all duration-200"
+                :class="isAssetDragOver
+                  ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                  : 'border-gray-200 bg-gray-50/50'"
+              >
+                <div
+                  v-if="uploading"
+                  class="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-2xl bg-white/90 backdrop-blur-sm"
+                >
+                  <span class="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin"></span>
+                  <p class="mt-3 text-xs font-semibold text-gray-700">正在上传到 {{ dropTargetLabel }}…</p>
+                </div>
+                <div
+                  v-else-if="isAssetDragOver"
+                  class="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col items-center rounded-xl border border-primary/30 bg-white/95 px-3 py-2 shadow-sm"
+                >
+                  <p class="text-xs font-semibold text-primary">松开即可上传到 {{ dropTargetLabel }}</p>
+                  <p class="mt-0.5 text-[10px] text-primary/70">压缩包将自动解压；暂不支持拖入文件夹</p>
+                </div>
                 <div v-if="fileTree.length === 0" class="text-center py-10 text-xs text-gray-400 italic flex-1 flex items-center justify-center">
-                  暂无任何技能物理资产文件
+                  暂无技能文件，可将文件拖到此处上传
                 </div>
                 <SkillFileTree 
                   v-else
@@ -2619,6 +2748,8 @@ description: 专门审查 Markdown 与技术文档的格式与结构守则。当
                   @select-directory="selectDirectory"
                   @delete-file="deleteSkillFile"
                   @context-menu="handleContextMenu"
+                  @drop-files="onTreeDropFiles"
+                  @drag-hover-folder="(path) => dropHoverFolderPath = path"
                 />
               </div>
 

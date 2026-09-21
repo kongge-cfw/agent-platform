@@ -1,120 +1,89 @@
 # 示例
 
-ID 均为示意。确认卡字段见 [cards.md](cards.md)。规程以 SKILL.md 为准：只写一份 `pending_write/problems.md`。
+规程以 SKILL.md 为准。所有下发内容只冻结在 `pending_write/create.json`。问题处置冻结结构化 `problems`，不要手写 Markdown 表；确认后按 SKILL.md 模板拼成 `requirement` 再提交。
 
-## 1. 一句话下发（主路径）
+## 问题处置
 
-**用户：** 根据上传的2026年6月已认定超载违法明细，给安达危运有限公司、顺通物流有限公司、某某运输有限公司下发整改，10月15日前报结果。
+用户上传超速、疲劳驾驶、轨迹异常明细，要求给可匹配企业下发整改：
 
-1. `enterprise_resolve` 一次传入全部全称。某某运输 `found=false`，不要再查。旁白认表；截断则补读源附件。一次 `Write pending_write/problems.md`（两个一级标题：安达危运、顺通物流）。行数对不上则覆盖写同一文件。出卡前旁白纳入核对。缺文件或缺任一家一级标题不准出卡。禁止 records.json，禁止按家 html，禁止把企业明细或企业 ID 打进对话。
-2. 再 `request_user_confirmation`。顶层严格使用 SKILL.md 的立即下发模板，包含 `title, summary, confirm_label, cancel_label, risk_note, fields`；`summary` 为「将向2家企业立即下发，完成时限2026-10-15。」；`risk_note` 为「立即下发后不可修改、不可删除。另有1家企业当前无法匹配，本次不会下发。」禁止直接传 `fields` 数组。
-   - 任务类型（中文：通知 / 工作部署 / 问题处置 / 材料报送）、**可下发企业数**、**可下发企业清单**（只含可下发全称）、时限、企业提交后需行业审核。确认卡恰好这 6 个字段，不要共性任务要求。某某运输不进家数和清单。缺家数或名单不准出卡。
-   - 不增加“各企业明细”“当前账号无法下发”“无法下发企业”字段；问题清单已写入 `pending_write/problems.md`
-   - 按钮：「立即下发」
-   本轮停止，不要用推荐问代替确认卡。
-3. `【业务确认】用户已确定` → 用卡上两家全称再 `enterprise_resolve` → **一次** `Read pending_write/problems.md` → **只调一次** `dispatch_task_create`（`publish=true`）。读不到文件则停止并重新出卡，禁止确认轮读 PDF 后直接 create。`enterpriseId` 填这次反查字符串。`items[].requirement` 为该一级标题下的 Markdown（不含 `# 企业全称` 行）。禁止 `dispatch_task_issue`。示例：
+1. 读全明细，一次 `enterprise_resolve` 全称匹配。
+2. 每个可下发企业生成一个 item。只写 `enterpriseId` + `problems` 对象数组，一车/一人一条。
+3. Write `pending_write/create.json`，再 Read 检查每条 `problems` 及源明细行数。
+4. 出 6 字段确认卡。
+5. 用户确定后 Read JSON，剔除 `enterpriseNames`、`unmatchedCount`，把 `problems` 拼成 Markdown 表写入 `requirement` 后删除 `problems`，再提交 `items`。
 
 ```json
 {
-  "name": "2026年6月货运超载问题整改",
+  "name": "9月12日运输安全问题整改",
   "taskType": "问题处置",
-  "requirement": "请核查超载违法记录，落实车辆、驾驶人和装载管理整改，并在完成时限前提交整改凭证。",
+  "requirement": "请按本任务所列问题核查原因、落实整改，并在完成时限前提交整改材料。",
   "publish": true,
   "needAudit": true,
-  "deadlineDate": "2026-10-15",
+  "enterpriseNames": ["侯马经济开发区盛达聚危货运输有限公司"],
+  "unmatchedCount": 0,
   "items": [
     {
-      "enterpriseId": "<resolve 返回的安达危运有限公司 enterpriseId>",
-      "requirement": "## 车辆问题\n\n| 发生时间 | 车牌号 | 问题类型 | 事实 |\n| --- | --- | --- | --- |\n| 2026-06-02 10:23 | A19251D | 超载 | 超载未达30%，实载32000kg，核定31000kg |\n| 2026-06-02 10:25 | A05909D | 超载 | 超载未达30%，实载32000kg，核定31000kg |"
-    },
-    {
-      "enterpriseId": "<resolve 返回的顺通物流有限公司 enterpriseId>",
-      "requirement": "## 车辆问题\n\n| 发生时间 | 车牌号 | 问题类型 | 事实 |\n| --- | --- | --- | --- |\n| 2026-06-03 09:10 | B33221 | 超载 | 超载未达30%，实载30500kg，核定30000kg |"
+      "enterpriseId": "1987654321098765432",
+      "problems": [
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋L68222", "problemType": "超速", "fact": "超速7次，已处理7次"},
+        {"kind": "VEHICLE", "occurredAt": "2026-09-12", "vehiclePlate": "晋LS0715", "problemType": "轨迹异常", "fact": "总里程530.25km，完整率97.69%"}
+      ]
     }
   ]
 }
 ```
 
-4. 回复：严格输出 SKILL.md 的固定 2 表 Markdown 回执（下发结果 + 企业清单），其中已下发2家、未下发1家，清单按原始顺序列出这3家及下发结果。回执末尾必须原样输出三句中文推荐问：谁还没交、催一下没交的企业、查看无法匹配的企业名单。不得输出企业问题原文，不要调用卡片或文件工具，不要任务 ID。创建若报 ID 无效：用全称再反查后重试 create，不要改调 issue。
+上面这份 JSON 更容易生成。禁止在冻结文件里写 `requirement` 的 Markdown 管道表或把对象数组再 `JSON.stringify` 成字符串。提交 MCP 时才按模板拼成：
 
-用户点取消：一句说明已取消，不要 create。
-
-## 2. 用户要求先存草稿
-
-**用户：** 先别发给企业，帮我拟「危货企业应急预案修订」草稿，对象安达危运有限公司。
-
-1. 说明本技能不能保存草稿，只能立即下发。
-2. `enterprise_resolve`：`{"names": ["安达危运有限公司"]}`。旁白判定为工作部署/一般通知，写入同一份 `pending_write/problems.md`（`# 安达危运有限公司` + 短 Markdown）。
-3. 仍出立即下发确认卡：`title`「确认立即下发」，`summary`「将向1家企业立即下发，完成时限不限期。」；`deadlineDate` 的 `value` 为空、`value_type` 必须为 `date`（日期选择器，用户可改），禁止把「不限期」写入字段值。按钮「立即下发」。禁止 `publish=false`。
-4. 确定后：全称再 `enterprise_resolve`，一次 `Read pending_write/problems.md`，一次 `dispatch_task_create`（`publish=true`）。禁止 `dispatch_task_issue`。
-
-## 3. 催办 + 驳回
-
-**用户：** 隐患排查任务没交的催一下；安达那份材料不合格，让他们重做。
-
-1. `dispatch_task_search` + `get`（不出确认卡）。「没交的」=全部 `PENDING`，不要问催谁。
-2. 催办确认卡：任务名、完成时限、催办对象逐家列出 → 确定后 `dispatch_task_urge`。
-3. 驳回确认卡：企业安达危运、原因预填「材料不合格，请按要求重报」→ 确定后 `dispatch_task_reject`。
-
-## 4. 上传文档：部分企业无法匹配
-
-**用户：** 上传一份隐患名单（含 25 家企业全称），给能发的企业下发整改。
-
-1. 抽出文档中的企业全称，一次 `enterprise_resolve`（全称精确匹配）。**禁止**对文档名称用 `enterprise_list(keyword)` 模糊补全。假设 2 家可下发，23 家无法匹配。旁白认表，可补读。有事实则一次写入 `pending_write/problems.md`，只含可下发 2 家的一级标题。
-2. 不为无法匹配名单生成用户下载文件，确认卡不列无法匹配企业名单。出卡前旁白纳入核对。
-3. 确认卡：`summary` 严格写「将向2家企业立即下发，完成时限不限期。」；`deadlineDate` 的 `value` 为空、`value_type` 必须为 `date`；`enterpriseCount`=`2家`；`enterprises` 只列那 2 家可下发全称。`risk_note` 严格写「立即下发后不可修改、不可删除。另有23家企业当前无法匹配，本次不会下发。」不得把 23 家写进下发名单，不得增加 `skippedCount`、`skipped` 字段。缺家数或名单不准出卡。
-4. 确定后：用卡上 2 家全称再 `enterprise_resolve`，一次 `Read pending_write/problems.md`，再一次 `dispatch_task_create`（`publish=true` + `items`）。读不到则停止并重新出卡。不要再调 `dispatch_task_issue`。
-
-若 25 家全部无法匹配：列出前 10 家并写明剩余 15 家，请用户改全称；用户要求时继续按每批 10 家展示。**不要** `dispatch_task_create`，不要保存 0 家任务。
-
-用户主动要求看无法匹配名单时，再按原始顺序每批最多展示 10 家。
-
-## 5. 会议通知（不要套整改模板）
-
-**用户：** 通知安达危运有限公司、顺通物流有限公司 10 月 15 日上午 9 点到市局开安全生产调度会，12 日前报参会人。
-
-1. 判定类型为**会议通知**，确认卡 `taskType=通知`，旁白一句即可，不要写「问题分析 / 整改建议」，不要三类问题表。仍写入同一份 `pending_write/problems.md`（各家一级标题 + `## 会议事项` 等短 Markdown）。
-2. 确认卡只展示任务级信息和企业范围，必须含任务类型、可下发企业数、可下发企业清单。恰好 6 个字段。
-3. 确认后一次 `Read pending_write/problems.md` 再 `dispatch_task_create`，`taskType` 传卡上原值「通知」；时间地点以用户原文为准，不编造会议室门牌。
-
-## 6. 同一企业包含多个问题维度
-
-**输入材料：** 安达危运有限公司存在企业台账缺失、2 辆车超载、1 名驾驶员资格证过期。
-
-`problems.md` 中该公司一段按对象分成至多三节，同一条记录只进一节；没有的节不输出标题：
-
-```markdown
-# 安达危运有限公司
-
-## 企业问题
-
-| 发生时间 | 问题类别 | 问题事项 | 事实 |
-| --- | --- | --- | --- |
-| — | 台账 | 隐患台账缺失 | 源材料未提供企业级隐患治理台账 |
-
+```text
 ## 车辆问题
 
 | 发生时间 | 车牌号 | 问题类型 | 事实 |
 | --- | --- | --- | --- |
-| 2026-06-02 10:23 | A19251D | 超载 | 超载未达30%，实载32000kg，核定31000kg |
-| 2026-06-02 10:25 | A05909D | 超载 | 超载未达30%，实载32000kg，核定31000kg |
-
-## 驾驶员问题
-
-| 发生时间 | 姓名 | 问题类型 | 事实 |
-| --- | --- | --- | --- |
-| — | 张某 | 资格证过期 | 从业资格证已过期 |
+| 2026-09-12 | 晋L68222 | 超速 | 超速7次，已处理7次 |
+| 2026-09-12 | 晋LS0715 | 轨迹异常 | 总里程530.25km，完整率97.69% |
 ```
 
-确认卡不展示这些表。台账→企业，超载→车辆，资格证→驾驶员。有分车明细时不要把「超载2次」再写入企业问题。不要写分析/建议三节，不要 HTML。源材料列出或要求整改的全部纳入，不得因程度轻或数值高低剔除；仅源材料明确标注无需处理的才可省略。
+## 多个问题维度
 
-## 7. 口语简称检索
+同一企业的 `problems` 可混放 `ENTERPRISE` / `VEHICLE` / `DRIVER`。拼表时按企业问题、车辆问题、驾驶员问题分组；空组不输出。同一车牌或同一人的多种问题分成多条对象。
 
-**用户（对话里说，没有上传名单）：** 给安达危运下发超速整改。
+## 禁止
 
-1. 这是口语检索，不是文档解析，也不是圈选全市/危货。**不要**用 `dispatch_task_search` 查企业。一次 `enterprise_list`：`{"keyword": "安达危运"}`。
-2. 若只命中「安达危运有限公司」且 `enabled=true`：用该全称进可下发名单，写 `problems.md`，出 6 字段确认卡。
-3. 确定后用卡上全称 `enterprise_resolve` 取 ID，再 `dispatch_task_create`。
-4. 若命中 0 家：请用户改成营业执照全称。若命中多家：列出返回全称请用户点名，再 resolve。禁止把模糊结果整页当下发全集。
-5. 若同一名称来自 Excel/PDF/源表：必须 `enterprise_resolve`，禁止本路径。
+以下都不能进入 `problems`，也不能作为提交给 MCP 的 `items[].requirement`：
 
+```text
+1. 疲劳驾驶1次（未处理）
+2. 超速17次
+3. 轨迹完整率低于100%
+```
+
+```json
+{"issues": ["疲劳驾驶1次（未处理）", "超速17次"]}
+```
+
+```markdown
+## 车辆问题
+
+- 晋L68222超速7次
+- 晋LS0715轨迹完整率97.69%
+```
+
+它们是概况、摘要数组或 Markdown 列表，不是一对象一行的 `problems`。
+
+## 部分企业无法匹配
+
+25 家全称 resolve 后只有 2 家可下发：
+
+- `enterpriseNames` 和 `items` 只放 2 家。
+- `unmatchedCount=23`。
+- 确认卡家数为 2 家，风险提示写另有 23 家无法匹配。
+- 0 家可下发时不写 JSON、不出卡、不调用 create。
+
+## 会议通知
+
+仍使用 `create.json`，但 `taskType=通知`。每个 item 直接写短 Markdown 到 `requirement`，不要 `problems`，不套问题处置表格。
+
+## 口语简称
+
+用户口语说「安达危运」时才使用 `enterprise_list(keyword)`。唯一启用命中后 resolve 得到 ID，再冻结 JSON。名称来自附件时必须直接 `enterprise_resolve`。

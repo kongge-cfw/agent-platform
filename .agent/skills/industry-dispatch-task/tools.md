@@ -19,7 +19,7 @@
 
 `names`、`items`、`taskId` 等都必须放在 `tools/call` 的 `arguments` 对象里，不要拼到 URL。
 
-文档解析/点名全称：`enterprise_resolve` 看 `found` / `enabled` / `matchCount`，仅唯一匹配且启用时取 ID。确认后再用卡上全称解析一次。条件圈选：`enterprise_list`（不要 keyword），`enabled=true` 的 `enterpriseId` 可直接用于 create；`truncated=true` 禁止当全集。口语检索：`enterprise_list(keyword=用户原词)`，命中 1 家且启用则用返回全称，确认后再 resolve。不要把名称填进 `enterpriseId`。`taskId` / `itemId` 用 create/get 返回值。禁止 JSON 数字。任务分页 `current` 默认 1，`size` 默认 10、最大 50。名录 `size` 默认 100、最大 1000。
+文档解析/点名全称：出卡前 `enterprise_resolve`，仅唯一匹配且启用时取 ID 并冻结进 `create.json`。条件圈选：`enterprise_list`（不要 keyword），`enabled=true` 的 ID 冻结进 JSON；`truncated=true` 禁止当全集。口语检索：`enterprise_list(keyword=用户原词)`，唯一启用命中后 resolve 取 ID。确认后不再解析企业。不要把名称填进 `enterpriseId`。ID 必须是 JSON 字符串。
 
 **写入类**（`dispatch_task_create` / `urge` / `approve` / `reject`）必须先走确认卡。下发卡必须含任务类型，且与 create 的 `taskType` 为同一中文值（见 [cards.md](cards.md)）。收到 `【业务确认】用户已确定` 后再调用。查询类不必出确认卡。禁止 `dispatch_task_issue`、`dispatch_task_delete_draft`。
 
@@ -29,7 +29,7 @@
 
 ### enterprise_resolve
 
-按**企业全称批量精确匹配**（去空格后与库中全称相等）。Excel/PDF/源表/用户粘贴的名单必须走本工具，禁止改用 `enterprise_list(keyword)` 对文档名称模糊补全。一次调用同时完成两件事：判断企业是否存在、能否下发，以及取出可下发企业的 `enterpriseId`。一次最多 1000 个。一家也要把全称放进 `names` 一次提交。出确认卡前查一次；用户确定后再用卡上企业全称查一次。第二次的存在结论、企业集合、启用状态和唯一匹配状态必须与确认卡一致，否则停止写入并重新确认。禁止凭简称、记忆或模糊命中推断存在。
+按**企业全称批量精确匹配**（去空格后与库中全称相等）。Excel/PDF/源表/用户粘贴的名单必须走本工具，禁止改用 `enterprise_list(keyword)` 模糊补全。一次调用同时判断能否下发并取得 `enterpriseId`，一次最多 1000 个。一家也放进 `names` 数组。出卡前调用一次并把 ID 冻结进 `create.json`；确认后不再调用。禁止凭简称、记忆或模糊命中推断存在。
 
 必填：`names`（字符串数组，只填企业全称，不要填简称、关键词）。
 
@@ -64,7 +64,7 @@
 
 问题整改未特别说明时传 `needAudit=true`；其它任务默认 false。明确为重大事故隐患、立即整改、证照失效或不具备安全运营条件时必须传明确的 `deadlineDate`，不得省略为不限期。
 
-`items` 必填写法（推荐只传 `items`，不要再传一份 `enterpriseIds`）：
+冻结文件里问题处置写 `problems` 对象数组，不要手写 Markdown。确认后按 SKILL.md 模板拼成 `requirement` 再调用本工具。`items` 必填写法（推荐只传 `items`，不要再传一份 `enterpriseIds`）：
 
 ```json
 {
@@ -84,10 +84,10 @@
 每项：
 
 - `enterpriseId`：必须是**刚完成的** `enterprise_resolve` 里对应全称的 `records[].enterpriseId` 字符串。把企业名填进来会报 `enterpriseId 不是有效 ID`
-- `requirement`：该企业问题 Markdown（`## 车辆问题` 等 + 表）。这就是企业端「任务说明」。问题整改有事实时必填，必须含 `##` 和 `|` 表，禁止一句话摘要，禁止建议句。有车牌进车辆节，无车牌有人进驾驶员节，都无进企业节。有分车/分人禁止再写企业合计。不要分析/建议三节，不要 HTML。仅当与共性完全相同且无对象级事实时可空
+- `requirement`：提交给 MCP 时必须是拼好的 Markdown 表（`## 车辆问题` 等 + 表）。这就是企业端「任务说明」。问题整改有事实时必填，必须含 `##` 和 `|` 表，禁止一句话摘要，禁止建议句，禁止把 `problems` JSON 原样传进来。有车牌进车辆节，无车牌有人进驾驶员节，都无进企业节。有分车/分人禁止再写企业合计。不要分析/建议三节，不要 HTML。仅当与共性完全相同且无对象级事实时可空
 - `attachments`：本企业附件 URL，最多 10 个
 
-出确认卡前允许按表补读源附件。问题整改只一次 `Write pending_write/problems.md`（`# 企业全称` 分段）。缺文件、缺家：禁止出卡、禁止调用本工具。确认后只 Read 这一份，按标题把 Markdown 写入 `items[].requirement`。读不到则停止并重新出卡。禁止按家写 html，禁止 `todo_write`。会议通知用短 Markdown，不要套整改三节。
+出确认卡前读全源明细并写入 `pending_write/create.json`。问题整改每个 item 冻结 `problems`（一车一条或一驾驶员一条），禁止概要/统计，禁止在冻结文件里手写 `requirement`。缺文件、缺家、检查不通过：禁止出卡、禁止调用本工具。确认后只 Read 这一份 JSON，剔除 `enterpriseNames`、`unmatchedCount`，把 `problems` 拼成 `requirement` 后提交；不得改写 facts。问题处置只传 `items`，不要传 `enterpriseIds`。会议通知用短 Markdown，不套整改三节。
 
 立即下发时至少一家企业，否则报「请至少选择一家企业」。`sourceType` 由后端写成 `MCP`，不必传。
 

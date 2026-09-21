@@ -10,7 +10,7 @@
 
 工具顶层入参必须是包含 `title, summary, confirm_label, cancel_label, risk_note, fields` 的 JSON 对象。禁止把字段数组直接作为顶层入参；`fields` 必须是真实数组，不能是 JSON 字符串。
 
-出卡当轮不要写「汇总工具结果」、指标口径长文或 todo。允许出卡前一段「纳入核对」旁白。确认卡本身只展示任务级信息和企业范围。问题整改必须先有 `pending_write/problems.md`（每个可下发企业一个 `# 全称` 一级标题）。缺文件或缺家：禁止出卡。确认后只 Read 这一份 Markdown，按标题切成 `items[].requirement`。读不到则停止并重新出卡。
+出卡当轮不要写「汇总工具结果」、指标口径长文或 todo。允许出卡前一段「纳入核对」旁白。确认卡本身只展示任务级信息和企业范围。问题整改必须先有 `pending_write/create.json`，其中每个 `items[].problems` 已是对象数组，一车一条或一驾驶员一条。缺文件、缺家、或 JSON 检查不通过：禁止出卡。确认后只 Read 这一份 JSON，把 `problems` 拼成 `requirement` 后提交。读不到则停止并重新出卡。
 
 `title` 与主按钮只能是「确认立即下发」+「立即下发」。禁止「保存草稿」。
 
@@ -39,16 +39,16 @@
 约定：
 
 - 字段恰好 6 个，顺序固定为：任务名称、任务类型、完成时限、企业提交后需行业审核、可下发企业数、可下发企业清单。禁止增加共性任务要求或任何第七字段。`taskType` 必须是中文下拉：`value_type=enum`，`options` 固定为 `["通知", "工作部署", "问题处置", "材料报送"]`，`value` 只能是其中一项。确认后 `dispatch_task_create.taskType` 必须等于卡上中文原值。任务级 `requirement` 用 SKILL.md 固定句，不进确认卡。
-- 禁止增加 `itemPreview`、`skippedCount`、`skipped`、“各企业明细”“当前账号无法下发”“无法下发企业”或同类字段。企业问题 Markdown 写入 `pending_write/problems.md`，确认后按一级标题切分写入 `items[].requirement`。纳入核对写在出卡前旁白，不进确认卡字段。
+- 禁止增加 `itemPreview`、`skippedCount`、`skipped`、“各企业明细”“当前账号无法下发”“无法下发企业”或同类字段。企业问题已冻结在 `pending_write/create.json` 的 `items[].problems`。纳入核对写在出卡前旁白，不进确认卡字段。
 - `enterprises` 只读且 `value_type=string`，必须用**可下发**企业全称数组 `join('、')` 生成，值中禁止 `\n`、编号和项目符号。无法匹配、停用、重名禁止写入。`enterpriseCount` 的 N 必须等于该名单家数。缺这两字段、N=0、名单为空或家数对不上：禁止出卡。
 - 无法匹配家数只写入 `risk_note`，必须是准确数字，禁止写「若干」「部分」。有无法匹配时用「另有M家企业当前无法匹配，本次不会下发。」；为0时不要提。不要在确认卡列无法匹配企业名单，不要把名单做成用户可下载文件或承诺下载。写入 `pending_write/` 的待提交正文除外。
 - 文档解析/点名全称：能否下发只看本次 `enterprise_resolve` 的 `found` / `enabled` / `matchCount`。条件圈选：看 `enterprise_list` 的 `enabled`（不要 keyword）；`truncated=true` 先补全再出卡。口语检索：`enterprise_list(keyword)` 仅对话使用，唯一启用命中后按点名处理。文档里的名称禁止走 keyword。用户主动要求看名单时，再按用户原始顺序每批最多展示 10 家。
 - `deadlineDate` 的 `value_type` 必须始终为 `date`。无时限 `value` 为空字符串，禁止把「不限期」写入字段值。用户可在日期选择器中填写或修改；写入前有日期则规范为 `yyyy-MM-dd`，仍为空则不传 `deadlineDate`。
 - 不要放 `publish` 勾选。确认后一律 `publish=true`。
-- 卡上只展示企业名称，不展示 ID。文档解析、点名全称或口语唯一命中：确定后再 `enterprise_resolve` 取 ID；条件圈选用出卡前 list 的 ID。禁止把本卡名称填进 `items[].enterpriseId`。
+- 卡上只展示企业名称，不展示 ID。ID 已在出卡前由 resolve/list 取得并冻结进 `create.json`；确认后不再反查。禁止把卡上名称填进 `items[].enterpriseId`。
 - 反查 ID 后只调 `dispatch_task_create(publish=true)`，禁止 `publish=false`，禁止 `dispatch_task_issue`。
 - **可下发企业数为 0 时不要出本卡、不要 create**。改用短问请用户改全称；无法下发清单按每批最多 10 家展示。
-- 按任务类型选用结构，见 [item-requirement.md](item-requirement.md)。整改用问题清单 Markdown；会议通知等不要套整改三类表。
+- 按任务类型选用结构，见 [item-requirement.md](item-requirement.md)。整改冻结 `problems` 对象数组，提交时再拼表；会议通知等不要套整改三类表。
 
 调用 `request_user_confirmation` 前强制校验：
 
