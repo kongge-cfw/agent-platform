@@ -23,13 +23,36 @@ _DATETIME_RE = re.compile(
     r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}[ T]\d{1,2}:\d{2}"
     r"(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
 )
-_DECLARED_VALUE_TYPES = frozenset({"boolean", "number", "text", "date", "datetime"})
+_DECLARED_VALUE_TYPES = frozenset({"boolean", "number", "text", "date", "datetime", "enum", "select"})
+
+
+def normalize_confirmation_options(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            value = item.strip()
+            label = value
+        elif isinstance(item, dict):
+            value = str(item.get("value") or item.get("id") or item.get("label") or "").strip()
+            label = str(item.get("label") or value).strip()
+        else:
+            continue
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        options.append({"value": value, "label": label or value})
+    return options
 
 
 def infer_confirmation_value_type(field: dict[str, Any] | None) -> str:
-    """只认声明的 value_type，或值本身已是日期/日期时间形态。"""
+    """只认声明的 value_type，或值本身已是日期/日期时间形态。有 options 视为下拉。"""
     payload = field if isinstance(field, dict) else {}
     declared = str(payload.get("value_type") or "string").strip().lower()
+    if declared in {"enum", "select"} or normalize_confirmation_options(payload.get("options")):
+        return "enum"
     if declared in _DECLARED_VALUE_TYPES:
         return declared
     raw = payload.get("value")
@@ -47,6 +70,11 @@ def normalize_confirmation_field_types(fields: list[Any] | None) -> list[dict[st
         if not isinstance(field, dict):
             continue
         next_field = dict(field)
+        options = normalize_confirmation_options(next_field.get("options"))
+        if options:
+            next_field["options"] = options
+        elif "options" in next_field:
+            next_field.pop("options", None)
         next_field["value_type"] = infer_confirmation_value_type(next_field)
         normalized.append(next_field)
     return normalized

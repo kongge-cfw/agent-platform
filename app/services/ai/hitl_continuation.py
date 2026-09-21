@@ -749,7 +749,7 @@ def _ineligible_resolve_names(records: list[Any], eligible_names: list[str]) -> 
 
 def _is_name_list_field(field: dict[str, Any]) -> bool:
     value_type = str(field.get("value_type") or "string")
-    return value_type not in {"boolean", "number", "date", "datetime"}
+    return value_type not in {"boolean", "number", "date", "datetime", "enum", "select"}
 
 
 def _is_snapshot_name_list(tokens: list[str], snapshot_names: set[str]) -> bool:

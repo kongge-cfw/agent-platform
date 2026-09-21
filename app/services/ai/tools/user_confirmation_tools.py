@@ -13,7 +13,7 @@ from app.services.ai.tools.tool_compat import BaseTool
 
 logger = logging.getLogger(__name__)
 
-ValueType = Literal["string", "number", "boolean", "text", "date", "datetime"]
+ValueType = Literal["string", "number", "boolean", "text", "date", "datetime", "enum", "select"]
 _KNOWN_ARG_KEYS = frozenset(
     {
         "title",
@@ -110,7 +110,11 @@ class ConfirmationField(BaseModel):
     editable: bool = Field(default=True, description="是否允许用户在确认卡中编辑")
     value_type: ValueType = Field(
         default="string",
-        description="值类型：string/number/boolean/text/date/datetime；日历日期用 date（YYYY-MM-DD），含时刻用 datetime；空日期也要标 date/datetime",
+        description="值类型：string/number/boolean/text/date/datetime/enum；日历日期用 date（YYYY-MM-DD），含时刻用 datetime；封闭选项用 enum 并提供 options",
+    )
+    options: list[Any] = Field(
+        default_factory=list,
+        description="value_type=enum 时的下拉选项，字符串或 {value,label}；提交值为选项 value",
     )
 
     @field_validator("key", "label")

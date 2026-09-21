@@ -113,10 +113,29 @@ def test_business_confirmation_frontend_wiring_contract():
     assert "bc-antd-card" in card
     assert "bc-antd-form" in card
     assert "bc-antd-control" in card
+    assert "bc-antd-readonly" in card
+    assert "isReadonlyField" in card
+    assert "isDisplayOnlyField" in card
+    assert "bc-form-label" in card
+    assert "bc-form-value" in card
+    assert "grid-template-columns: max-content minmax(0, 1fr)" in card
+    assert "row-gap: 8px" in card
+    assert "border: none" in card
     assert "border-[#d9d9d9]" in card
     assert 'border border-[#d9d9d9]' in card
     assert "background: #f5f5f5" not in card
-    assert "background: #fff" in card
+    assert "background-color: #fff" in card
+    assert "background: #fff" not in card
+    assert "ConfirmationSelect" in card
+    assert "isEnumField" in card
+    assert "<select" not in card
+    assert "-webkit-appearance: none" not in card
+    picker_select = (ROOT / "frontend/src/components/ConfirmationSelect.vue").read_text(encoding="utf-8")
+    assert "Teleport" in picker_select
+    assert "bc-select-trigger" in picker_select
+    assert "bc-select-panel" in picker_select
+    assert "<select" not in picker_select
+    assert "z-index: 1080" in picker_select
     assert "-webkit-text-fill-color: rgba(0, 0, 0, 0.88)" in card
     assert "bg-primary" in card
     assert "ConfirmationDatePicker" in card

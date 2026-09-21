@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import ConfirmationDatePicker from '@/components/ConfirmationDatePicker.vue';
+import ConfirmationSelect from '@/components/ConfirmationSelect.vue';
 import {
+  confirmationDateInputValue,
+  confirmationDateTimeDisplayValue,
   inferConfirmationValueType,
+  normalizeConfirmationOptions,
   type BusinessConfirmationField,
+  type BusinessConfirmationOption,
   type BusinessConfirmationState,
 } from '@/utils/businessConfirmation';
 
@@ -32,6 +37,7 @@ function syncDraft(fields: BusinessConfirmationField[]) {
       value: field.value ?? '',
       editable: field.editable !== false,
       value_type: inferConfirmationValueType(field),
+      options: normalizeConfirmationOptions(field.options),
     })),
   );
 }
@@ -71,11 +77,74 @@ function isDateField(field: BusinessConfirmationField): boolean {
   return inferConfirmationValueType(field) === 'date';
 }
 
+function isEnumField(field: BusinessConfirmationField): boolean {
+  return inferConfirmationValueType(field) === 'enum';
+}
+
+function fieldOptions(field: BusinessConfirmationField): BusinessConfirmationOption[] {
+  const options = normalizeConfirmationOptions(field.options);
+  const current = field.value === null || field.value === undefined ? '' : String(field.value);
+  if (current && !options.some((item) => item.value === current)) {
+    return [{ value: current, label: current }, ...options];
+  }
+  return options;
+}
+
+function onEnumChange(field: BusinessConfirmationField, value: string) {
+  field.value = value;
+}
+
+function isReadonlyField(field: BusinessConfirmationField): boolean {
+  return field.editable === false;
+}
+
+function isDisplayOnlyField(field: BusinessConfirmationField): boolean {
+  return locked.value || isReadonlyField(field);
+}
+
 function isMultilineField(field: BusinessConfirmationField): boolean {
-  if (isDateField(field) || isDateTimeField(field)) return false;
+  if (isDateField(field) || isDateTimeField(field) || isEnumField(field)) return false;
   if (field.value_type === 'text') return true;
   const value = field.value === null || field.value === undefined ? '' : String(field.value);
   return value.includes('\n') || value.length > 80;
+}
+
+function isTextRow(field: BusinessConfirmationField): boolean {
+  return isDisplayOnlyField(field);
+}
+
+function isMultilineRow(field: BusinessConfirmationField): boolean {
+  if (isTextRow(field)) {
+    const text = displayFieldValue(field);
+    return text.includes('\n') || text.length > 40;
+  }
+  return isMultilineField(field);
+}
+
+function rowClass(field: BusinessConfirmationField): string {
+  if (isMultilineRow(field)) return 'is-multiline';
+  if (isTextRow(field)) return 'is-text';
+  return 'is-control';
+}
+
+function displayFieldValue(field: BusinessConfirmationField): string {
+  let text = '';
+  if (field.value_type === 'boolean') {
+    text = Boolean(field.value) ? '是' : '否';
+  } else if (isEnumField(field)) {
+    const current = field.value === null || field.value === undefined ? '' : String(field.value);
+    const match = fieldOptions(field).find((item) => item.value === current);
+    text = match?.label || current;
+  } else if (isDateTimeField(field)) {
+    text = confirmationDateTimeDisplayValue(field.value) || String(field.value ?? '');
+  } else if (isDateField(field)) {
+    text = confirmationDateInputValue(field.value) || String(field.value ?? '');
+  } else if (field.value !== null && field.value !== undefined) {
+    text = String(field.value);
+  }
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === '请选择日期' || trimmed === '请选择日期时间') return '--';
+  return trimmed;
 }
 
 function onDateChange(field: BusinessConfirmationField, raw: string) {
@@ -173,19 +242,19 @@ function submit(confirmed: boolean) {
         {{ payload.summary }}
       </p>
 
-      <div class="bc-antd-form mt-1 divide-y divide-[#f0f0f0] dark:divide-gray-700">
-        <div
-          v-for="field in draftFields"
-          :key="field.key || field.label"
-          class="flex items-start gap-3 py-3"
-        >
-          <label class="w-[19%] shrink-0 pt-1 text-right text-xs leading-7 text-[rgba(0,0,0,0.88)] dark:text-gray-200">
-            {{ field.label }}<span class="ml-0.5">:</span>
-          </label>
-          <div class="min-w-0 flex-1 pt-0.5">
+      <div class="bc-antd-form mt-3">
+        <template v-for="field in draftFields" :key="field.key || field.label">
+          <div class="bc-form-label" :class="rowClass(field)">
+            {{ field.label }}<span>:</span>
+          </div>
+          <div class="bc-form-value" :class="rowClass(field)">
+            <div
+              v-if="isDisplayOnlyField(field)"
+              class="bc-antd-readonly"
+            >{{ displayFieldValue(field) }}</div>
             <label
-              v-if="field.value_type === 'boolean'"
-              class="inline-flex h-8 items-center"
+              v-else-if="field.value_type === 'boolean'"
+              class="bc-form-check"
             >
               <input
                 type="checkbox"
@@ -208,6 +277,13 @@ function submit(confirmed: boolean) {
               :disabled="locked || field.editable === false"
               @update:model-value="onDateChange(field, $event)"
             />
+            <ConfirmationSelect
+              v-else-if="isEnumField(field)"
+              :model-value="field.value"
+              :options="fieldOptions(field)"
+              :disabled="locked || field.editable === false"
+              @update:model-value="onEnumChange(field, $event)"
+            />
             <textarea
               v-else-if="isMultilineField(field)"
               v-model="field.value as string"
@@ -223,7 +299,7 @@ function submit(confirmed: boolean) {
               :disabled="locked || field.editable === false"
             />
           </div>
-        </div>
+        </template>
       </div>
 
       <div
@@ -264,15 +340,61 @@ function submit(confirmed: boolean) {
 .bc-antd-card {
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.06), 0 1px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px 0 rgba(0, 0, 0, 0.05);
 }
+.bc-antd-form {
+  --bc-control-h: 32px;
+  --bc-text-lh: 22px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 8px;
+  align-items: start;
+}
+.bc-form-label {
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.88);
+}
+.bc-form-label.is-control {
+  line-height: var(--bc-control-h);
+}
+.bc-form-label.is-text,
+.bc-form-label.is-multiline {
+  line-height: var(--bc-text-lh);
+}
+.bc-form-value {
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.88);
+}
+.bc-form-value.is-control {
+  min-height: var(--bc-control-h);
+  line-height: var(--bc-control-h);
+}
+.bc-form-value.is-text,
+.bc-form-value.is-multiline {
+  min-height: var(--bc-text-lh);
+  line-height: var(--bc-text-lh);
+}
+.bc-form-check {
+  display: inline-flex;
+  height: var(--bc-control-h);
+  align-items: center;
+}
 .bc-antd-control {
+  display: block;
+  box-sizing: border-box;
   width: 100%;
-  min-height: 32px;
+  height: var(--bc-control-h);
+  min-height: var(--bc-control-h);
+  margin: 0;
   border: 1px solid #d9d9d9;
   border-radius: 6px;
-  background: #fff;
-  padding: 4px 11px;
+  background-color: #fff;
+  padding: 0 11px;
   font-size: 12px;
-  line-height: 1.5714285714;
+  line-height: calc(var(--bc-control-h) - 2px);
   color: rgba(0, 0, 0, 0.88);
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -286,24 +408,51 @@ function submit(confirmed: boolean) {
 }
 .bc-antd-control:disabled {
   cursor: default;
-  background: #fff;
+  background-color: #fff;
   color: rgba(0, 0, 0, 0.88);
   border-color: #d9d9d9;
   opacity: 1;
   -webkit-text-fill-color: rgba(0, 0, 0, 0.88);
 }
 .bc-antd-textarea {
+  height: auto;
   min-height: 76px;
+  padding: 5px 11px;
+  line-height: var(--bc-text-lh);
   resize: vertical;
   white-space: pre-wrap;
 }
+.bc-antd-readonly {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  border: none;
+  background-color: transparent;
+  padding: 0;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bc-antd-form :deep(.bc-select-trigger),
+.bc-antd-form :deep(.bc-date-trigger) {
+  height: var(--bc-control-h);
+  min-height: var(--bc-control-h);
+  margin: 0;
+}
+:global(.dark) .bc-form-label,
+:global(.dark) .bc-form-value {
+  color: rgb(243 244 246);
+}
 :global(.dark) .bc-antd-control {
-  background: rgb(17 24 39);
+  background-color: rgb(17 24 39);
   border-color: rgb(75 85 99);
   color: rgb(243 244 246);
 }
 :global(.dark) .bc-antd-control:disabled {
-  background: rgb(31 41 55);
+  background-color: rgb(31 41 55);
   color: rgb(243 244 246);
   -webkit-text-fill-color: rgb(243 244 246);
 }

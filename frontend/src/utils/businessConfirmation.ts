@@ -6,7 +6,13 @@ export type BusinessConfirmationValueType =
   | "boolean"
   | "text"
   | "date"
-  | "datetime";
+  | "datetime"
+  | "enum";
+
+export interface BusinessConfirmationOption {
+  value: string;
+  label: string;
+}
 
 export interface BusinessConfirmationField {
   key: string;
@@ -14,6 +20,29 @@ export interface BusinessConfirmationField {
   value: unknown;
   editable?: boolean;
   value_type?: BusinessConfirmationValueType;
+  options?: BusinessConfirmationOption[];
+}
+
+export function normalizeConfirmationOptions(raw: unknown): BusinessConfirmationOption[] {
+  if (!Array.isArray(raw)) return [];
+  const options: BusinessConfirmationOption[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    let value = "";
+    let label = "";
+    if (typeof item === "string") {
+      value = item.trim();
+      label = value;
+    } else if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      value = String(record.value ?? record.id ?? record.label ?? "").trim();
+      label = String(record.label ?? value).trim();
+    }
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    options.push({ value, label: label || value });
+  }
+  return options;
 }
 
 const DATE_ONLY_RE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/;
@@ -79,9 +108,12 @@ export function confirmationDateFromValue(value: unknown): Date | null {
 }
 
 export function inferConfirmationValueType(
-  field: Pick<BusinessConfirmationField, "value" | "value_type">,
+  field: Pick<BusinessConfirmationField, "value" | "value_type" | "options">,
 ): BusinessConfirmationValueType {
-  const declared = field.value_type;
+  const declared = String(field.value_type || "").trim().toLowerCase();
+  if (declared === "enum" || declared === "select" || (field.options && field.options.length > 0)) {
+    return "enum";
+  }
   if (
     declared === "boolean" ||
     declared === "number" ||
@@ -135,12 +167,14 @@ function asFields(raw: unknown): BusinessConfirmationField[] {
   return raw
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
     .map((item) => {
+      const options = normalizeConfirmationOptions(item.options);
       const field: BusinessConfirmationField = {
         key: String(item.key || "").trim(),
         label: String(item.label || item.key || "字段").trim(),
         value: item.value ?? "",
         editable: item.editable !== false,
         value_type: (item.value_type as BusinessConfirmationValueType) || "string",
+        ...(options.length ? { options } : {}),
       };
       field.value_type = inferConfirmationValueType(field);
       return field;
