@@ -30,7 +30,9 @@ export function applyRunStatusEvent<T extends RunStatusMessage>(
   message.isThinking = false;
   if (event.status === "success") {
     message.status = "success";
-    completeOpenTodos(message);
+    if (message.businessConfirmation?.status !== "pending") {
+      completeOpenTodos(message);
+    }
     resolveHitlCardsInHistory(history);
   } else if (event.status === "cancelled") {
     message.status = "cancelled";

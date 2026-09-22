@@ -600,6 +600,7 @@ async def map_standard_agentscope_event(
             "details": "参数: {}",
             "status": "pending",
             "category": "tool",
+            "tool_name": tool_name,
         }
         if tool_name == "Bash" and not state.get("bash_env_emitted"):
             state["bash_env_emitted"] = True
@@ -618,7 +619,8 @@ async def map_standard_agentscope_event(
         ):
             return
         tool_args_text = state.setdefault("tool_args_text", {})
-        tool_args_text[tool_id] = tool_args_text.get(tool_id, "") + str(getattr(event, "delta", ""))
+        delta = str(getattr(event, "delta", ""))
+        tool_args_text[tool_id] = tool_args_text.get(tool_id, "") + delta
         return
 
     if event_type == "TOOL_RESULT_TEXT_DELTA":

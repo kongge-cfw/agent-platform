@@ -768,10 +768,42 @@ export function syncProcessTimelineTodo<T extends AgentStreamMessage>(
 ): void {
   // run_status=success 是整轮终态。终态后的旧包不能替换清单文案或重新打开步骤。
   if (msg.status === "success") return;
+  if (incomingTodoUpdateRewinds(msg, data.todos)) return;
   upsertTimelineTodo(msg, {
     todos: data.todos,
     title: data.title,
   });
+}
+
+function todoProgressScore(
+  todos: Array<{ status?: string }>,
+): number {
+  let score = 0;
+  todos.forEach((todo, index) => {
+    if (todo.status === "completed" || todo.status === "cancelled") score = Math.max(score, (index + 1) * 2);
+    else if (todo.status === "in_progress") score = Math.max(score, index * 2 + 1);
+  });
+  return score;
+}
+
+function incomingTodoUpdateRewinds(
+  msg: { processTimeline?: ProcessTimelineItem[] },
+  rawTodos: unknown,
+): boolean {
+  const current = [...(msg.processTimeline || [])].reverse().find((item) => item.kind === "todo");
+  if (!current || current.kind !== "todo" || !Array.isArray(rawTodos) || rawTodos.length !== current.todos.length) {
+    return false;
+  }
+  const incoming = rawTodos.map((item) => {
+    if (!item || typeof item !== "object") return { content: "", status: "" };
+    const record = item as { content?: unknown; status?: unknown };
+    return {
+      content: String(record.content || "").trim(),
+      status: String(record.status || ""),
+    };
+  });
+  if (incoming.some((item, index) => item.content !== current.todos[index]?.content)) return false;
+  return todoProgressScore(incoming) < todoProgressScore(current.todos);
 }
 
 export function applyProcessNarrationEvent<T extends AgentStreamMessage>(

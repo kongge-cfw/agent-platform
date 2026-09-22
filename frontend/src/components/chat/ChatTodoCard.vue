@@ -16,7 +16,7 @@
           type="button"
           class="group flex min-w-0 flex-1 items-center gap-2 text-left font-medium text-slate-800 hover:text-slate-950 dark:text-slate-200 dark:hover:text-white"
           :aria-expanded="expanded"
-          :aria-label="expanded ? '折叠任务清单' : '展开任务清单'"
+          :aria-label="expanded ? '收起任务清单' : '展开全部任务'"
           @click="toggleExpanded"
         >
           <!-- 任务滑块/配置图标（对齐截图样式） -->
@@ -42,9 +42,22 @@
           </span>
 
           <!-- 状态摘要文本（对齐截图：如 1 进行中 · 6 待处理） -->
-          <span class="min-w-0 flex-1 truncate text-[12px] font-normal text-slate-400 dark:text-slate-500">
+          <span
+            class="truncate text-[12px] font-normal text-slate-400 dark:text-slate-500"
+            :class="inlineTodo ? 'shrink-0' : 'min-w-0 flex-1'"
+          >
             {{ statusSummary }}
           </span>
+
+          <template v-if="inlineTodo">
+            <span class="h-3 w-px shrink-0 bg-slate-200 dark:bg-slate-700" aria-hidden="true" />
+            <svg class="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100">
+              {{ inlineTodo.content }}
+            </span>
+          </template>
 
           <!-- 折叠/展开箭头 -->
           <svg
@@ -73,19 +86,26 @@
         </button>
       </div>
 
-      <!-- 展开的任务项列表 -->
-      <div v-if="expanded" class="mt-2 space-y-1 border-t border-slate-200/60 pt-1.5 dark:border-slate-800/60">
+      <!-- 点标题后展开全部；进行中的那一条已并进标题行 -->
+      <div v-if="expanded && visibleTodos.length" class="mt-2 space-y-1 border-t border-slate-200/60 pt-1.5 dark:border-slate-800/60">
         <div
-          v-for="item in todo.todos"
+          v-for="item in visibleTodos"
           :key="item.content"
-          class="flex items-start gap-2 text-[11px] leading-relaxed transition-colors"
-          :class="{
-            'text-slate-400 dark:text-slate-500': item.status === 'completed' || item.status === 'cancelled',
-            'font-medium text-slate-800 dark:text-slate-100': item.status === 'in_progress',
-            'text-slate-500 dark:text-slate-400': item.status === 'pending',
-          }"
+          class="flex gap-2 text-[11px] leading-relaxed transition-colors"
+          :class="[
+            expanded ? 'items-start' : 'items-center',
+            {
+              'text-slate-400 dark:text-slate-500': item.status === 'completed' || item.status === 'cancelled',
+              'font-medium text-slate-800 dark:text-slate-100': item.status === 'in_progress',
+              'text-slate-500 dark:text-slate-400': item.status === 'pending',
+            },
+          ]"
         >
-          <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center text-center" aria-hidden="true">
+          <span
+            class="flex h-4 w-4 shrink-0 items-center justify-center text-center"
+            :class="expanded ? 'mt-0.5' : ''"
+            aria-hidden="true"
+          >
             <!-- 已完成：绿色勾选 -->
             <svg v-if="item.status === 'completed'" class="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="m5 13 4 4L19 7" />
@@ -104,8 +124,11 @@
             </svg>
           </span>
           <span
-            class="min-w-0 flex-1 break-words"
-            :class="item.status === 'completed' || item.status === 'cancelled' ? 'line-through decoration-slate-300 dark:decoration-slate-600' : ''"
+            class="min-w-0 flex-1"
+            :class="[
+              expanded ? 'break-words' : 'truncate',
+              item.status === 'completed' || item.status === 'cancelled' ? 'line-through decoration-slate-300 dark:decoration-slate-600' : '',
+            ]"
           >
             {{ item.content }}
           </span>
@@ -142,7 +165,7 @@ const todo = computed<ProcessTimelineTodoItem | undefined>(() =>
   [...(props.timeline || [])].reverse().find((item): item is ProcessTimelineTodoItem => item.kind === "todo"),
 );
 
-const expanded = ref(true);
+const expanded = ref(false);
 
 const isAllSettled = computed(() => {
   if (!todo.value || !todo.value.todos.length) return false;
@@ -150,7 +173,14 @@ const isAllSettled = computed(() => {
   return pending === 0 && in_progress === 0;
 });
 
-// 全部完成或取消后自动折叠为单行
+const visibleTodos = computed(() => todo.value?.todos || []);
+
+const inlineTodo = computed(() => {
+  if (expanded.value) return undefined;
+  return visibleTodos.value.find((item) => item.status === "in_progress");
+});
+
+// 全部完成或取消后收回标题行；换一份清单时也回到「只显示当前项」
 watch(
   isAllSettled,
   (allSettled) => {
@@ -167,6 +197,10 @@ function computeTodoFingerprint(item?: ProcessTimelineTodoItem): string {
 }
 
 const currentFingerprint = computed(() => computeTodoFingerprint(todo.value));
+
+watch(currentFingerprint, (next, prev) => {
+  if (prev && next !== prev) expanded.value = false;
+});
 
 function getDismissedFingerprints(): Set<string> {
   try {

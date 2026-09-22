@@ -6,12 +6,12 @@
 
 用户上传超速、疲劳驾驶、轨迹异常明细，要求给可匹配企业下发整改：
 
-1. 读全明细，一次 `enterprise_resolve` 全称匹配，并写入 `pending_write/allowed_ids.json`。
+1. 每个附件只采集一轮（最多一次 inspect，再续读到不截断）。从这份原文抽全称，一次 `enterprise_resolve`，并写入 `pending_write/allowed_ids.json`。禁止先写 JSON 再认企业。
 2. 每个可下发企业生成一个 item。只写 `enterpriseId` + `problems` 对象数组，一车/一人一条。同一车牌多种问题分成多条。
-3. Write `pending_write/create.json`（禁止 Edit）。
+3. 只为可下发企业 Write 一次 `pending_write/create.json`（禁止 Edit）。
 4. Bash：`python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json --allowed-ids pending_write/allowed_ids.json`（路径不存在则改 `skills/industry-dispatch-task/validate.py`，或 `find skills /workspace/skills -name validate_create_json.py`）。禁止 Read `.py`。退出码必须为 0。
 5. 出 6 字段确认卡。
-6. 用户确定后 Write 完整 create.json 写入卡上字段（禁止 Edit），`render` 出 `pending_write/submit.json`，`check-submit` 通过后再提交。
+6. 用户确定后禁止再 Read/Write `create.json`。一次 `render`，用 `--name`、`--task-type`、`--need-audit`、`--deadline` 传入卡上四个字段（无时限 `--deadline ""`）。`render` 退出码为 0 后 Read `submit.json` 再提交，不要再单独跑 `check-submit`。
 
 ```json
 {

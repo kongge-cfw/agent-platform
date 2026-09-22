@@ -194,7 +194,9 @@ export function resolveHitlCardsInHistory<T extends HistoryHitlMessage>(messages
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || !isAssistantRole(message.role)) continue;
-    if (message.status === "success") completeOpenTodos(message);
+    if (message.status === "success" && message.businessConfirmation?.status !== "pending") {
+      completeOpenTodos(message);
+    }
     const later = messages.slice(index + 1);
     const conversationMovedOn = later.some((item) => isUserRole(item.role) || isAssistantRole(item.role));
 

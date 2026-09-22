@@ -359,7 +359,7 @@ function replaceLatestTodo(
   return true;
 }
 
-/** 确认卡/提问卡用户已确定：把等待项收成完成，并启动下一项。 */
+/** 确认卡/提问卡用户已确定：把当前项收成完成，并启动紧邻的下一项。 */
 export function advanceOpenTodos(target: ProcessTimelineTarget): boolean {
   return replaceLatestTodo(target, (current) => {
     if (!current.todos.some((todo) => isOpenTodoStatus(todo.status))) return null;

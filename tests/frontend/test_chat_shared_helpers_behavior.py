@@ -461,10 +461,10 @@ return {
 def test_todo_card_supports_collapse_close_and_auto_collapse_when_completed():
     source = (ROOT / "frontend/src/components/chat/ChatTodoCard.vue").read_text(encoding="utf-8")
 
-    assert "ref(true)" in source
+    assert "ref(false)" in source
     assert "aria-expanded" in source
-    assert "折叠任务清单" in source
-    assert "展开任务清单" in source
+    assert "收起任务清单" in source
+    assert "展开全部任务" in source
     assert "关闭任务清单" in source
     assert "watch(" in source
     assert "todo.value.counts" in source

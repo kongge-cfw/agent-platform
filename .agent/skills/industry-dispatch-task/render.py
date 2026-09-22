@@ -47,12 +47,52 @@ def render(problems: list) -> str:
     return "\n\n".join(blocks)
 
 
+def _flag(argv: list[str], name: str):
+    if name not in argv:
+        return None
+    index = argv.index(name)
+    if index + 1 >= len(argv):
+        return ""
+    return argv[index + 1]
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) < 3 or argv[1] != "render":
-        sys.stderr.write("用法: render.py render create.json submit.json\n")
+    if len(argv) < 4 or argv[1] != "render":
+        sys.stderr.write(
+            "用法: render.py render create.json submit.json [--name 名称] [--task-type 类型] [--need-audit true|false] [--deadline yyyy-MM-dd|空]\n"
+        )
         return 1
     data = json.load(open(argv[2], "r", encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("taskType") != "问题处置":
+    if not isinstance(data, dict):
+        sys.stderr.write("create.json 必须是对象\n")
+        return 1
+    name = _flag(argv, "--name")
+    task_type = _flag(argv, "--task-type")
+    deadline = _flag(argv, "--deadline")
+    need_audit = _flag(argv, "--need-audit")
+    if name is not None:
+        if not str(name).strip():
+            sys.stderr.write("--name 不能为空\n")
+            return 1
+        data["name"] = str(name).strip()
+    if task_type is not None:
+        data["taskType"] = str(task_type).strip()
+    if deadline is not None:
+        text = str(deadline).strip()
+        if text:
+            data["deadlineDate"] = text
+        else:
+            data.pop("deadlineDate", None)
+    if need_audit is not None:
+        token = str(need_audit).strip().lower()
+        if token in {"true", "1", "yes"}:
+            data["needAudit"] = True
+        elif token in {"false", "0", "no"}:
+            data["needAudit"] = False
+        else:
+            sys.stderr.write("--need-audit 必须是 true 或 false\n")
+            return 1
+    if data.get("taskType") != "问题处置":
         sys.stderr.write("只渲染问题处置 create.json 对象\n")
         return 1
     data.pop("enterpriseNames", None)

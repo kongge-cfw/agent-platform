@@ -69,6 +69,48 @@ def _counts(todos: list[TodoItem]) -> dict[str, int]:
     }
 
 
+async def publish_todo_snapshot(event: dict[str, Any]) -> None:
+    """把清单写入当前上下文、续跑快照，并推给正在看的会话。"""
+    context = get_current_agent_context()
+    if context is not None:
+        context.todo_snapshot = event if event.get("todos") else None
+        try:
+            from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
+            from app.services.ai.hitl_continuation import HitlContinuationCoordinator
+
+            conversation_id = str(getattr(context, "conversation_id", "") or "").strip()
+            if conversation_id:
+                coordinator = await HitlContinuationCoordinator.from_runtime()
+                session_user_id = try_session_user_id_from_agent_context(context)
+                if event.get("todos"):
+                    await coordinator.remember_todos(
+                        todos=event,
+                        user_id=session_user_id,
+                        conversation_id=conversation_id,
+                    )
+                else:
+                    await coordinator.clear_todos(
+                        user_id=session_user_id,
+                        conversation_id=conversation_id,
+                    )
+        except Exception as exc:
+            from app.services.ai.hitl_continuation import (
+                HitlContinuationUnavailableError,
+            )
+
+            if isinstance(exc, HitlContinuationUnavailableError):
+                raise
+            logger.warning("[todo_write] Failed to persist HITL continuation todos", exc_info=True)
+    event_queue = getattr(context, "event_queue", None) if context else None
+    if event_queue is not None:
+        try:
+            event_queue.put_nowait(event)
+        except Exception:
+            # The checklist is auxiliary UI state; a closed or full UI
+            # queue must not turn a valid bookkeeping call into a task failure.
+            pass
+
+
 class TodoWriteTool(BaseTool):
     """Replace the current main-agent task list and notify the live UI."""
 
@@ -99,44 +141,7 @@ class TodoWriteTool(BaseTool):
             "todos": todos,
             "counts": counts,
         }
-        context = get_current_agent_context()
-        if context is not None:
-            context.todo_snapshot = event if todos else None
-            try:
-                from app.services.ai.conversation_identity import try_session_user_id_from_agent_context
-                from app.services.ai.hitl_continuation import HitlContinuationCoordinator
-
-                conversation_id = str(getattr(context, "conversation_id", "") or "").strip()
-                if conversation_id:
-                    coordinator = await HitlContinuationCoordinator.from_runtime()
-                    session_user_id = try_session_user_id_from_agent_context(context)
-                    if todos:
-                        await coordinator.remember_todos(
-                            todos=event,
-                            user_id=session_user_id,
-                            conversation_id=conversation_id,
-                        )
-                    else:
-                        await coordinator.clear_todos(
-                            user_id=session_user_id,
-                            conversation_id=conversation_id,
-                        )
-            except Exception as exc:
-                from app.services.ai.hitl_continuation import (
-                    HitlContinuationUnavailableError,
-                )
-
-                if isinstance(exc, HitlContinuationUnavailableError):
-                    raise
-                logger.warning("[todo_write] Failed to persist HITL continuation todos", exc_info=True)
-        event_queue = getattr(context, "event_queue", None) if context else None
-        if event_queue is not None:
-            try:
-                event_queue.put_nowait(event)
-            except Exception:
-                # The checklist is auxiliary UI state; a closed or full UI
-                # queue must not turn a valid bookkeeping call into a task failure.
-                pass
+        await publish_todo_snapshot(event)
         return {"todos": todos, "counts": counts}
 
 

@@ -91,10 +91,11 @@ def should_restore_hitl_continuation(text: str | None) -> bool:
     return not is_hitl_cancel_receipt(text)
 
 
+
 def advance_todo_snapshot_after_hitl_confirm(
     payload: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """确认/提问回执后把等待项收尾，并启动下一项，避免清单停在出卡那一步。"""
+    """确认/提问回执后把当前项收尾，并启动紧邻的下一项。"""
     if not isinstance(payload, dict):
         return None
     raw = payload.get("todos")

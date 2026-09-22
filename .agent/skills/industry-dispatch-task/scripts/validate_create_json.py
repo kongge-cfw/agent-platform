@@ -42,6 +42,8 @@ SUMMARY_FACT_RE = re.compile(
 )
 PLATE_SPLIT_RE = re.compile(r"[、,，/；;]")
 NAME_SPLIT_RE = re.compile(r"[、,，/；;]")
+SUMMARY_LABELS = ("汇总", "合计", "小计", "总计", "企业", "公司")
+ROLLUP_LABELS = ("汇总", "合计", "小计", "总计")
 
 VEHICLE_HEADERS = ("发生时间", "车牌号", "问题类型", "事实")
 DRIVER_HEADERS = ("发生时间", "姓名", "问题类型", "事实")
@@ -79,10 +81,74 @@ def _has_multi_object(value: str) -> bool:
     return any(marker in value for marker in MULTI_OBJECT_MARKERS)
 
 
+def _looks_like_summary_label(value: str, enterprise_name: str = "") -> bool:
+    """汇总标签或企业全称，不是人名或车牌。不按字数、常见姓判断。"""
+    text = _as_text(value)
+    if not text:
+        return False
+    if any(mark in text for mark in SUMMARY_LABELS):
+        return True
+    enterprise = _as_text(enterprise_name)
+    return bool(enterprise) and text == enterprise
+
+
 def _looks_like_summary_fact(fact: str, has_object: bool) -> bool:
     if has_object:
         return False
     return bool(SUMMARY_FACT_RE.search(fact.replace(" ", "")))
+
+
+def _is_rollup_text(*parts: Any) -> bool:
+    text = "".join(_as_text(part) for part in parts)
+    return any(mark in text for mark in ROLLUP_LABELS)
+
+
+def strip_redundant_enterprise_summaries(payload: Any) -> int:
+    """同一 item 已有分车/分人时，只去掉带汇总标签的 ENTERPRISE 加总行。
+
+    不删除 item、enterpriseId、分车/分人，也不删除文件中的企业级事项。
+    """
+    if not isinstance(payload, dict):
+        return 0
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return 0
+    removed = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        problems = item.get("problems")
+        if not isinstance(problems, list):
+            continue
+        has_object = any(
+            isinstance(row, dict) and _as_text(row.get("kind")) in {"VEHICLE", "DRIVER"}
+            for row in problems
+        )
+        if not has_object:
+            continue
+        kept: list[Any] = []
+        for row in problems:
+            if (
+                isinstance(row, dict)
+                and _as_text(row.get("kind")) == "ENTERPRISE"
+                and _is_rollup_text(
+                    row.get("problemCategory"),
+                    row.get("problemType"),
+                    row.get("fact"),
+                )
+            ):
+                removed += 1
+                continue
+            kept.append(row)
+        if len(kept) != len(problems):
+            item["problems"] = kept
+    return removed
+
+
+def _dump_json(path: str, payload: Any) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
 
 
 def _render_table(title: str, headers: tuple[str, ...], rows: list[list[str]]) -> str:
@@ -126,6 +192,7 @@ def _check_problem(
     item_index: int,
     *,
     has_vehicle_or_driver: bool,
+    enterprise_name: str = "",
 ) -> list[str]:
     prefix = "items[{0}].problems[{1}]".format(item_index, index)
     errors: list[str] = []
@@ -151,6 +218,8 @@ def _check_problem(
             errors.append("{0} VEHICLE 必须有且只有一个 vehiclePlate".format(prefix))
         elif _has_multi_object(plate) or PLATE_SPLIT_RE.search(plate):
             errors.append("{0}.vehiclePlate 只能有一个车牌，禁止多人/多车写进同一条".format(prefix))
+        elif _looks_like_summary_label(plate, enterprise_name):
+            errors.append("{0}.vehiclePlate 禁止使用汇总标签或企业全称".format(prefix))
         if _as_text(problem.get("driverName")):
             errors.append("{0} VEHICLE 不要填 driverName".format(prefix))
     elif kind == "DRIVER":
@@ -159,19 +228,25 @@ def _check_problem(
             errors.append("{0} DRIVER 必须有且只有一个 driverName".format(prefix))
         elif _has_multi_object(name) or NAME_SPLIT_RE.search(name):
             errors.append("{0}.driverName 只能有一个姓名，禁止多人写进同一条".format(prefix))
+        elif _looks_like_summary_label(name, enterprise_name):
+            errors.append("{0}.driverName 禁止把汇总标签或企业全称当作姓名".format(prefix))
         if _as_text(problem.get("vehiclePlate")):
             errors.append("{0} DRIVER 不要填 vehiclePlate".format(prefix))
     else:
         if not _as_text(problem.get("problemCategory")):
             errors.append("{0} ENTERPRISE 必须有 problemCategory".format(prefix))
-        if has_vehicle_or_driver and _looks_like_summary_fact(fact, False):
-            errors.append("{0} 已有分车/分人时禁止把企业合计写入 ENTERPRISE".format(prefix))
+        if has_vehicle_or_driver and _is_rollup_text(
+            problem.get("problemCategory"), ptype, fact
+        ):
+            errors.append(
+                "{0} 已有分车/分人时禁止把带汇总、合计、小计、总计的加总行写入 ENTERPRISE".format(
+                    prefix
+                )
+            )
 
-    if kind in {"VEHICLE", "DRIVER"} and _looks_like_summary_fact(
-        fact, True
-    ) and not (
+    if kind in {"VEHICLE", "DRIVER"} and not (
         _as_text(problem.get("vehiclePlate")) or _as_text(problem.get("driverName"))
-    ):
+    ) and _looks_like_summary_fact(fact, False):
         errors.append("{0} 禁止无对象合计，例如「超速17次」".format(prefix))
     return errors
 
@@ -314,6 +389,9 @@ def check_create(payload: Any, allowed_ids: set[str] | None = None) -> list[str]
                 and row.get("kind") in {"VEHICLE", "DRIVER"}
                 for row in problems
             )
+            enterprise_name = ""
+            if item_index < len(names):
+                enterprise_name = _as_text(names[item_index])
             for problem_index, problem in enumerate(problems):
                 errors.extend(
                     _check_problem(
@@ -321,6 +399,7 @@ def check_create(payload: Any, allowed_ids: set[str] | None = None) -> list[str]
                         problem_index,
                         item_index,
                         has_vehicle_or_driver=has_object_row,
+                        enterprise_name=enterprise_name,
                     )
                 )
         else:
@@ -387,6 +466,47 @@ def check_submit(payload: Any) -> list[str]:
     return errors
 
 
+def apply_card_fields(
+    payload: dict[str, Any],
+    *,
+    name: str | None = None,
+    task_type: str | None = None,
+    deadline: str | None = None,
+    need_audit: str | None = None,
+) -> list[str]:
+    """把确认卡上的四个字段盖到冻结稿上，不改 problems。未传的参数保持原值。"""
+    errors: list[str] = []
+    if name is not None:
+        text = _as_text(name)
+        if not text:
+            errors.append("--name 不能为空")
+        else:
+            payload["name"] = text
+    if task_type is not None:
+        text = _as_text(task_type)
+        if text not in TASK_TYPES:
+            errors.append("--task-type 必须是通知 / 工作部署 / 问题处置 / 材料报送")
+        else:
+            payload["taskType"] = text
+    if deadline is not None:
+        text = _as_text(deadline)
+        if not text:
+            payload.pop("deadlineDate", None)
+        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None:
+            errors.append("--deadline 必须是 yyyy-MM-dd，或空字符串表示不限期")
+        else:
+            payload["deadlineDate"] = text
+    if need_audit is not None:
+        token = _as_text(need_audit).lower()
+        if token in {"true", "1", "yes"}:
+            payload["needAudit"] = True
+        elif token in {"false", "0", "no"}:
+            payload["needAudit"] = False
+        else:
+            errors.append("--need-audit 必须是 true 或 false")
+    return errors
+
+
 def render_submit(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     result.pop("enterpriseNames", None)
@@ -417,6 +537,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     render_p.add_argument("src")
     render_p.add_argument("dst")
     render_p.add_argument("--allowed-ids", dest="allowed_ids", default="")
+    render_p.add_argument("--name", default=None)
+    render_p.add_argument("--task-type", dest="task_type", default=None)
+    render_p.add_argument("--deadline", default=None)
+    render_p.add_argument("--need-audit", dest="need_audit", default=None)
     submit_p = sub.add_parser("check-submit", help="校验提交前 JSON")
     submit_p.add_argument("path")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -429,12 +553,33 @@ def main(argv: Iterable[str] | None = None) -> int:
             if allowed_errors:
                 return _fail(allowed_errors)
         if args.cmd == "check":
-            errors = check_create(_load_json(args.path), allowed_ids=allowed_ids)
+            payload = _load_json(args.path)
+            removed = strip_redundant_enterprise_summaries(payload)
+            if removed:
+                _dump_json(args.path, payload)
+            errors = check_create(payload, allowed_ids=allowed_ids)
             if errors:
                 return _fail(errors)
-            return _print_ok("create.json 校验通过")
+            message = "create.json 校验通过"
+            if removed:
+                message += "，已删除 {0} 条加总行，企业问题和分车分人保留".format(removed)
+            return _print_ok(message)
         if args.cmd == "render":
             payload = _load_json(args.src)
+            if not isinstance(payload, dict):
+                return _fail(["create.json 必须是 JSON 对象"])
+            removed = strip_redundant_enterprise_summaries(payload)
+            if removed:
+                _dump_json(args.src, payload)
+            overlay_errors = apply_card_fields(
+                payload,
+                name=args.name,
+                task_type=args.task_type,
+                deadline=args.deadline,
+                need_audit=args.need_audit,
+            )
+            if overlay_errors:
+                return _fail(overlay_errors)
             errors = check_create(payload, allowed_ids=allowed_ids)
             if errors:
                 return _fail(errors)
@@ -442,10 +587,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             submit_errors = check_submit(submit)
             if submit_errors:
                 return _fail(submit_errors)
-            with open(args.dst, "w", encoding="utf-8") as handle:
-                json.dump(submit, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-            return _print_ok("已写入 {0}".format(args.dst))
+            _dump_json(args.dst, submit)
+            message = "已写入 {0}".format(args.dst)
+            if removed:
+                message += "，已删除 {0} 条加总行，企业问题和分车分人保留".format(removed)
+            return _print_ok(message)
         payload = _load_json(args.path)
         errors = check_submit(payload)
         if errors:
