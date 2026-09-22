@@ -155,21 +155,55 @@ const AUTH_STORAGE_KEYS = new Set([
   'yovole_embed_token',
 ])
 
+/** 同域其它系统共用 localStorage。鉴权键固定加此前缀，不随是否挂在二级目录变化。 */
+const AUTH_STORAGE_PREFIX = 'zhiyuan:'
+
+/** 这些裸键属于本系统，可迁入前缀后删除。裸键 token 是对方登录态，不迁移、不删除。 */
+const BARE_AUTH_KEYS_OWNED = new Set([
+  'api_key',
+  'user_info',
+  'admin_token',
+  'yovole_token',
+  'yovole_embed_token',
+])
+
 export function authStorageKey(key: string): string {
-  const base = getAppBasePath()
-  if (!base || !AUTH_STORAGE_KEYS.has(key)) return key
-  return `${base.slice(1)}:${key}`
+  if (!AUTH_STORAGE_KEYS.has(key)) return key
+  return `${AUTH_STORAGE_PREFIX}${key}`
 }
 
 let storagePatched = false
 
+function migrateLegacyAuthStorage(storage: Storage): void {
+  const baseName = getAppBasePath().replace(/^\//, '')
+  const legacyPrefix = baseName ? `${baseName}:` : ''
+  for (const key of AUTH_STORAGE_KEYS) {
+    const nextKey = `${AUTH_STORAGE_PREFIX}${key}`
+    if (storage.getItem(nextKey) == null) {
+      let legacy: string | null = null
+      if (legacyPrefix && legacyPrefix !== AUTH_STORAGE_PREFIX) {
+        legacy = storage.getItem(`${legacyPrefix}${key}`)
+      }
+      if (legacy == null && BARE_AUTH_KEYS_OWNED.has(key)) {
+        legacy = storage.getItem(key)
+      }
+      if (legacy != null) storage.setItem(nextKey, legacy)
+    }
+    if (legacyPrefix && legacyPrefix !== AUTH_STORAGE_PREFIX) {
+      storage.removeItem(`${legacyPrefix}${key}`)
+    }
+    if (BARE_AUTH_KEYS_OWNED.has(key)) storage.removeItem(key)
+  }
+}
+
 function installAuthStoragePrefix(): void {
-  if (typeof window === 'undefined' || storagePatched || !getAppBasePath()) return
+  if (typeof window === 'undefined' || storagePatched) return
   storagePatched = true
+  migrateLegacyAuthStorage(window.localStorage)
+  migrateLegacyAuthStorage(window.sessionStorage)
   const originalGet = Storage.prototype.getItem
   const originalSet = Storage.prototype.setItem
   const originalRemove = Storage.prototype.removeItem
-  const storagePrefix = `${getAppBasePath().slice(1)}:`
   Storage.prototype.getItem = function (key: string) {
     return originalGet.call(this, authStorageKey(key))
   }
@@ -183,7 +217,7 @@ function installAuthStoragePrefix(): void {
     const toRemove: string[] = []
     for (let i = 0; i < this.length; i += 1) {
       const key = this.key(i)
-      if (key && key.startsWith(storagePrefix)) toRemove.push(key)
+      if (key && key.startsWith(AUTH_STORAGE_PREFIX)) toRemove.push(key)
     }
     toRemove.forEach((key) => originalRemove.call(this, key))
   }

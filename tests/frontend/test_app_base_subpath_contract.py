@@ -55,6 +55,9 @@ def test_frontend_native_navigation_and_storage_are_prefixed():
     mcp_menu = _read("frontend/src/components/embed/McpCascadeMenu.vue")
 
     assert "authStorageKey" in app_base
+    assert 'const AUTH_STORAGE_PREFIX = "zhiyuan:"' in app_base
+    assert "if (!base || !AUTH_STORAGE_KEYS.has(key)) return key" not in app_base
+    assert "BARE_AUTH_KEYS_OWNED" in app_base
     assert "clearClientAuth" in app_base
     assert "Storage.prototype.clear" in app_base
     assert "installEventSourcePrefix" in app_base
