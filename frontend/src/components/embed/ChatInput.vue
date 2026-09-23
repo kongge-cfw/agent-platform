@@ -1929,7 +1929,8 @@ const applyExample = async (example: {
     copied.forEach((file: any) => uploadedFiles.value.push(file));
     if (!copied.length) showFileNotice("示例附件没能放进输入框", "附件未就绪");
   } catch (error: any) {
-    showFileNotice(error.response?.data?.detail || error.message || "示例附件复制失败", "附件未就绪");
+    const data = error.response?.data;
+    showFileNotice(data?.message || data?.detail || error.message || "示例附件复制失败", "附件未就绪");
   }
 };
 

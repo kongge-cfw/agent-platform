@@ -2640,22 +2640,19 @@ class CopyExampleFilesRequest(BaseModel):
 @router.post(
     "/example-files/copy",
     response_model=StandardResponse[List[UploadResponse]],
-    summary="把嵌入应用示例附件复制到当前用户上传目录",
+    summary="把示例库附件复制到当前用户上传目录",
 )
 async def copy_example_files(
     body: CopyExampleFilesRequest,
     user_info: Dict[str, Any] = Depends(require_api_key),
 ):
-    app_id = str(user_info.get("embed_app_id") or "").strip()
-    if not app_id:
-        raise HTTPException(status_code=403, detail="仅嵌入应用会话可以套用示例附件")
     upload_dir = get_user_uploads_dir(user_info)
     if not upload_dir:
-        raise HTTPException(status_code=403, detail="无法解析用户工作目录，复制示例附件失败。")
+        raise HTTPException(status_code=400, detail="无法解析用户工作目录，复制示例附件失败。")
     os.makedirs(upload_dir, exist_ok=True)
     copied: List[UploadResponse] = []
     for item in body.files:
-        source = resolve_embed_example_file(app_id, item.url)
+        source = resolve_embed_example_file(item.url)
         try:
             dest_path, handle = open_upload_storage_file(upload_dir, item.filename or os.path.basename(source))
             with handle:

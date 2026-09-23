@@ -138,15 +138,25 @@ def get_embed_example_dir(app_id: str) -> str:
     return os.path.normpath(os.path.join(get_data_base_dir(), "embed_examples", safe))
 
 
-def resolve_embed_example_file(app_id: str, url: str) -> str:
-    """确认路径是该嵌入应用示例目录里的真实文件。"""
-    root = os.path.realpath(get_embed_example_dir(app_id))
+def get_embed_examples_root() -> str:
+    """全部嵌入应用示例附件的根目录。登录用户均可读取其中的真实文件。"""
+    return os.path.normpath(os.path.join(get_data_base_dir(), "embed_examples"))
+
+
+def resolve_embed_example_file(url: str) -> str:
+    """确认路径是示例库目录里的真实文件，不按应用或角色做权限校验。"""
+    root = os.path.realpath(get_embed_examples_root())
     raw = str(url or "").strip()
     if not raw or ".." in raw.replace("\\", "/"):
-        raise HTTPException(status_code=403, detail="示例附件路径无效")
+        raise HTTPException(status_code=400, detail="示例附件路径无效")
+    data_base = get_data_base_dir()
+    if raw == "/app/data" or raw.startswith("/app/data/"):
+        raw = os.path.join(data_base, raw.removeprefix("/app/data").lstrip("/"))
+    elif raw.startswith("data/"):
+        raw = os.path.join(data_base, raw.removeprefix("data/"))
     normalized = os.path.realpath(os.path.abspath(raw))
     if not (normalized == root or normalized.startswith(root + os.sep)):
-        raise HTTPException(status_code=403, detail="示例附件不在当前嵌入应用范围内")
+        raise HTTPException(status_code=400, detail="示例附件路径无效")
     if not os.path.isfile(normalized):
         raise HTTPException(status_code=404, detail="示例附件不存在")
     return normalized
