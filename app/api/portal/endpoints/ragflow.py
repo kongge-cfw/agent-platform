@@ -86,8 +86,17 @@ async def require_element_permission(user: dict, db: AsyncSession, permission_id
 
 
 async def require_dataset_access(user: dict, db: AsyncSession, dataset_ids: List[str]):
-    """可读：管理员 / 权限分配 / 创建人"""
+    """可读：管理员 / 权限分配 / 创建人。嵌入会话只认关联角色授权的知识库。"""
+    from app.services.embed_identity import embed_catalog_role_id
+
     service = PermissionService(db)
+    embed_role_id = embed_catalog_role_id(user)
+    if embed_role_id is not None:
+        allowed = await service.get_role_knowledge_base_ids(int(embed_role_id))
+        denied = [dataset_id for dataset_id in dataset_ids if dataset_id not in allowed]
+        if denied:
+            raise HTTPException(status_code=403, detail=f"No access to dataset: {', '.join(denied)}")
+        return
     access = await service.get_knowledge_base_access(
         int(user["user_id"]),
         user.get("user_name"),
@@ -101,7 +110,11 @@ async def require_dataset_access(user: dict, db: AsyncSession, dataset_ids: List
 
 
 async def require_dataset_write_access(user: dict, db: AsyncSession, dataset_ids: List[str]):
-    """可写：管理员 / 创建人（仅被分配的非创建人只读）"""
+    """可写：管理员 / 创建人（仅被分配的非创建人只读）。嵌入会话只读。"""
+    from app.services.embed_identity import embed_catalog_role_id
+
+    if embed_catalog_role_id(user) is not None:
+        raise HTTPException(status_code=403, detail="嵌入会话不能修改知识库")
     service = PermissionService(db)
     access = await service.get_knowledge_base_access(
         int(user["user_id"]),
@@ -283,11 +296,21 @@ async def list_ragflow_datasets(
     """
     Proxy to list RAGFlow datasets (knowledge bases) with permission filtering.
     """
+    from app.services.embed_identity import embed_catalog_role_id
+
     service = PermissionService(db)
-    access = await service.get_knowledge_base_access(
-        int(user["user_id"]),
-        user.get("user_name"),
-    )
+    embed_role_id = embed_catalog_role_id(user)
+    if embed_role_id is not None:
+        access = {
+            "is_admin": False,
+            "accessible_ids": await service.get_role_knowledge_base_ids(int(embed_role_id)),
+            "writable_ids": set(),
+        }
+    else:
+        access = await service.get_knowledge_base_access(
+            int(user["user_id"]),
+            user.get("user_name"),
+        )
     is_admin = access["is_admin"]
     if (override_url or override_key) and not is_admin:
         raise HTTPException(status_code=403, detail="Admin access required for temporary RAGFlow overrides")

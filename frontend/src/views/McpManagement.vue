@@ -8,7 +8,7 @@ import McpAuditLogTab from '../components/mcp/McpAuditLogTab.vue'
 import { useUser } from '../composables/useUser'
 
 const props = withDefaults(defineProps<{
-  /** 仅展示「我的 MCP」，用于个人中心（无需 menu:mcp_management） */
+  /** 历史个人中心嵌入标记，个人 MCP 已取消，页面只展示平台 MCP。 */
   personalOnly?: boolean
 }>(), {
   personalOnly: false,
@@ -16,10 +16,10 @@ const props = withDefaults(defineProps<{
 
 const router = useRouter()
 const { isAdmin } = useUser()
-const activeScope = ref<'global' | 'personal' | 'audit'>(props.personalOnly ? 'personal' : 'global')
+const activeScope = ref<'global' | 'personal' | 'audit'>('global')
 const registryRef = ref<InstanceType<typeof McpServerRegistry> | null>(null)
 
-// 平台 MCP 与我的 MCP 数量计数
+// 平台 MCP 数量计数
 const serverCounts = ref<{
   global: number
   personal: number
@@ -30,16 +30,13 @@ const serverCounts = ref<{
 
 const fetchServerCounts = async () => {
   try {
-    const [globalRes, personalRes] = await Promise.allSettled([
+    const [globalRes] = await Promise.allSettled([
       axios.get('/api/portal/mcp/servers', { params: { scope: 'global' } }),
-      axios.get('/api/portal/mcp/servers', { params: { scope: 'personal' } }),
     ])
     if (globalRes.status === 'fulfilled' && Array.isArray(globalRes.value.data)) {
       serverCounts.value.global = globalRes.value.data.length
     }
-    if (personalRes.status === 'fulfilled' && Array.isArray(personalRes.value.data)) {
-      serverCounts.value.personal = personalRes.value.data.length
-    }
+    serverCounts.value.personal = 0
   } catch (err) {
     console.error('获取 MCP 计数失败', err)
   }
@@ -98,7 +95,7 @@ const handleBannerAction = (action: 'add' | 'marketplace') => {
           class="font-bold tracking-tight text-gray-900 dark:text-white"
           :class="personalOnly ? 'text-lg sm:text-xl' : 'text-xl sm:text-2xl'"
         >
-          {{ personalOnly ? '我的 MCP' : 'MCP 工具集' }}
+          MCP 工具集
         </h1>
 
         <!-- ? 规范与指引大弹窗按钮 -->
@@ -174,24 +171,6 @@ const handleBannerAction = (action: 'add' | 'marketplace') => {
           :class="activeScope === 'global' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'"
         >
           {{ serverCounts.global }}
-        </span>
-      </button>
-      <button
-        id="tab-personal-mcp"
-        type="button"
-        @click="activeScope = 'personal'"
-        class="flex cursor-pointer items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-        :class="activeScope === 'personal' ? 'border-emerald-600 font-bold text-emerald-600 dark:border-emerald-400 dark:text-emerald-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
-      >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-        </svg>
-        <span>我的 MCP</span>
-        <span
-          class="inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums transition-colors"
-          :class="activeScope === 'personal' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'"
-        >
-          {{ serverCounts.personal }}
         </span>
       </button>
       <button
@@ -339,7 +318,7 @@ const handleBannerAction = (action: 'add' | 'marketplace') => {
                           <h4 class="font-bold text-gray-900 text-sm">范围隔离与权限分配</h4>
                        </div>
                        <p class="text-xs text-gray-500 leading-relaxed">
-                          区分「平台公开 MCP」（全员共享，管理员维护）与「我的 MCP」（个人私有专属）；在角色管理中细粒度下发维护权限。
+                          平台 MCP 由管理员统一维护，并在角色管理中下发使用权限。
                        </p>
                     </div>
                     <div class="mt-4 pt-3 border-t border-gray-100 flex justify-end">
@@ -406,10 +385,6 @@ const handleBannerAction = (action: 'add' | 'marketplace') => {
                     <div class="p-3.5 bg-gray-50 rounded-xl border border-gray-150 space-y-1">
                        <span class="font-bold text-gray-900">平台 MCP（Global Scope）</span>
                        <p class="text-gray-600">全局公共服务，由系统管理员统一维护。所有获得智能体使用权限的用户均可基于智能体调用该服务中的已发布工具。</p>
-                    </div>
-                    <div class="p-3.5 bg-gray-50 rounded-xl border border-gray-150 space-y-1">
-                       <span class="font-bold text-gray-900">我的 MCP（Personal Scope）</span>
-                       <p class="text-gray-600">个人私有专属服务，服务名称带专属前缀隔离，仅限本人在个人会话与私有智能体中挂载，确保私密密钥不外泄。</p>
                     </div>
                     <div class="p-3.5 bg-gray-50 rounded-xl border border-gray-150 space-y-1">
                        <span class="font-bold text-gray-900">工具级发布状态（Publish Status）</span>

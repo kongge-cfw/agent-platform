@@ -147,6 +147,22 @@ class PermissionService:
     def is_admin_user(roles: Iterable[str]) -> bool:
         return "admin" in set(roles or [])
 
+    async def get_role_knowledge_base_ids(self, role_id: int) -> set[str]:
+        """角色直接授权的知识库 ID。不含创建人、系统默认库和管理员全量。"""
+        try:
+            parsed_role_id = int(role_id)
+        except (TypeError, ValueError):
+            return set()
+        if parsed_role_id <= 0:
+            return set()
+        stmt = select(ResourcePermission.resource_id).where(
+            ResourcePermission.role_id == parsed_role_id,
+            ResourcePermission.resource_type == "dataset",
+            ResourcePermission.enabled == True,
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return {str(row).strip() for row in rows if str(row or "").strip()}
+
     async def get_knowledge_base_access(
         self,
         user_id: int,

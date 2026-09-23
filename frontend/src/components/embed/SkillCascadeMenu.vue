@@ -99,27 +99,14 @@ const loadSkillsList = async () => {
     const requests: Promise<any>[] = [
       axios.get('/api/portal/skills', agentId ? { params: { agent_id: agentId } } : undefined),
     ]
-    if (!props.hidePersonalSkills) {
-      requests.push(axios.get('/api/portal/skills/personal'))
-    }
-    const [globalRes, personalRes] = await Promise.allSettled(requests)
+    const [globalRes] = await Promise.allSettled(requests)
     if (globalRes.status === 'fulfilled' && globalRes.value.data?.status === 'success') {
       skillsCustom.value = Boolean(globalRes.value.data.skills_custom)
       skillsList.value = (globalRes.value.data.data || [])
         .map((s: any) => ({ ...s, scope: 'global' as const }))
         .filter((s: any) => s.enabled !== 'false')
     }
-    if (
-      !props.hidePersonalSkills
-      && personalRes
-      && personalRes.status === 'fulfilled'
-      && personalRes.value.data?.status === 'success'
-    ) {
-      personalSkillsList.value = (personalRes.value.data.data || [])
-        .map((s: any) => ({ ...s, scope: 'personal' as const }))
-        .filter((s: any) => s.enabled !== 'false')
-    }
-    if (props.hidePersonalSkills) activeScope.value = 'global'
+    activeScope.value = 'global'
     loadedOnce.value = true
   } catch (err) {
     console.error('加载技能列表失败:', err)
@@ -193,7 +180,7 @@ void loadSkillsList()
         />
       </div>
 
-      <div v-if="!hidePersonalSkills" class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-900/50 p-0.5">
+      <div v-if="false" class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-900/50 p-0.5">
         <button
           type="button"
           class="flex-1 py-1.5 text-center text-xs font-semibold rounded-md transition-colors"

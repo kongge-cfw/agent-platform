@@ -243,6 +243,16 @@ router.beforeEach((to: any, _from: any, next: any) => {
     return
   }
 
+  // 嵌入调试和后台共用 localStorage。emb_ses_ 一旦写进 api_key，/me 会把角色写成普通用户，刷新后进无权限页。
+  const storedApiKey = localStorage.getItem('api_key') || ''
+  if (storedApiKey.startsWith('emb_ses_')) {
+    localStorage.removeItem('api_key')
+    localStorage.removeItem('yovole_token')
+    localStorage.removeItem('user_info')
+    next({ name: 'Login' })
+    return
+  }
+
   if (to.name !== 'Login' && !isAuthenticated) {
     next({ name: 'Login' })
     return

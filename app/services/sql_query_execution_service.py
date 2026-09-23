@@ -421,6 +421,7 @@ async def execute_sql_query_core(
                 "org_path": u_info.get("org_path"),
                 "extra_data": u_info.get("extra_data"),
                 "session_type": u_info.get("session_type") or "",
+                "embed_role_id": u_info.get("embed_role_id") or "",
                 "platform_user_id": u_info.get("created_by_user_id") or "",
                 "platform_user_name": u_info.get("created_by_user_name") or "",
                 "external_subject": u_info.get("external_subject") or "",
@@ -490,11 +491,13 @@ async def execute_sql_query_core(
             return column_err
 
         if embed_session:
-            app_id = str(ud.get("embed_app_id") or "").strip()
+            from app.services.embed_identity import embed_catalog_role_id
+
+            role_id = embed_catalog_role_id(ud)
             if ds is None:
                 return "[Permission Denied] 嵌入会话必须指定已授权的数据集。"
-            if not await MetadataService.embed_app_can_access_dataset(session, app_id, int(ds.id)):
-                return "[Permission Denied] 当前嵌入应用没有该数据集的访问权限。"
+            if role_id is None or not await MetadataService.embed_role_can_access_dataset(session, role_id, int(ds.id)):
+                return "[Permission Denied] 当前嵌入应用关联角色没有该数据集的访问权限。"
 
         if ds and refs:
             scope_err = await enforce_dataset_table_scope(

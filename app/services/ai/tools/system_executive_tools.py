@@ -244,15 +244,6 @@ def read_skill_instruction(skill_id: str, file: str = "SKILL.md") -> str:
                 allowed_roots.append(os.path.abspath(settings.SKILLS_DIR))
         except Exception:
             pass
-        if user_info:
-            try:
-                from app.services.ai.skill_resolver import get_user_personal_skills_dir
-
-                personal_dir = get_user_personal_skills_dir(user_info)
-                if personal_dir:
-                    allowed_roots.append(os.path.abspath(personal_dir))
-            except Exception:
-                pass
         if not any(
             os.path.commonpath([abs_md, root]) == root
             for root in allowed_roots
@@ -764,13 +755,7 @@ def create_skills(
             if not skills_dir:
                 return "错误：未配置全局 SKILLS_DIR 目录。"
         else:
-            # 默认为个人技能
-            if not user_info:
-                return "错误：未在当前会话中检测到有效的用户身份，无法创建个人技能。"
-            from app.services.ai.skill_resolver import get_user_personal_skills_dir
-            skills_dir = get_user_personal_skills_dir(user_info)
-            if not skills_dir:
-                return "错误：无法解析个人技能目录，请确认账号工作区已正确初始化。"
+            return "错误：平台已取消个人技能，只能创建或修改平台技能（global）。"
 
         # 拼接物理路径
         skill_path = os.path.join(skills_dir, skill_id)

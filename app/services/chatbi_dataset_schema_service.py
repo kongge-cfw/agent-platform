@@ -125,7 +125,7 @@ async def fetch_dataset_schema_core(
     is_admin: bool = False,
     api_key: Optional[str] = None,
     authorized_dataset_ids: Optional[list[int]] = None,
-    embed_app_id: Optional[str] = None,
+    embed_role_id: Optional[int] = None,
 ) -> str:
     """
     按当前用户权限获取数据集 Schema 文本（local/ragflow 均优先返回检索片段）。
@@ -144,7 +144,7 @@ async def fetch_dataset_schema_core(
             is_admin=is_admin,
             api_key=api_key,
             authorized_dataset_ids=authorized_dataset_ids,
-            embed_app_id=embed_app_id,
+            embed_role_id=embed_role_id,
         )
     except Exception as e:
         logger.error("[fetch_dataset_schema_core] Schema retrieval failed: %s", e, exc_info=True)
@@ -172,25 +172,25 @@ async def _fetch_dataset_schema_impl(
     is_admin: bool = False,
     api_key: Optional[str] = None,
     authorized_dataset_ids: Optional[list[int]] = None,
-    embed_app_id: Optional[str] = None,
+    embed_role_id: Optional[int] = None,
 ) -> str:
     user_id_eff = user_id
     is_admin_eff = bool(is_admin)
-    embed_app_id_eff = embed_app_id
+    embed_role_id_eff = embed_role_id
 
-    if user_id_eff is None and api_key and embed_app_id_eff is None:
+    if user_id_eff is None and api_key and embed_role_id_eff is None:
         u_info = await AuthService.verify_api_key(api_key, session)
         if u_info:
-            from app.services.embed_identity import embed_catalog_app_id, is_embed_session
+            from app.services.embed_identity import embed_catalog_role_id, is_embed_session
 
             user_id_eff = int(u_info["user_id"])
             if is_embed_session(u_info):
-                embed_app_id_eff = embed_catalog_app_id(u_info)
+                embed_role_id_eff = embed_catalog_role_id(u_info)
                 is_admin_eff = False
             elif u_info.get("role") == "admin":
                 is_admin_eff = True
 
-    if embed_app_id_eff is not None:
+    if embed_role_id_eff is not None:
         is_admin_eff = False
 
     provider = await ConfigService.get("metadata_provider", default="local")
@@ -199,7 +199,7 @@ async def _fetch_dataset_schema_impl(
         query=None,
         user_id=user_id_eff,
         is_admin=is_admin_eff,
-        embed_app_id=embed_app_id_eff,
+        embed_role_id=embed_role_id_eff,
         status=1,
     )
 
@@ -410,7 +410,7 @@ async def _fetch_dataset_schema_impl(
             query=query,
             user_id=user_id_eff,
             is_admin=is_admin_eff,
-            embed_app_id=embed_app_id_eff,
+            embed_role_id=embed_role_id_eff,
             status=1,
         )
         if not found_datasets:

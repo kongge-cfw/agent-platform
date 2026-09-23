@@ -26,8 +26,6 @@ PERSONAL_RESOURCE_DEFS = (
     {"key": "memory", "label": "我的记忆", "unit": "条", "tab": "memory"},
     {"key": "tokens", "label": "我的 Token", "unit": "本月", "tab": "tokens"},
     {"key": "data", "label": "我的数据门户", "unit": "份报表", "tab": "data"},
-    {"key": "skills", "label": "我的技能", "unit": "个", "tab": "skills"},
-    {"key": "mcp", "label": "我的 MCP", "unit": "个服务", "tab": "mcp"},
     {"key": "tasks", "label": "我的任务", "unit": "个", "tab": "tasks"},
     {"key": "inbox", "label": "我的站内消息", "unit": "条未读", "tab": "inbox"},
 )
@@ -626,31 +624,6 @@ async def _count_data_portal_reports(
     return int((await db.execute(stmt)).scalar() or 0)
 
 
-def _count_personal_skills(user: Mapping[str, Any]) -> int:
-    import os
-
-    from app.services.ai.skill_resolver import get_user_personal_skills_dir
-
-    skills_dir = get_user_personal_skills_dir(dict(user))
-    if not skills_dir or not os.path.isdir(skills_dir):
-        return 0
-    return sum(
-        1
-        for name in os.listdir(skills_dir)
-        if not name.startswith(".") and os.path.isdir(os.path.join(skills_dir, name))
-    )
-
-
-async def _count_personal_mcp(db: AsyncSession, user_id: int) -> int:
-    from app.models.mcp import McpServer
-
-    stmt = select(func.count()).select_from(McpServer).where(
-        McpServer.scope == "personal",
-        McpServer.user_id == user_id,
-    )
-    return int((await db.execute(stmt)).scalar() or 0)
-
-
 async def _count_personal_tasks(db: AsyncSession, user_id: int) -> int:
     from app.models.saved_report import PortalSavedReportSubscription
     from app.models.task import AgentScheduledTask
@@ -708,8 +681,6 @@ async def _load_personal_resources(
     await _put("memory", lambda: _count_memory_items(session_user_id or user_id))
     await _put("tokens", lambda: _count_month_tokens(db, user, now))
     await _put("data", lambda: _count_data_portal_reports(db, user_id, role_ids))
-    await _put("skills", lambda: _count_personal_skills(user))
-    await _put("mcp", lambda: _count_personal_mcp(db, user_id))
     await _put("tasks", lambda: _count_personal_tasks(db, user_id))
     await _put("inbox", lambda: _count_inbox_unread(db, user_id))
     return _normalize_personal_resources([cards[spec["key"]] for spec in PERSONAL_RESOURCE_DEFS])

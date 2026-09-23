@@ -58,27 +58,6 @@ def _parse_skill_frontmatter(skill_id: str, skill_md_path: str) -> Dict[str, str
     return parse_skill_frontmatter(skill_id, skill_md_path)
 
 
-def get_user_personal_skills_dir(user_info: Optional[Dict[str, Any]]) -> Optional[str]:
-    """推导当前用户的个人技能目录路径（agent_workspaces/{user_key}/skills/）。"""
-    if not user_info:
-        return None
-    try:
-        from app.services.ai.runtime.agentscope.workspace import (
-            default_workspace_root,
-            extract_workspace_identity,
-            resolve_workspace_user_key,
-        )
-
-        user_id, user_name = extract_workspace_identity(user_info=user_info)
-        if user_id is None:
-            return None
-        user_key = resolve_workspace_user_key(user_id=user_id, user_name=user_name)
-        return os.path.join(default_workspace_root(), user_key, "skills")
-    except Exception as e:
-        logger.debug("[Skills] Failed to resolve personal skills dir: %s", e)
-        return None
-
-
 def _scan_skill_dir(skills_dir: str, scope: str) -> List[Dict[str, str]]:
     """扫描单个技能根目录，返回带 scope 的 meta 列表。"""
     metas: List[Dict[str, str]] = []
@@ -171,14 +150,11 @@ def list_skill_metas(
     skills_custom: bool = False,
     allowed_global_skills: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
-    """扫描技能目录，返回 id/name/description/scope 摘要列表。
+    """扫描平台技能目录，返回 id/name/description/scope 摘要列表。
 
-    合并顺序：全局平台技能（scope=global）+ 当前用户个人技能（scope=personal）。
-    若 ID 冲突，个人技能优先覆盖全局同 ID 技能。
-
-    skills_custom=True 时，全局技能仅保留 allowed_global_skills 白名单中的项；
-    个人技能始终合并。
+    skills_custom=True 时，仅保留 allowed_global_skills 白名单中的项。
     """
+    del user_info
     try:
         from app.core.config import settings
 
@@ -190,18 +166,7 @@ def list_skill_metas(
     if skills_custom:
         allowlist = {str(s).strip() for s in (allowed_global_skills or []) if str(s).strip()}
         global_metas = [m for m in global_metas if m.get("id") in allowlist]
-
-    personal_metas: List[Dict[str, str]] = []
-    personal_dir = get_user_personal_skills_dir(user_info)
-    if personal_dir:
-        personal_metas = _scan_skill_dir_cached(personal_dir, SCOPE_PERSONAL)
-
-    # 合并：个人技能优先（同 ID 覆盖全局）
-    merged: Dict[str, Dict[str, str]] = {m["id"]: m for m in global_metas}
-    for m in personal_metas:
-        merged[m["id"]] = m
-
-    return list(merged.values())
+    return global_metas
 
 
 def count_enabled_global_skills() -> int:
@@ -337,11 +302,8 @@ def _is_path_under_root(path: str, root: str) -> bool:
 def _allowed_skill_md_roots(user_info: Optional[Dict[str, Any]] = None) -> List[str]:
     from app.core.config import settings
 
-    roots: List[str] = [os.path.abspath(settings.SKILLS_DIR)]
-    personal_dir = get_user_personal_skills_dir(user_info)
-    if personal_dir:
-        roots.append(os.path.abspath(personal_dir))
-    return roots
+    del user_info
+    return [os.path.abspath(settings.SKILLS_DIR)]
 
 
 def _read_skill_md_if_allowed(
@@ -367,7 +329,7 @@ def load_skill_md_content(
     scope: Optional[str] = None,
     skill_md_path: Optional[str] = None,
 ) -> Optional[str]:
-    """读取技能 SKILL.md 全文；支持平台与个人目录。失败返回 None。"""
+    """读取平台技能 SKILL.md 全文。失败返回 None。"""
     if not _validate_skill_id(skill_id):
         return None
     try:
@@ -394,6 +356,8 @@ def load_skill_md_content(
             candidates.append(
                 os.path.join(os.path.abspath(settings.SKILLS_DIR), skill_id, "SKILL.md")
             )
+        elif not candidates:
+            return None
 
         seen: Set[str] = set()
         for candidate in candidates:
@@ -554,7 +518,6 @@ def scan_relevant_skills(
     """扫描技能库，按关键词相关度返回候选技能（流程化自动匹配，非语义向量）。
 
     在每轮用户提问后、挂载/口头解析均未命中时由 AgentService 调用。
-    个人技能（scope=personal）相关度加权 +0.05，优先被匹配。
     """
     query = (user_query or "").strip()
     if not query or not should_scan_skills_for_query(query):
@@ -578,9 +541,8 @@ def scan_relevant_skills(
         if meta.get("enabled", "true") == "false":
             continue
         score = lexical_relevance_score(query, meta)
-        # 个人技能加权，鼓励优先匹配用户自定义技能
-        if meta.get("scope") == SCOPE_PERSONAL and score > 0:
-            score = min(1.0, score + 0.05)
+        if meta.get("scope") == SCOPE_PERSONAL:
+            continue
         if score >= min_score:
             scored.append((score, meta))
 

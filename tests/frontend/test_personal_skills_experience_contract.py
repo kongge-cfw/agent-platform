@@ -79,8 +79,4 @@ def test_create_skills_emits_machine_marker():
 
 
 def test_personal_skill_write_hooks_mark_files_changed():
-    source = (ROOT / "app" / "api" / "portal" / "endpoints" / "personal_skills.py").read_text(
-        encoding="utf-8"
-    )
-    assert "def _mark_personal_skill_changed" in source
-    assert source.count("_mark_personal_skill_changed(") >= 9
+    assert not (ROOT / "app" / "api" / "portal" / "endpoints" / "personal_skills.py").exists()

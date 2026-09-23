@@ -148,7 +148,7 @@ def test_embed_claim_whitelist_and_mcp_only_skip_sql():
     assert "platform_acl_user_id" in quota_src
     assert 'int(user["user_id"])' not in quota_src.split("async def get_system_quota")[0]
     assert embed_path_allowed("GET", "/api/portal/skills") is True
-    assert embed_path_allowed("GET", "/api/portal/skills/personal") is True
+    assert embed_path_allowed("GET", "/api/portal/skills/personal") is False
     assert embed_path_allowed("GET", "/api/portal/agents/sys-agent-chat/active-config") is False
     assert embed_path_allowed("GET", "/api/portal/management/users") is False
     assert embed_path_allowed("POST", "/api/portal/mcp/servers") is False

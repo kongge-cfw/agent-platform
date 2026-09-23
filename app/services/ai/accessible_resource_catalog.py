@@ -30,13 +30,26 @@ class AccessibleResourceSnapshot:
     dataset_count: int
     knowledge_base_count: int
     prompt: str
+    embed_role_id: Optional[int] = None
 
     @property
     def counts(self) -> dict[str, int | str]:
         return {"status": self.status, "datasets": self.dataset_count, "knowledge_bases": self.knowledge_base_count}
 
-    def matches(self, *, user_id: Optional[int], user_name: Optional[str], is_admin: bool) -> bool:
-        return (self.user_id, self.user_name, self.is_admin) == (user_id, user_name, is_admin)
+    def matches(
+        self,
+        *,
+        user_id: Optional[int],
+        user_name: Optional[str],
+        is_admin: bool,
+        embed_role_id: Optional[int] = None,
+    ) -> bool:
+        return (self.user_id, self.user_name, self.is_admin, self.embed_role_id) == (
+            user_id,
+            user_name,
+            is_admin,
+            embed_role_id,
+        )
 
 DEFAULT_MAX_ITEMS = 20
 DEFAULT_MAX_CHARS = 4000
@@ -121,10 +134,15 @@ async def fetch_accessible_resource_counts(
     user_id: Optional[int],
     user_name: Optional[str] = None,
     is_admin: bool = False,
+    embed_role_id: Optional[int] = None,
 ) -> dict[str, int | str]:
     """Return permission-filtered counts for the user-facing execution trace."""
     snapshot = await fetch_accessible_resource_snapshot(
-        db, user_id=user_id, user_name=user_name, is_admin=is_admin,
+        db,
+        user_id=user_id,
+        user_name=user_name,
+        is_admin=is_admin,
+        embed_role_id=embed_role_id,
     )
     return snapshot.counts
 
@@ -137,32 +155,38 @@ async def fetch_accessible_resource_snapshot(
     is_admin: bool = False,
     tenant_id: Optional[str] = None,
     isolate_by_tenant: bool = False,
+    embed_role_id: Optional[int] = None,
 ) -> AccessibleResourceSnapshot:
     """同一组权限查询同时生成统计与模型目录，供当前请求复用。"""
-    if user_id is None:
-        return AccessibleResourceSnapshot(user_id, user_name, is_admin, "empty", 0, 0, "")
+    if user_id is None and embed_role_id is None:
+        return AccessibleResourceSnapshot(
+            user_id, user_name, is_admin, "empty", 0, 0, "", embed_role_id,
+        )
 
     datasets = await MetadataService.list_accessible_dataset_options(
         db,
         user_id=user_id,
-        is_admin=is_admin,
+        is_admin=is_admin and embed_role_id is None,
         status=1,
         tenant_id=tenant_id or "",
         isolate_by_tenant=isolate_by_tenant,
+        embed_role_id=embed_role_id,
     )
     knowledge_catalog = await fetch_authorized_knowledge_catalog(
         db,
         user_id=user_id,
         user_name=user_name,
-        is_admin=is_admin,
+        is_admin=is_admin and embed_role_id is None,
         permission_service=PermissionService(db),
         tenant_id=tenant_id or "",
         isolate_by_tenant=isolate_by_tenant,
+        embed_role_id=embed_role_id,
     )
     return AccessibleResourceSnapshot(
         user_id, user_name, is_admin, knowledge_catalog.status,
         len(datasets), len(_knowledge_bases_for_prompt(knowledge_catalog.items)),
         render_accessible_resource_catalog(datasets=datasets, knowledge_bases=knowledge_catalog.items),
+        embed_role_id,
     )
 
 
@@ -231,13 +255,14 @@ async def build_accessible_resource_catalog(
     max_items: int = DEFAULT_MAX_ITEMS,
     max_chars: int = DEFAULT_MAX_CHARS,
     knowledge_catalog: Optional[AuthorizedKnowledgeCatalog] = None,
+    embed_role_id: Optional[int] = None,
 ) -> str:
     """Load and render the current user's authorized resource directory.
 
     This is advisory model context. Tool-level permission checks remain the
     authority, and a catalog lookup failure therefore produces an empty hint.
     """
-    if user_id is None:
+    if user_id is None and embed_role_id is None:
         return ""
 
     try:
@@ -245,16 +270,18 @@ async def build_accessible_resource_catalog(
             datasets = await MetadataService.list_accessible_dataset_options(
                 db,
                 user_id=user_id,
-                is_admin=is_admin,
+                is_admin=is_admin and embed_role_id is None,
                 status=1,
+                embed_role_id=embed_role_id,
             )
             if knowledge_catalog is None:
                 knowledge_catalog = await fetch_authorized_knowledge_catalog(
                     db,
                     user_id=user_id,
                     user_name=user_name,
-                    is_admin=is_admin,
+                    is_admin=is_admin and embed_role_id is None,
                     permission_service=PermissionService(db),
+                    embed_role_id=embed_role_id,
                 )
 
         return render_accessible_resource_catalog(

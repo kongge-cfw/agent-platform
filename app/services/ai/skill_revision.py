@@ -48,19 +48,11 @@ def resolve_skill_dir(
     if not sid:
         return None
     from app.core.config import settings
-    from app.services.ai.skill_resolver import get_user_personal_skills_dir
 
+    del user_info
     resolved_scope = str(scope or "").strip().lower()
-    personal_dir = get_user_personal_skills_dir(user_info) if user_info else None
     if resolved_scope == "personal":
-        if not personal_dir:
-            return None
-        path = os.path.join(personal_dir, sid)
-        return path if os.path.isdir(path) else None
-    if resolved_scope != "global" and personal_dir:
-        path = os.path.join(personal_dir, sid)
-        if os.path.isdir(path):
-            return path
+        return None
     path = os.path.join(os.path.abspath(settings.SKILLS_DIR), sid)
     return path if os.path.isdir(path) else None
 

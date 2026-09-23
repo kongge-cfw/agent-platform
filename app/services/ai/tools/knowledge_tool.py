@@ -63,36 +63,44 @@ async def search_knowledge_base(query: str, dataset_ids: Optional[str | list[str
     logger.info("[KnowledgeTool] Resolved dataset_ids: %s", target_datasets)
 
     ctx = get_current_agent_context()
-    if ctx and ctx.user_id and not ctx.is_admin:
-        user_name = (ctx.user_dimensions or {}).get("user_name")
+    from app.services.embed_identity import embed_catalog_role_id
+
+    embed_role_id = embed_catalog_role_id((ctx.user_dimensions if ctx else None) or None)
+    if embed_role_id is not None or (ctx and ctx.user_id and not ctx.is_admin):
+        user_name = ((ctx.user_dimensions if ctx else None) or {}).get("user_name")
         async with AsyncSessionLocal() as session:
             perm = PermissionService(session)
-            agent_granted_ids = set(ctx.agent_dataset_ids or [])
-            embed_session = str((ctx.user_dimensions or {}).get("session_type") or "").strip().lower() == "embed"
-            restricted_datasets = [
-                dataset_id
-                for dataset_id in target_datasets
-                if dataset_id not in agent_granted_ids
-            ]
-            if embed_session:
-                allowed_restricted = []
+            if embed_role_id is not None:
+                role_kb_ids = await perm.get_role_knowledge_base_ids(int(embed_role_id))
+                denied = [
+                    dataset_id for dataset_id in target_datasets if dataset_id not in role_kb_ids
+                ]
+                target_datasets = [
+                    dataset_id for dataset_id in target_datasets if dataset_id in role_kb_ids
+                ]
             else:
+                agent_granted_ids = set(ctx.agent_dataset_ids or [])
+                restricted_datasets = [
+                    dataset_id
+                    for dataset_id in target_datasets
+                    if dataset_id not in agent_granted_ids
+                ]
                 allowed_restricted = await perm.filter_knowledge_dataset_ids(
                     int(ctx.user_id),
                     user_name,
                     restricted_datasets,
                 )
-            allowed_restricted_set = set(allowed_restricted)
-            denied = [
-                dataset_id
-                for dataset_id in restricted_datasets
-                if dataset_id not in allowed_restricted_set
-            ]
-            target_datasets = [
-                dataset_id
-                for dataset_id in target_datasets
-                if dataset_id in agent_granted_ids or dataset_id in allowed_restricted_set
-            ]
+                allowed_restricted_set = set(allowed_restricted)
+                denied = [
+                    dataset_id
+                    for dataset_id in restricted_datasets
+                    if dataset_id not in allowed_restricted_set
+                ]
+                target_datasets = [
+                    dataset_id
+                    for dataset_id in target_datasets
+                    if dataset_id in agent_granted_ids or dataset_id in allowed_restricted_set
+                ]
             if denied:
                 logger.warning(
                     "[KnowledgeTool] Removed datasets without permission: %s",
@@ -101,7 +109,7 @@ async def search_knowledge_base(query: str, dataset_ids: Optional[str | list[str
         if not target_datasets:
             return (
                 "[Tool Error] No permission to search the requested knowledge base. "
-                "You may only use datasets assigned to you or created by yourself."
+                "You may only use knowledge bases granted to the current role or user."
             )
 
     sys_threshold = await ConfigService.get("knowledge_ragflow_similarity_threshold")

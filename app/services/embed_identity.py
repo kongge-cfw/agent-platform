@@ -37,10 +37,17 @@ _FORBIDDEN_CLAIM_KEYS = AUTHENTICATED_IDENTITY_KEYS | frozenset(
 
 
 def embed_catalog_app_id(user_info: Optional[Mapping[str, Any]]) -> Optional[str]:
-    """嵌入会话返回应用 ID。空串表示嵌入但没有应用，数据集范围为空。非嵌入返回 None。"""
+    """嵌入会话返回应用 ID。空串表示嵌入但没有应用。非嵌入返回 None。"""
     if not is_embed_session(user_info):
         return None
     return str((user_info or {}).get("embed_app_id") or "").strip()
+
+
+def embed_catalog_role_id(user_info: Optional[Mapping[str, Any]]) -> Optional[int]:
+    """嵌入会话返回关联角色 ID。非嵌入返回 None。嵌入但未绑定角色返回 0，资源范围为空。"""
+    if not is_embed_session(user_info):
+        return None
+    return embed_role_id(user_info) or 0
 
 
 def is_embed_session(user_info: Optional[Mapping[str, Any]]) -> bool:
@@ -331,7 +338,11 @@ def resolve_catalog_acl_from_context(ctx: Any) -> dict[str, Any]:
 
 
 def resolve_catalog_acl(user_info: Optional[Mapping[str, Any]]) -> dict[str, Any]:
-    """目录/资源范围用的控制面身份：嵌入认签发人，且永不按业务 claims 升管理员。"""
+    """目录/资源范围用的控制面身份。
+
+    嵌入会话的数据集和知识库认关联角色（``embed_role_id``），不认签发人权限，
+    也不按业务 claims 升管理员。非嵌入 ``embed_role_id`` 为 None。
+    """
     if not isinstance(user_info, Mapping):
         return {
             "user_id": None,
@@ -339,6 +350,7 @@ def resolve_catalog_acl(user_info: Optional[Mapping[str, Any]]) -> dict[str, Any
             "is_admin": False,
             "tenant_id": "",
             "isolate_by_tenant": False,
+            "embed_role_id": None,
         }
     if is_embed_session(user_info):
         return {
@@ -347,6 +359,7 @@ def resolve_catalog_acl(user_info: Optional[Mapping[str, Any]]) -> dict[str, Any
             "is_admin": False,
             "tenant_id": claims_tenant_id(user_info),
             "isolate_by_tenant": isolate_datasets_by_tenant(user_info),
+            "embed_role_id": embed_catalog_role_id(user_info),
         }
     raw = user_info.get("user_id") or user_info.get("id")
     try:
@@ -359,6 +372,7 @@ def resolve_catalog_acl(user_info: Optional[Mapping[str, Any]]) -> dict[str, Any
         "is_admin": is_platform_admin(user_info),
         "tenant_id": claims_tenant_id(user_info),
         "isolate_by_tenant": False,
+        "embed_role_id": None,
     }
 
 

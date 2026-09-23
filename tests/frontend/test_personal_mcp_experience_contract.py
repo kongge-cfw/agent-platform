@@ -12,17 +12,15 @@ MCP_CASCADE = ROOT / "frontend" / "src" / "components" / "embed" / "McpCascadeMe
 
 def test_personal_center_exposes_mcp_tab():
     text = PERSONAL_CENTER.read_text(encoding="utf-8")
-    assert "'mcp'" in text or '"mcp"' in text
-    assert "我的 MCP" in text
-    assert "McpManagement" in text
-    assert "personal-only" in text or "personalOnly" in text
+    assert "我的 MCP" not in text
+    assert "McpManagement" not in text
 
 
 def test_mcp_management_supports_personal_only_mode():
     text = MCP_MGMT.read_text(encoding="utf-8")
     assert "personalOnly" in text
     assert "v-if=\"!personalOnly\"" in text
-    assert "我的 MCP" in text
+    assert "我的 MCP" not in text
     # 个人中心嵌入时不锁死 overflow，避免移动端裁切
     assert "personalOnly ? 'min-h-0'" in text or "personalOnly ? 'min-h-[28rem]'" in text
 

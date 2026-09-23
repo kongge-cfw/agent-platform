@@ -20,7 +20,6 @@ from app.core.config import settings
 from app.models.permission import ResourcePermission, UserRoleRelation
 from app.models.skill_publication import SkillPublication, SkillPublicationVersion
 from app.models.user import User
-from app.services.ai.skill_resolver import get_user_personal_skills_dir
 from app.services.portal_notification_service import PortalNotificationService
 from app.utils.skill_metadata import parse_skill_frontmatter
 
@@ -147,44 +146,10 @@ def create_personal_skill_snapshot(
     publication_id: str,
     version_number: int,
 ) -> SnapshotInfo:
-    """Copy the current personal skill into an immutable, validated snapshot."""
+    """个人技能已取消，不再生成发布快照。"""
 
-    _validate_skill_id(skill_id)
-    if not publication_id or int(version_number) < 1:
-        raise ValueError("invalid publication version")
-    personal_root = get_user_personal_skills_dir(user)
-    if not personal_root:
-        raise ValueError("user workspace is unavailable")
-    source_path = os.path.abspath(os.path.join(personal_root, skill_id))
-    _assert_inside(personal_root, source_path)
-    if not os.path.isdir(source_path):
-        raise FileNotFoundError("personal skill does not exist")
-    stats = validate_snapshot_tree(source_path)
-
-    publication_root = Path(publication_snapshot_root()) / publication_id
-    publication_root.mkdir(parents=True, exist_ok=True)
-    destination = publication_root / f"v{int(version_number)}"
-    if destination.exists():
-        raise FileExistsError("publication snapshot already exists")
-    temporary = Path(tempfile.mkdtemp(prefix=f".v{int(version_number)}-", dir=str(publication_root)))
-    try:
-        _copy_tree_contents(Path(source_path), temporary)
-        copied_stats = validate_snapshot_tree(str(temporary))
-        if copied_stats != stats:
-            raise ValueError("snapshot changed while copying")
-        os.replace(str(temporary), str(destination))
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
-    return SnapshotInfo(
-        snapshot_path=str(destination),
-        source_path=source_path,
-        publication_id=publication_id,
-        version_number=int(version_number),
-        content_sha256=stats.content_sha256,
-        file_count=stats.file_count,
-        total_size=stats.total_size,
-    )
+    del user, skill_id, publication_id, version_number
+    raise ValueError("平台已取消个人技能，无法创建发布快照")
 
 
 def _validate_platform_skill_id(platform_skill_id: str) -> None:
@@ -277,13 +242,8 @@ def _user_id(user: dict[str, Any]) -> int:
 
 
 def _meta_for_personal_skill(*, user: dict[str, Any], skill_id: str) -> dict[str, str]:
-    personal_root = get_user_personal_skills_dir(user)
-    if not personal_root:
-        raise ValueError("user workspace is unavailable")
-    skill_dir = os.path.join(personal_root, skill_id)
-    if not os.path.isdir(skill_dir) or not os.path.isfile(os.path.join(skill_dir, "SKILL.md")):
-        raise FileNotFoundError("personal skill does not exist or is missing SKILL.md")
-    return parse_skill_frontmatter(skill_id, os.path.join(skill_dir, "SKILL.md"))
+    del user, skill_id
+    raise ValueError("平台已取消个人技能")
 
 
 def _platform_skill_id(name: str, publication_id: str) -> str:
@@ -431,73 +391,10 @@ async def withdraw_personal_skill_publication(
 
 
 async def submit_personal_skill(session: AsyncSession, *, user: dict[str, Any], skill_id: str) -> dict[str, Any]:
-    """Create a pending immutable snapshot for the current user's personal skill."""
+    """个人技能已取消，不再接受发布申请。"""
 
-    user_id = _user_id(user)
-    meta = _meta_for_personal_skill(user=user, skill_id=skill_id)
-    publication_result = await session.execute(
-        select(SkillPublication)
-        .where(
-            SkillPublication.source_user_id == user_id,
-            SkillPublication.source_personal_skill_id == skill_id,
-        )
-        .order_by(desc(SkillPublication.updated_at))
-    )
-    publication = publication_result.scalars().first()
-    if publication is None:
-        publication = SkillPublication(
-            id=str(uuid.uuid4()),
-            source_user_id=user_id,
-            source_personal_skill_id=skill_id,
-            name=meta.get("name") or skill_id,
-            description=meta.get("description") or "",
-            status="PENDING",
-        )
-        session.add(publication)
-        await session.flush()
-    else:
-        publication.name = meta.get("name") or publication.name or skill_id
-        publication.description = meta.get("description") or publication.description or ""
-
-    versions = await _versions_for_publication(session, publication.id)
-    pending = next((version for version in versions if version.status == "PENDING"), None)
-    source_root = get_user_personal_skills_dir(user)
-    if not source_root:
-        raise ValueError("user workspace is unavailable")
-    source_stats = validate_snapshot_tree(os.path.join(source_root, skill_id))
-    if pending is not None:
-        if pending.content_sha256 == source_stats.content_sha256:
-            return _publication_payload(publication, pending)
-        raise PublicationConflictError("a different publication version is already pending")
-
-    next_version = (max((version.version_number for version in versions), default=0) + 1)
-    snapshot = create_personal_skill_snapshot(
-        user=user,
-        skill_id=skill_id,
-        publication_id=publication.id,
-        version_number=next_version,
-    )
-    version = SkillPublicationVersion(
-        id=str(uuid.uuid4()),
-        publication_id=publication.id,
-        version_number=next_version,
-        status="PENDING",
-        snapshot_path=snapshot.snapshot_path,
-        content_sha256=snapshot.content_sha256,
-        file_count=snapshot.file_count,
-        total_size=snapshot.total_size,
-        submitted_by=user_id,
-    )
-    session.add(version)
-    publication.status = "PENDING"
-    await session.flush()
-    await notify_skill_publication_reviewers(
-        session,
-        publication=publication,
-        version=version,
-        submitted_by=user,
-    )
-    return _publication_payload(publication, version)
+    del session, user, skill_id
+    raise ValueError("平台已取消个人技能，无法提交发布")
 
 
 async def list_my_publication_summaries(

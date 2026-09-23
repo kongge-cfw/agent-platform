@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.dependencies import require_admin, require_api_key
-from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, personal_skills, memory, saved_reports, portal_prefs, chat_runtime_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, embed_apps
+from app.api.portal.endpoints import auth, audit, management, keys, dashboard, system, chat, metadata, agents, prompts, slash_commands, health, models, tools, ragflow, roles, mcp, mcp_service, changelog, chat_feedback, examples, chatbi_briefs, chatbi_monitors, chatbi_export, skills, memory, saved_reports, portal_prefs, chat_runtime_prefs, quota, notifications, inbox, data_portal, scenario_templates, workbench, embed_apps
 
 portal_router = APIRouter()
 
@@ -68,10 +68,7 @@ portal_router.include_router(embed_apps.router, prefix="/embed-apps", tags=["嵌
 # 16. 变更日志 (Changelog)
 portal_router.include_router(changelog.router, prefix="/changelog", tags=["变更日志"], dependencies=[Depends(require_api_key)])
 
-# 17. 个人技能管理 (Personal Skills) — 必须先于 /skills/{skill_id} 注册，避免 GET /skills/personal 被平台路由误匹配
-portal_router.include_router(personal_skills.router, prefix="/skills/personal", tags=["个人技能"], dependencies=[Depends(require_api_key)])
-
-# 17.1 智能体技能管理 (Skills Management)
+# 17. 智能体技能管理 (Skills Management)
 portal_router.include_router(skills.router, prefix="/skills", tags=["技能管理"], dependencies=[Depends(require_api_key)])
 
 # 18. 记忆管理中心 (Memory Management)

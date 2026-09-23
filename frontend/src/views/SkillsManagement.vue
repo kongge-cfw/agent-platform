@@ -124,7 +124,7 @@ const confirmState = ref({
 
 const skills = ref<Skill[]>([])
 const personalSkills = ref<Skill[]>([])
-const initialWorkspaceTab = props.personalOnly || !canManagePlatformSkills.value ? 'personal' : 'global'
+const initialWorkspaceTab = 'global' as const
 const activeScope = ref<'global' | 'personal'>(initialWorkspaceTab)
 const activeWorkspaceTab = ref<'global' | 'personal' | 'review'>(initialWorkspaceTab)
 const loading = ref(false)
@@ -470,25 +470,8 @@ const fetchSkills = async () => {
   }
 }
 
-// 获取个人技能列表
 const fetchPersonalSkills = async () => {
-  try {
-    const response = await axios.get('/api/portal/skills/personal')
-    if (response.data && response.data.status === 'success') {
-      personalSkills.value = (response.data.data || []).map((s: Skill) => ({ ...s, scope: 'personal' as const }))
-      await Promise.all(personalSkills.value.map(async (skill) => {
-        try {
-          const statusResponse = await axios.get(`/api/portal/skills/personal/${skill.id}/publication-status`)
-          Object.assign(skill, statusResponse.data?.data || {})
-        } catch (statusError) {
-          console.warn(`Failed to load publication status for ${skill.id}`, statusError)
-        }
-      }))
-    }
-  } catch (e: any) {
-    console.warn('获取个人技能失败', e)
-    showToast(e.response?.data?.detail || '获取个人技能列表失败', 'error')
-  }
+  personalSkills.value = []
 }
 
 const submitSkillPublication = async (skill: Skill) => {
@@ -1683,18 +1666,6 @@ onUnmounted(() => {
         </svg>
         平台技能
         <span class="ml-1 px-1.5 py-0.5 text-[10px] rounded-full font-semibold" :class="activeWorkspaceTab === 'global' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'">{{ skills.length }}</span>
-      </button>
-      <button
-        id="tab-personal-skills"
-        @click="activeWorkspaceTab = 'personal'; activeScope = 'personal'"
-        class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors"
-        :class="activeWorkspaceTab === 'personal' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-        </svg>
-        我的技能
-        <span class="ml-1 px-1.5 py-0.5 text-[10px] rounded-full font-semibold" :class="activeWorkspaceTab === 'personal' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'">{{ personalSkills.length }}</span>
       </button>
       <button
         v-if="canManagePlatformSkills"

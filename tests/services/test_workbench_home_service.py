@@ -165,11 +165,11 @@ def test_personal_resources_are_normalized_into_payload():
                 "status": "ok",
             },
             {
-                "key": "skills",
-                "label": "我的技能",
+                "key": "tasks",
+                "label": "我的任务",
                 "value": 0,
                 "unit": "个",
-                "tab": "skills",
+                "tab": "tasks",
                 "status": "empty",
             },
         ]
@@ -179,8 +179,6 @@ def test_personal_resources_are_normalized_into_payload():
         "memory",
         "tokens",
         "data",
-        "skills",
-        "mcp",
         "tasks",
         "inbox",
     ]

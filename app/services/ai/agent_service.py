@@ -2313,19 +2313,17 @@ class AgentService:
             if early_turn_kind != "data_query" and not accessible_resources and user_info:
                 try:
                     with _measure("catalog_fetch"):
-                        from app.services.embed_identity import (
-                            operator_is_admin,
-                            platform_acl_user_id,
-                            platform_acl_user_name,
-                        )
+                        from app.services.embed_identity import resolve_catalog_acl
 
-                        resource_user_id = platform_acl_user_id(user_info)
+                        acl = resolve_catalog_acl(user_info)
+                        resource_user_id = acl.get("user_id")
                         target_user_name = (
-                            platform_acl_user_name(user_info)
+                            acl.get("user_name")
                             or user_info.get("user_name")
                             or user_info.get("username")
                         )
-                        target_is_admin = operator_is_admin(user_info)
+                        target_is_admin = bool(acl.get("is_admin"))
+                        embed_role_id = acl.get("embed_role_id")
 
                         # 优先复用本轮入口已加载的快照，避免重复查询数据库与权限表
                         snapshot = (request_observability or {}).get("resource_snapshot")
@@ -2336,6 +2334,7 @@ class AgentService:
                                 user_id=resource_user_id,
                                 user_name=target_user_name,
                                 is_admin=target_is_admin,
+                                embed_role_id=embed_role_id,
                             )
                         ):
                             return getattr(snapshot, "prompt", "")
@@ -2347,6 +2346,7 @@ class AgentService:
                             user_id=resource_user_id,
                             user_name=target_user_name,
                             is_admin=target_is_admin,
+                            embed_role_id=embed_role_id,
                         )
                 except Exception as err:
                     logger.warning(f"Error in concurrent build_accessible_resource_catalog: {err}")

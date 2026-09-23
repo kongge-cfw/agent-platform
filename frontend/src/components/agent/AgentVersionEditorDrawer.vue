@@ -1116,17 +1116,6 @@ const externalCreationMissingFields = computed(() => {
                       {{ globalMcpToolsCount }}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    @click="mcpSubTab = 'personal'"
-                    class="px-3 py-1 font-semibold rounded-md transition-all flex items-center gap-1.5"
-                    :class="mcpSubTab === 'personal' ? 'bg-white shadow-sm text-emerald-600 dark:bg-gray-700 dark:text-emerald-300' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'"
-                  >
-                    <span>我的 MCP</span>
-                    <span class="px-1.5 py-0.2 text-[9px] rounded-full font-mono" :class="mcpSubTab === 'personal' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'">
-                      {{ personalMcpToolsCount }}
-                    </span>
-                  </button>
                 </div>
               </div>
 

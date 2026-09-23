@@ -211,10 +211,9 @@ def discover_platform_skill_paths(
     skills_custom: bool = False,
     allowed_global_skills: list[str] | None = None,
 ) -> list[str]:
-    """Collect skill directories: global platform skills + user personal skills.
+    """Collect enabled platform skill directories.
 
-    When skills_custom is True, only allowlisted global skill ids are included;
-    personal skills are always appended (if enabled).
+    When skills_custom is True, only allowlisted global skill ids are included.
     """
     try:
         from app.core.config import settings
@@ -242,27 +241,7 @@ def discover_platform_skill_paths(
                 continue
             paths.append(os.path.abspath(skill_dir))
 
-    # 追加用户个人技能路径
-    if user_info:
-        try:
-            from app.services.ai.skill_resolver import get_user_personal_skills_dir
-
-            personal_dir = get_user_personal_skills_dir(user_info)
-            if personal_dir and os.path.isdir(personal_dir):
-                for entry in sorted(os.listdir(personal_dir)):
-                    skill_dir = os.path.join(personal_dir, entry)
-                    if os.path.isdir(skill_dir) and os.path.isfile(
-                        os.path.join(skill_dir, "SKILL.md")
-                    ):
-                        meta = parse_skill_frontmatter(entry, os.path.join(skill_dir, "SKILL.md"))
-                        if meta.get("enabled", "true") == "false":
-                            continue
-                        abs_path = os.path.abspath(skill_dir)
-                        if abs_path not in paths:
-                            paths.append(abs_path)
-        except Exception as exc:
-            logger.debug("[workspace] Failed to load personal skill paths: %s", exc)
-
+    del user_info
     return paths
 
 

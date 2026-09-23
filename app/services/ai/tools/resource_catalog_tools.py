@@ -65,18 +65,16 @@ async def list_accessible_datasets() -> str:
         async with AsyncSessionLocal() as db:
             from app.services.embed_identity import resolve_catalog_acl_from_context
 
-            from app.services.embed_identity import embed_catalog_app_id
-
             acl = resolve_catalog_acl_from_context(ctx)
-            embed_app_id = embed_catalog_app_id(ctx.user_dimensions or None)
+            embed_role_id = acl.get("embed_role_id")
             rows = await MetadataService.list_accessible_dataset_options(
                 db,
                 user_id=acl.get("user_id"),
-                is_admin=bool(acl.get("is_admin")) and embed_app_id is None,
+                is_admin=bool(acl.get("is_admin")) and embed_role_id is None,
                 status=1,
                 tenant_id=acl.get("tenant_id") or "",
                 isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
-                embed_app_id=embed_app_id,
+                embed_role_id=embed_role_id,
             )
             items = [_dataset_item(row) for row in rows]
             return json.dumps({"items": items, "count": len(items)}, ensure_ascii=False)
@@ -103,14 +101,16 @@ async def list_accessible_knowledge_bases() -> str:
             from app.services.embed_identity import resolve_catalog_acl_from_context
 
             acl = resolve_catalog_acl_from_context(ctx)
+            embed_role_id = acl.get("embed_role_id")
             catalog = await fetch_authorized_knowledge_catalog(
                 db,
                 user_id=acl.get("user_id") or int(ctx.user_id),
                 user_name=acl.get("user_name") or user_name,
-                is_admin=bool(acl.get("is_admin")),
+                is_admin=bool(acl.get("is_admin")) and embed_role_id is None,
                 permission_service=PermissionService(db),
                 tenant_id=acl.get("tenant_id") or "",
                 isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+                embed_role_id=embed_role_id,
             )
             items = [_knowledge_item(row) for row in catalog.items]
             items.sort(key=lambda x: x.get("ragflow_dataset_id") or "")
@@ -265,7 +265,6 @@ async def list_accessible_directories() -> str:
         # 用户私有目录详细路径
         docs_service_path = os.path.join(user_host_workspace, "docs")
         uploads_service_path = os.path.join(user_host_workspace, "uploads")
-        skills_service_path = os.path.join(user_host_workspace, "skills")
         trash_service_path = os.path.join(user_host_workspace, ".trash")
 
         user_directories: list[dict[str, Any]] = [
@@ -342,25 +341,6 @@ async def list_accessible_directories() -> str:
                 "category": "user_uploads",
                 "description": "用户上传的会话附件目录。存放用户在聊天界面上传的文件与原始数据资料。",
                 "recommended_for": ["读取用户上传的文件", "查找会话原始输入资料"],
-            },
-            {
-                "directory_name": "skills",
-                # Docker 的 /workspace/skills 是运行时合并后的公共技能副本，
-                # 不是用户私有 skills 源目录；宿主文件工具仍使用用户工作区下的 skills/。
-                "container_sandbox_path": None if is_docker_sandbox else skills_service_path,
-                "backend_service_path": skills_service_path,
-                "paths": _tool_paths(
-                    container_path=None,
-                    backend_path=skills_service_path,
-                    file_tool_path="skills",
-                ),
-                "path_namespace": _path_namespace(
-                    None,
-                ),
-                "permission": "read_write",
-                "category": "user_personal_skills",
-                "description": "用户个人专属自定义技能目录。存放当前用户专属创建或定制的 Prompt/技能包。",
-                "recommended_for": ["个人自定义技能"],
             },
             {
                 "directory_name": ".trash",

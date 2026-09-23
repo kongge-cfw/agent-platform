@@ -14,9 +14,8 @@ def test_personal_center_exposes_tasks_tab_after_mcp():
     assert "我的任务" in text
     assert "TaskCenter" in text
     assert "personal-only" in text or "personalOnly" in text or "personal-only" in text.replace("_", "-")
-    mcp_at = text.index("我的 MCP")
-    tasks_at = text.index("我的任务")
-    assert mcp_at < tasks_at
+    assert "我的 MCP" not in text
+    assert "我的技能" not in text
 
 
 def test_task_center_supports_personal_only_owner_manage():

@@ -2742,8 +2742,9 @@ defineExpose({
                                         </svg>
                                     </button>
 
-                                    <!-- MCP cascade -->
+                                    <!-- 个人 MCP 已取消，不再提供会话内挂载入口 -->
                                     <button
+                                      v-if="false"
                                       type="button"
                                       class="w-full flex items-center justify-between px-3 py-2 text-sm transition-all duration-150"
                                       :class="showMcpCascade

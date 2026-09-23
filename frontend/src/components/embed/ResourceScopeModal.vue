@@ -266,7 +266,7 @@ const skillsForActiveScope = computed(() => {
 
             <!-- 技能：平台 / 个人，对齐输入框技能中心 -->
             <div
-              v-if="group.key === 'skills'"
+              v-if="false && group.key === 'skills'"
               class="flex items-center gap-1 rounded-lg bg-gray-50 dark:bg-gray-900/50 p-0.5 shrink-0"
             >
               <button
@@ -280,19 +280,6 @@ const skillsForActiveScope = computed(() => {
                 平台
                 <span class="ml-0.5 text-[10px] font-normal text-gray-400">
                   ({{ skillScopeSelectedCount('global') }}/{{ skillScopeTotalCount('global') }})
-                </span>
-              </button>
-              <button
-                type="button"
-                class="flex-1 py-1.5 text-center text-xs font-semibold rounded-md transition-colors"
-                :class="skillScopeTab === 'personal'
-                  ? 'bg-white dark:bg-gray-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'"
-                @click="skillScopeTab = 'personal'"
-              >
-                我的
-                <span class="ml-0.5 text-[10px] font-normal text-gray-400">
-                  ({{ skillScopeSelectedCount('personal') }}/{{ skillScopeTotalCount('personal') }})
                 </span>
               </button>
             </div>

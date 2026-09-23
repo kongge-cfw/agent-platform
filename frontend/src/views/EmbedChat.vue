@@ -475,7 +475,17 @@
                     class="max-w-full text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed transition-colors duration-300 relative"
                     :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }"
                   >
-                    <div class="whitespace-pre-wrap"><span v-for="(file, skillIndex) in messageSkillFiles(msg.files)" :key="`${file.url || file.filename}-${skillIndex}`" class="mr-1.5 inline-flex h-5 max-w-full items-center rounded-full bg-white/20 px-2 align-middle text-[13px] leading-none text-white ring-1 ring-inset ring-white/35"><BoltIcon class="mr-1 h-3.5 w-3.5 shrink-0 text-white/90" aria-hidden="true" /><span class="truncate">{{ messageSkillLabel(file) }}</span></span><span v-if="parts.userPart">{{ parts.userPart }}</span></div>
+                    <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                      <span
+                        v-for="(file, skillIndex) in messageSkillFiles(msg.files)"
+                        :key="`${file.url || file.filename}-${skillIndex}`"
+                        class="inline-flex h-6 max-w-full shrink-0 items-center rounded-full bg-white/20 px-2 text-[13px] leading-none text-white ring-1 ring-inset ring-white/35"
+                      >
+                        <BoltIcon class="mr-1 h-3.5 w-3.5 shrink-0 text-white/90" aria-hidden="true" />
+                        <span class="truncate">{{ messageSkillLabel(file) }}</span>
+                      </span>
+                      <span v-if="parts.userPart" class="min-w-0 whitespace-pre-wrap text-[13px] leading-6">{{ parts.userPart }}</span>
+                    </div>
                   </div>
                   <details
                     v-if="parts.hasContext"
@@ -2172,6 +2182,7 @@ import { ref, reactive, onMounted, onUnmounted, nextTick, watch, computed, trigg
 import { BoltIcon, CommandLineIcon, PuzzlePieceIcon } from "@heroicons/vue/24/outline";
 import { useRouter } from "vue-router";
 import axios from "@/utils/axios";
+import { isEmbedLocation } from "@/utils/appBase";
 import { finalizeConversation } from "@/utils/conversationFinalize";
 import { cancelConversationRun } from "@/utils/cancelConversationRun";
 import { createConversationId } from "@/utils/conversationId";
@@ -3718,12 +3729,6 @@ const resourceOptionGroups: { key: ResourceScopeGroupKey; label: string; shortLa
     shortLabel: '技能',
     hint: '不选则仍可按问题自动匹配技能；选中后仅加载已挂载技能。',
   },
-  {
-    key: 'mcp_tools',
-    label: '我的 MCP',
-    shortLabel: 'MCP',
-    hint: '仅可选择个人已发布 MCP；平台公共 MCP 请在智能体版本中配置。选中后与版本 tools 叠加注入本会话。',
-  },
 ];
 const resourceScopeModalDraft = ref(emptyResourceScopeState());
 const resourceScopeSaving = ref(false);
@@ -3941,12 +3946,10 @@ const loadResourceOptions = async () => {
   resourceOptionsLoading.value = true;
   try {
     const skillAgentId = String(effectiveEmbedChatAgentId.value || '').trim();
-    const [datasets, knowledge, globalSkills, personalSkills, mcpTools] = await Promise.allSettled([
+    const [datasets, knowledge, globalSkills] = await Promise.allSettled([
       axios.get('/api/portal/metadata/datasets/accessible'),
       axios.get('/api/portal/ragflow/datasets', { params: { page: 1, page_size: 100, include_missing: false } }),
       axios.get('/api/portal/skills', skillAgentId ? { params: { agent_id: skillAgentId } } : undefined),
-      axios.get('/api/portal/skills/personal'),
-      axios.get('/api/portal/tools/mcp'),
     ]);
     if (datasets.status === 'fulfilled') {
       const raw = datasets.value.data;
@@ -3973,26 +3976,11 @@ const loadResourceOptions = async () => {
         }));
     }
     resourceOptions.skills = [];
-    for (const [result, scope] of [[globalSkills, 'global'], [personalSkills, 'personal']] as const) {
+    resourceOptions.mcp_tools = [];
+    for (const [result, scope] of [[globalSkills, 'global']] as const) {
       if (result.status === 'fulfilled') resourceOptions.skills.push(...(result.value.data?.data || [])
         .filter((item: any) => item.enabled === undefined || item.enabled === true || item.enabled === 'true' || item.enabled === 1 || item.enabled === '1')
         .map((item: any) => ({ id: String(item.id), name: item.name, description: item.description, scope })));
-    }
-    if (mcpTools.status === 'fulfilled') {
-      const raw = mcpTools.value.data;
-      const list = Array.isArray(raw) ? raw : (raw?.data || []);
-      resourceOptions.mcp_tools = list
-        .map((item: any) => ({
-          id: String(item.id || ''),
-          name: String(item.name || ''),
-          description: item.description || '',
-          server_name: item.server_name || '',
-          server_remark: item.server_remark || '',
-          scope: item.scope || 'global',
-        }))
-        .filter((item: any) => item.id && item.name && String(item.scope || '').toLowerCase() === 'personal');
-    } else {
-      resourceOptions.mcp_tools = [];
     }
     for (const group of resourceOptionGroups) {
       const options = resourceOptions[group.key] || [];
@@ -6505,6 +6493,9 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
     if (res.data && res.data.code === 200 && res.data.data?.session_token) {
       const sessionData = res.data.data;
       config.token = sessionData.session_token;
+      if (isEmbedSessionToken(sessionData.session_token)) {
+        strictTokenValidation.value = true;
+      }
       axios.defaults.headers.common["Authorization"] = `Bearer ${sessionData.session_token}`;
       axios.defaults.headers.common["X-API-Key"] = sessionData.session_token;
       if (sessionData.user_info) {
@@ -6785,13 +6776,21 @@ const hasPermission = ref(true); // Default to true, strictly controlled by vali
 /** 调试台 strict_token 模式：仅校验 INIT_CONFIG 传入的 token，不走 localStorage / Cookie 兜底。 */
 const strictTokenValidation = ref(false);
 
-/** 仅在服务端校验通过后写入，避免 URL 里陈旧的 ?token= 覆盖刚登录写入的 api_key（父页 Chat.vue postMessage 会读 localStorage）。 */
+/** 嵌入换票得到的短期令牌。和后台登录态共用同源 localStorage，不能写回去。 */
+const isEmbedSessionToken = (token?: string | null) => String(token || "").trim().startsWith("emb_ses_");
+
+/**
+ * 仅在服务端校验通过后写入。
+ * 嵌入会话令牌只留在当前页内存：它和后台共用 localStorage，写进 api_key 后刷新会用 emb_ses_ 调 /me，
+ * 角色被记成普通用户且管理接口 403，路由就会进「暂无界面权限」。
+ */
 const syncValidatedCredentials = (apiKey: string) => {
   config.token = apiKey;
-  localStorage.setItem("yovole_token", apiKey);
-  localStorage.setItem("api_key", apiKey);
   axios.defaults.headers.common["Authorization"] = `Bearer ${apiKey}`;
   axios.defaults.headers.common["X-API-Key"] = apiKey;
+  if (isEmbedSessionToken(apiKey)) return;
+  localStorage.setItem("yovole_token", apiKey);
+  localStorage.setItem("api_key", apiKey);
 };
 
 const validateToken = async (options?: { strict?: boolean }): Promise<boolean> => {
@@ -6874,8 +6873,11 @@ const validateToken = async (options?: { strict?: boolean }): Promise<boolean> =
       const body = await res.json();
       if (body?.status === "success" && body.data) {
         attachUser(body.data);
-        localStorage.removeItem("api_key");
-        localStorage.removeItem("yovole_token");
+        // 嵌入页和后台同源。这里清掉的是控制台登录态，不能在 iframe / 新窗口调试时删除。
+        if (!isEmbedLocation()) {
+          localStorage.removeItem("api_key");
+          localStorage.removeItem("yovole_token");
+        }
         delete axios.defaults.headers.common["Authorization"];
         delete axios.defaults.headers.common["X-API-Key"];
         config.token = "";
@@ -9153,6 +9155,8 @@ onMounted(() => {
   }
   const ticketFromUrl = query.get("ticket");
   if (ticketFromUrl) {
+    // 换票完成前就锁住，避免校验回退去改写后台 localStorage。
+    strictTokenValidation.value = true;
     console.log("[LifeCycle] Ticket found in URL. Exchanging for session token...");
     void (async () => {
       const ok = await exchangeTicketAndApply(ticketFromUrl);

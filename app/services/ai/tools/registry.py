@@ -414,23 +414,11 @@ class ToolRegistry:
 
     @staticmethod
     def _mcp_visible_scope_condition():
-        """Return the same public/personal visibility rule as the portal API."""
-        from app.core.context import get_current_agent_context
-
-        context = get_current_agent_context()
-        enabled_condition = McpServer.enabled_status == 1
-        global_condition = and_(
-            enabled_condition,
+        """只解析已启用的平台 MCP。"""
+        return and_(
+            McpServer.enabled_status == 1,
             or_(McpServer.scope == "global", McpServer.scope.is_(None)),
         )
-        if not context or context.user_id is None:
-            return global_condition
-        personal_condition = and_(
-            enabled_condition,
-            McpServer.scope == "personal",
-            McpServer.user_id == context.user_id,
-        )
-        return or_(global_condition, personal_condition)
 
     @classmethod
     async def get_tool(cls, name: str) -> Optional[Any]:

@@ -601,10 +601,10 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
         user_id = ctx.user_id if ctx else None
         is_admin = ctx.is_admin if ctx else False
         api_key = ctx.api_key if ctx else None
-        from app.services.embed_identity import embed_catalog_app_id
+        from app.services.embed_identity import embed_catalog_role_id
 
-        embed_app_id = embed_catalog_app_id((ctx.user_dimensions if ctx else None) or None)
-        if embed_app_id is not None:
+        embed_role_id = embed_catalog_role_id((ctx.user_dimensions if ctx else None) or None)
+        if embed_role_id is not None:
             is_admin = False
         authorized_dataset_ids = _normalize_metadata_dataset_ids(metadata_dataset_ids)
 
@@ -626,7 +626,7 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
                         is_admin=is_admin,
                         api_key=api_key,
                         authorized_dataset_ids=authorized_dataset_ids,
-                        embed_app_id=embed_app_id,
+                        embed_role_id=embed_role_id,
                     )
                     span.set_output(res)
                     return res
@@ -639,7 +639,7 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
                     is_admin=is_admin,
                     api_key=api_key,
                     authorized_dataset_ids=authorized_dataset_ids,
-                    embed_app_id=embed_app_id,
+                    embed_role_id=embed_role_id,
                 )
 
     except Exception as e:

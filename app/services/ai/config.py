@@ -315,7 +315,11 @@ class AgentConfigProvider:
             return None
 
     @staticmethod
-    async def _generate_dataset_menu_content(user_id: Optional[int] = None, is_admin: bool = False) -> str:
+    async def _generate_dataset_menu_content(
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
+        embed_role_id: Optional[int] = None,
+    ) -> str:
         """
         Internal method to generate the dataset menu string from DB, filtered by permissions and status.
         """
@@ -332,7 +336,8 @@ class AgentConfigProvider:
                     session,
                     query=None,
                     user_id=user_id,
-                    is_admin=is_admin,
+                    is_admin=is_admin and embed_role_id is None,
+                    embed_role_id=embed_role_id,
                     status=1 # 仅限启用状态
                 )
             
@@ -397,15 +402,40 @@ class AgentConfigProvider:
             return menu + f"  (System Error: Failed to load dataset menu)"
 
     @staticmethod
-    async def get_dataset_menu(user_id: Optional[int] = None, is_admin: bool = False, force_refresh: bool = False) -> str:
+    def _embed_role_id_from_context() -> Optional[int]:
+        try:
+            from app.core.context import get_current_agent_context
+            from app.services.embed_identity import embed_catalog_role_id
+
+            ctx = get_current_agent_context()
+            dims = getattr(ctx, "user_dimensions", None) if ctx is not None else None
+            return embed_catalog_role_id(dims)
+        except Exception:
+            return None
+
+    @staticmethod
+    async def get_dataset_menu(
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
+        force_refresh: bool = False,
+        embed_role_id: Optional[int] = None,
+    ) -> str:
         """
         Fetches authorized datasets to assist LLM reasoning. Cached via Redis per user.
+        嵌入会话优先按关联角色取数据集，避免沿用签发人的目录。
         """
         from app.core.redis import get_redis
         redis = await get_redis()
-        
-        # 1. Try Cache (按用户隔离，admin 共享一个 key)
-        cache_key = f"agent:dataset_menu:{'admin' if is_admin else user_id or 'anon'}"
+        if embed_role_id is None:
+            embed_role_id = AgentConfigProvider._embed_role_id_from_context()
+        if embed_role_id is not None:
+            is_admin = False
+
+        # 1. Try Cache (按用户隔离，admin 共享一个 key；嵌入按角色隔离)
+        if embed_role_id is not None:
+            cache_key = f"agent:dataset_menu:embed_role:{embed_role_id}"
+        else:
+            cache_key = f"agent:dataset_menu:{'admin' if is_admin else user_id or 'anon'}"
         if not force_refresh:
             try:
                 if redis:
@@ -416,7 +446,11 @@ class AgentConfigProvider:
                 logger.warning(f"Redis error for dataset menu: {e}")
 
         # 2. Cache Miss: Fetch from DB
-        content = await AgentConfigProvider._generate_dataset_menu_content(user_id, is_admin)
+        content = await AgentConfigProvider._generate_dataset_menu_content(
+            user_id,
+            is_admin,
+            embed_role_id,
+        )
 
         # 3. Save to Cache (TTL: 90 days)
         try:

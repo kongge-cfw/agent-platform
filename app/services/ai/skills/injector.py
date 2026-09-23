@@ -487,10 +487,7 @@ class SkillInjector:
         full_loaded_count = 0
 
         if active_skills:
-            from app.services.ai.skill_resolver import (
-                get_user_personal_skills_dir,
-                load_skill_md_content,
-            )
+            from app.services.ai.skill_resolver import load_skill_md_content
             from app.utils.skill_metadata import parse_skill_frontmatter
 
             for skill_obj in active_skills:
@@ -513,12 +510,11 @@ class SkillInjector:
 
                 skill_scope = skill_scope or str(skill_obj.get("scope") or "").strip().lower() or None
                 candidate_paths: list[str] = []
+                if skill_scope == "personal":
+                    logger.info("[Skills] Skip removed personal skill %s", skill_id)
+                    continue
                 if explicit_skill_md_path:
                     candidate_paths.append(str(explicit_skill_md_path))
-                if skill_scope == "personal":
-                    personal_dir = get_user_personal_skills_dir(user_info)
-                    if personal_dir:
-                        candidate_paths.append(os.path.join(personal_dir, skill_id, "SKILL.md"))
                 candidate_paths.append(os.path.join(settings.SKILLS_DIR, skill_id, "SKILL.md"))
 
                 skill_md_path = next(

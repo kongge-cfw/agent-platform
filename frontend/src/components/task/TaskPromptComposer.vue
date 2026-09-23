@@ -645,13 +645,11 @@ const removeChip = (chip: { key: string; group: keyof TaskResourceScope }) => {
 const loadOptions = async () => {
   optionsLoading.value = true
   try {
-    const [models, datasets, knowledge, globalSkills, personalSkills, mcpTools] = await Promise.allSettled([
+    const [models, datasets, knowledge, globalSkills] = await Promise.allSettled([
       modelApi.list(),
       axios.get('/api/portal/metadata/datasets/accessible'),
       axios.get('/api/portal/ragflow/datasets', { params: { page: 1, page_size: 100, include_missing: false } }),
       axios.get('/api/portal/skills'),
-      axios.get('/api/portal/skills/personal'),
-      axios.get('/api/portal/tools/mcp'),
     ])
     if (models.status === 'fulfilled') {
       availableModels.value = (models.value.data || []).filter(
@@ -684,7 +682,6 @@ const loadOptions = async () => {
     const skills: TaskScopeItem[] = []
     for (const [result, scope] of [
       [globalSkills, 'global'],
-      [personalSkills, 'personal'],
     ] as const) {
       if (result.status !== 'fulfilled') continue
       for (const item of result.value.data?.data || []) {
@@ -698,24 +695,7 @@ const loadOptions = async () => {
       }
     }
     optionLists.value.skills = skills
-    if (mcpTools.status === 'fulfilled') {
-      const raw = mcpTools.value.data
-      const list = Array.isArray(raw) ? raw : raw?.data || []
-      optionLists.value.mcp_tools = list
-        .map((item: any) => ({
-          id: String(item.id || ''),
-          name: String(item.name || ''),
-          description: item.description || '',
-          server_name: item.server_name || '',
-          server_remark: item.server_remark || '',
-          scope: item.scope || 'global',
-        }))
-        // 与 EmbedChat / 服务端收敛一致：任务动态挂载仅个人已发布 MCP
-        .filter(
-          (item: TaskScopeItem) =>
-            item.id && item.name && String(item.scope || '').toLowerCase() === 'personal',
-        )
-    }
+    optionLists.value.mcp_tools = []
   } finally {
     optionsLoading.value = false
   }
@@ -871,6 +851,7 @@ watch(
       </button>
 
       <button
+        v-if="false"
         :ref="(el) => setTriggerRef('mcp_tools', el)"
         type="button"
         class="inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold transition"
@@ -1222,7 +1203,7 @@ watch(
 
         <!-- 技能：平台 / 个人 Tab，对齐 EmbedChat -->
         <div
-          v-if="activePanel === 'skills'"
+          v-if="false && activePanel === 'skills'"
           class="mx-2 mt-2 flex shrink-0 items-center gap-1 rounded-lg bg-gray-50 p-0.5"
         >
           <button
@@ -1236,19 +1217,6 @@ watch(
             平台
             <span class="ml-0.5 text-[10px] font-normal text-gray-400">
               ({{ skillScopeSelectedCount('global') }}/{{ skillScopeTotalCount('global') }})
-            </span>
-          </button>
-          <button
-            type="button"
-            class="flex-1 rounded-md py-1.5 text-center text-xs font-semibold transition-colors"
-            :class="skillScopeTab === 'personal'
-              ? 'bg-white text-emerald-700 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'"
-            @click="skillScopeTab = 'personal'"
-          >
-            我的
-            <span class="ml-0.5 text-[10px] font-normal text-gray-400">
-              ({{ skillScopeSelectedCount('personal') }}/{{ skillScopeTotalCount('personal') }})
             </span>
           </button>
         </div>

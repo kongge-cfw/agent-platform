@@ -220,15 +220,25 @@ async def fetch_authorized_knowledge_catalog(
     permission_service: Any = None,
     tenant_id: Optional[str] = None,
     isolate_by_tenant: bool = False,
+    embed_role_id: Optional[int] = None,
 ) -> AuthorizedKnowledgeCatalog:
     """在已有数据库会话中读取完整的、权限过滤后的知识库目录。"""
-    if user_id is None:
+    if user_id is None and embed_role_id is None:
         return AuthorizedKnowledgeCatalog(status="empty")
 
-    access = await (permission_service or PermissionService(db)).get_knowledge_base_access(
-        int(user_id),
-        user_name,
-    )
+    service = permission_service or PermissionService(db)
+    if embed_role_id is not None:
+        allowed_role_ids = await service.get_role_knowledge_base_ids(int(embed_role_id))
+        access = {
+            "is_admin": False,
+            "accessible_ids": allowed_role_ids,
+            "writable_ids": set(),
+        }
+    else:
+        access = await service.get_knowledge_base_access(
+            int(user_id),
+            user_name,
+        )
     rows = list(
         (
             await db.execute(
@@ -272,9 +282,10 @@ async def load_authorized_knowledge_catalog(
     user_id: Optional[int],
     user_name: Optional[str] = None,
     is_admin: bool = False,
+    embed_role_id: Optional[int] = None,
 ) -> AuthorizedKnowledgeCatalog:
     """打开独立会话读取目录；异常状态不伪装成“无匹配”。"""
-    if user_id is None:
+    if user_id is None and embed_role_id is None:
         return AuthorizedKnowledgeCatalog(status="empty")
     try:
         async with AsyncSessionLocal() as db:
@@ -283,6 +294,7 @@ async def load_authorized_knowledge_catalog(
                 user_id=user_id,
                 user_name=user_name,
                 is_admin=is_admin,
+                embed_role_id=embed_role_id,
             )
     except Exception as exc:  # noqa: BLE001 - routing must remain available
         logger.warning("Failed to load authorized knowledge catalog: %s", exc)

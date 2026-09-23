@@ -361,12 +361,10 @@ async def list_mcp_servers(
     db: AsyncSession = Depends(get_db_session),
     user: Dict = Depends(require_api_key)
 ):
-    """List MCP servers filtered by scope (global / personal). Personal servers are strictly isolated by current user."""
+    """列出平台 MCP 服务。个人 MCP 已取消。"""
     if scope == "personal":
-        user_id = _get_user_id(user)
-        stmt = select(McpServer).where(McpServer.scope == "personal", McpServer.user_id == user_id)
-    else:
-        stmt = select(McpServer).where(McpServer.scope == "global")
+        return []
+    stmt = select(McpServer).where(McpServer.scope == "global")
 
     result = await db.execute(stmt)
     servers = result.scalars().all()
@@ -503,7 +501,9 @@ async def create_mcp_server(
 ):
     is_admin = user.get("role") == "admin"
     target_scope = data.scope or "global"
-    
+    if target_scope == "personal":
+        raise HTTPException(status_code=400, detail="平台已取消个人 MCP，只能创建平台 MCP 服务")
+
     if target_scope == "global" and not is_admin:
         raise HTTPException(status_code=403, detail="只有系统管理员才能创建平台公共 MCP 服务")
 
@@ -517,7 +517,7 @@ async def create_mcp_server(
     if existing_name:
         raise HTTPException(status_code=400, detail=f"服务显示名称 '{server_name}' 已存在，请修改名称后保存")
 
-    user_id = _get_user_id(user) if target_scope == "personal" else None
+    user_id = None
     server_id = str(uuid.uuid4())
     server_data = data.model_dump(exclude={"fixed_token", "authorization_enabled", "auth_headers_patch"})
     auth_headers = _parse_auth_headers(data.auth_headers)

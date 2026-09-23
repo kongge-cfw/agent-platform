@@ -264,13 +264,15 @@ async def list_accessible_datasets(
     from app.services.embed_identity import resolve_catalog_acl
 
     acl = resolve_catalog_acl(user)
+    embed_role_id = acl.get("embed_role_id")
     datasets = await MetadataService.list_accessible_dataset_options(
         conn,
         user_id=acl.get("user_id"),
-        is_admin=bool(acl.get("is_admin")),
+        is_admin=bool(acl.get("is_admin")) and embed_role_id is None,
         status=1,
         tenant_id=acl.get("tenant_id") or "",
         isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+        embed_role_id=embed_role_id,
     )
     return datasets
 
@@ -347,11 +349,9 @@ async def get_metadata_dataset_permissions(
 
     user_ids = [p.user_id for p in perms if p.user_id is not None]
     role_ids = [p.role_id for p in perms if p.role_id is not None]
-    embed_app_ids = [p.embed_app_id for p in perms if p.embed_app_id]
 
     granted_users = []
     granted_roles = []
-    granted_embed_apps = []
 
     if user_ids:
         user_stmt = select(User.id, User.user_name, User.real_name).where(User.id.in_(user_ids), User.status == 1)
@@ -363,33 +363,21 @@ async def get_metadata_dataset_permissions(
         role_res = await conn.execute(role_stmt)
         granted_roles = [{"id": r.id, "code": r.code, "name": r.name} for r in role_res.all()]
 
-    if embed_app_ids:
-        from app.models.embed_app import SysEmbedApp
-
-        app_stmt = select(SysEmbedApp.id, SysEmbedApp.app_key, SysEmbedApp.name).where(
-            SysEmbedApp.id.in_(embed_app_ids)
-        )
-        app_res = await conn.execute(app_stmt)
-        granted_embed_apps = [
-            {"id": row.id, "app_key": row.app_key, "name": row.name} for row in app_res.all()
-        ]
-
     return {
         "code": 0,
         "data": {
             "users": granted_users,
             "roles": granted_roles,
-            "embed_apps": granted_embed_apps,
         }
     }
 
 
 class AddPermissionsRequest(BaseModel):
-    target_type: str  # "user"、"role" 或 "embed_app"
+    target_type: str  # "user" 或 "role"
     target_ids: List[Union[int, str]]
 
 class DeletePermissionRequest(BaseModel):
-    target_type: str  # "user"、"role" 或 "embed_app"
+    target_type: str  # "user" 或 "role"
     target_id: Union[int, str]
 
 
@@ -411,22 +399,11 @@ async def get_metadata_auth_candidates(
     user_res = await conn.execute(user_stmt)
     users = [{"id": u.id, "user_name": u.user_name, "real_name": u.real_name} for u in user_res.all()]
 
-    from app.models.embed_app import SysEmbedApp
-
-    app_stmt = select(SysEmbedApp.id, SysEmbedApp.app_key, SysEmbedApp.name).where(
-        SysEmbedApp.is_active == True
-    ).order_by(SysEmbedApp.name.asc())
-    app_res = await conn.execute(app_stmt)
-    embed_apps = [
-        {"id": row.id, "app_key": row.app_key, "name": row.name} for row in app_res.all()
-    ]
-
     return {
         "code": 0,
         "data": {
             "roles": roles,
             "users": users,
-            "embed_apps": embed_apps,
         }
     }
 
@@ -451,17 +428,7 @@ async def add_metadata_dataset_permissions(
             ResourcePermission.resource_type == "metadata",
             ResourcePermission.resource_id == str(dataset_id)
         )
-        if payload.target_type == "embed_app":
-            app_id = str(raw_tid).strip()
-            if not app_id:
-                continue
-            from app.models.embed_app import SysEmbedApp
-
-            app = await conn.get(SysEmbedApp, app_id)
-            if app is None or not app.is_active:
-                raise HTTPException(status_code=400, detail=f"嵌入应用不存在或已停用: {app_id}")
-            stmt = stmt.where(ResourcePermission.embed_app_id == app_id)
-        elif payload.target_type == "user":
+        if payload.target_type == "user":
             tid = int(raw_tid)
             stmt = stmt.where(ResourcePermission.user_id == tid)
             affected_user_ids.add(tid)
@@ -485,9 +452,7 @@ async def add_metadata_dataset_permissions(
                 resource_id=str(dataset_id),
                 enabled=True
             )
-            if payload.target_type == "embed_app":
-                new_perm.embed_app_id = str(raw_tid).strip()
-            elif payload.target_type == "user":
+            if payload.target_type == "user":
                 new_perm.user_id = int(raw_tid)
             else:
                 new_perm.role_id = int(raw_tid)
@@ -533,9 +498,7 @@ async def delete_metadata_dataset_permission(
         ResourcePermission.resource_type == "metadata",
         ResourcePermission.resource_id == str(dataset_id)
     )
-    if payload.target_type == "embed_app":
-        stmt = stmt.where(ResourcePermission.embed_app_id == str(payload.target_id).strip())
-    elif payload.target_type == "user":
+    if payload.target_type == "user":
         stmt = stmt.where(ResourcePermission.user_id == int(payload.target_id))
     else:
         stmt = stmt.where(ResourcePermission.role_id == int(payload.target_id))

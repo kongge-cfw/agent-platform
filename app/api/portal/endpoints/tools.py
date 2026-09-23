@@ -18,21 +18,13 @@ async def list_published_mcp_tools(
     db: AsyncSession = Depends(get_db_session),
     user: Dict = Depends(require_api_key),
 ):
-    """列出已发布的 MCP 工具：包含平台公共 MCP 工具，以及当前登录用户自己创建的个人私有 MCP 工具。"""
+    """列出已发布的平台 MCP 工具。"""
     from sqlalchemy.orm import joinedload
-    from sqlalchemy import or_, and_
+    from sqlalchemy import or_
     from app.models.mcp import McpServer
-    
-    current_user_id = user.get("user_id") if user.get("user_id") is not None else user.get("id")
-    try:
-        current_user_id = int(current_user_id) if current_user_id is not None else None
-    except Exception:
-        pass
-    
-    # 1. 平台公共 MCP 服务 (scope == 'global' 或历史 NULL)
+
+    del user
     global_cond = or_(McpServer.scope == "global", McpServer.scope.is_(None))
-    # 2. 当前登录用户的个人私有 MCP 服务 (scope == 'personal' 且 user_id == current_user_id)
-    personal_cond = and_(McpServer.scope == "personal", McpServer.user_id == current_user_id)
 
     stmt = (
         select(McpToolCache)
@@ -42,7 +34,7 @@ async def list_published_mcp_tools(
             McpToolCache.is_published == True,
             McpToolCache.is_available == True,
             McpServer.enabled_status == 1,
-            or_(global_cond, personal_cond)
+            global_cond,
         )
     )
     result = await db.execute(stmt)

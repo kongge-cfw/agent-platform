@@ -33,7 +33,6 @@ _EMBED_ALLOWED = (
     ("GET", "/api/portal/ragflow/datasets"),
     ("GET", "/api/portal/ragflow/datasets/*/documents/*/file"),
     ("GET", "/api/portal/skills"),
-    ("GET", "/api/portal/skills/personal"),
     ("GET", "/api/portal/tools/mcp"),
     ("*", "/api/portal/slash-commands"),
     ("*", "/api/portal/slash-commands/"),

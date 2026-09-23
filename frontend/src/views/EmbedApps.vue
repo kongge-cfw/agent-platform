@@ -6,6 +6,7 @@ import {
   ClipboardDocumentIcon,
   MagnifyingGlassIcon,
   PencilSquareIcon,
+  PlayIcon,
   PlusIcon,
   QuestionMarkCircleIcon,
   TrashIcon,
@@ -17,11 +18,13 @@ import ConfirmModal from '../components/ConfirmModal.vue'
 import Switch from '../components/Switch.vue'
 import { useToast } from '../composables/useToast'
 import { useUser } from '../composables/useUser'
+import axios from '../utils/axios'
+import { withAppBase } from '../utils/appBase'
 import { copyToClipboard } from '../utils/clipboard'
 import { isPlatformMainAgent } from '../utils/delegationHost'
 
 const { showToast } = useToast()
-const { hasPermission } = useUser()
+const { hasPermission, userInfo } = useUser()
 const canCreate = hasPermission('element:embed_apps:create')
 const canEdit = hasPermission('element:embed_apps:edit')
 const canDelete = hasPermission('element:embed_apps:delete')
@@ -333,6 +336,69 @@ const saveApp = async () => {
   }
 }
 
+const debugApp = ref<SysEmbedApp | null>(null)
+const debugFrameSrc = ref('')
+const debuggingKey = ref('')
+
+const ticketErrorMessage = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail
+  if (Array.isArray(detail)) {
+    return detail.map((item: any) => item.msg || item).join('; ')
+  }
+  if (typeof detail === 'string' && detail.trim()) return detail
+  const message = error?.response?.data?.message
+  if (typeof message === 'string' && message.trim() && message !== 'success') return message
+  return error?.message || fallback
+}
+
+const openEmbedDebug = async (app: SysEmbedApp) => {
+  if (!app.is_active) {
+    showToast('应用已停用，无法调试', 'warning')
+    return
+  }
+  if (debuggingKey.value) return
+  debuggingKey.value = app.app_key
+  try {
+    const payload: Record<string, unknown> = {
+      app_key: app.app_key,
+      expires_in: 300,
+    }
+    if (app.lock_entry_agent && app.default_entry_agent_id) {
+      payload.agent_id = app.default_entry_agent_id
+    }
+    if (app.require_identity) {
+      const user = userInfo.value || {}
+      const subject = String(user.user_name || '').trim()
+      if (!subject) {
+        showToast('当前账号缺少用户名，无法按业务身份签发调试票据', 'error')
+        return
+      }
+      payload.identity = {
+        subject,
+        display_name: String(user.real_name || subject),
+        dept_code: String(user.dept_code || ''),
+        org_path: String(user.org_path || ''),
+      }
+    }
+    const res = await axios.post('/api/v1/embed/tickets', payload)
+    const ticket = res.data?.data?.ticket
+    if (res.data?.code !== 200 || !ticket) {
+      throw new Error(res.data?.message || '签发调试票据失败')
+    }
+    debugApp.value = app
+    debugFrameSrc.value = withAppBase(`/embed/chat?ticket=${encodeURIComponent(ticket)}`)
+  } catch (error: any) {
+    showToast(String(ticketErrorMessage(error, '签发调试票据失败')), 'error')
+  } finally {
+    debuggingKey.value = ''
+  }
+}
+
+const closeEmbedDebug = () => {
+  debugApp.value = null
+  debugFrameSrc.value = ''
+}
+
 const openPromptModal = (app: SysEmbedApp) => {
   promptApp.value = app
   const items = (app.shortcut_prompts || []).map((item) => ({
@@ -424,9 +490,14 @@ const onResize = () => {
   windowWidth.value = window.innerWidth
 }
 
+const onDebugKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && debugApp.value) closeEmbedDebug()
+}
+
 onMounted(() => {
   window.addEventListener('resize', onResize)
   document.addEventListener('click', closeMenus)
+  document.addEventListener('keydown', onDebugKeydown)
   void fetchApps()
   void fetchRoles()
 })
@@ -434,6 +505,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   document.removeEventListener('click', closeMenus)
+  document.removeEventListener('keydown', onDebugKeydown)
 })
 </script>
 
@@ -588,6 +660,16 @@ onUnmounted(() => {
                 <div class="flex items-center justify-end gap-1">
                   <button
                     type="button"
+                    class="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
+                    :disabled="!app.is_active || debuggingKey === app.app_key"
+                    :title="app.is_active ? '用业务系统同样的 iframe 调试该应用' : '应用已停用'"
+                    @click="openEmbedDebug(app)"
+                  >
+                    <PlayIcon class="h-4 w-4" />
+                    {{ debuggingKey === app.app_key ? '签发中…' : '对话调试' }}
+                  </button>
+                  <button
+                    type="button"
                     class="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-primary/10"
                     @click="openPromptModal(app)"
                   >
@@ -673,10 +755,21 @@ onUnmounted(() => {
               <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{{ permissionLabel(app) }}</span>
               <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{{ originLabel(app) }}</span>
             </div>
-            <button type="button" class="inline-flex items-center gap-1 text-xs text-primary" @click="openPromptModal(app)">
-              <ChatBubbleLeftRightIcon class="h-4 w-4" />
-              提示词 {{ app.shortcut_prompts?.length || 0 }}
-            </button>
+            <div class="flex shrink-0 items-center gap-3">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-xs text-primary disabled:cursor-not-allowed disabled:text-gray-300"
+                :disabled="!app.is_active || debuggingKey === app.app_key"
+                @click="openEmbedDebug(app)"
+              >
+                <PlayIcon class="h-4 w-4" />
+                {{ debuggingKey === app.app_key ? '签发中…' : '对话调试' }}
+              </button>
+              <button type="button" class="inline-flex items-center gap-1 text-xs text-primary" @click="openPromptModal(app)">
+                <ChatBubbleLeftRightIcon class="h-4 w-4" />
+                提示词 {{ app.shortcut_prompts?.length || 0 }}
+              </button>
+            </div>
           </div>
         </article>
       </div>
@@ -1123,6 +1216,35 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <Teleport to="body">
+    <div
+      v-if="debugApp && debugFrameSrc"
+      class="fixed inset-0 z-[10060] flex flex-col bg-gray-950"
+      @keydown.esc="closeEmbedDebug"
+    >
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-gray-950 px-4 py-2.5 text-white">
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold">对话调试 · {{ debugApp.name }}</p>
+          <p class="truncate text-[11px] text-white/55">与业务系统相同：iframe 加载 /embed/chat?ticket=…</p>
+        </div>
+        <button
+          type="button"
+          class="inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-white/80 hover:bg-white/10 hover:text-white"
+          @click="closeEmbedDebug"
+        >
+          <XMarkIcon class="h-4 w-4" />
+          关闭
+        </button>
+      </div>
+      <iframe
+        class="min-h-0 w-full flex-1 border-0 bg-white"
+        :src="debugFrameSrc"
+        :title="`对话调试 ${debugApp.name}`"
+        allow="clipboard-read; clipboard-write"
+      ></iframe>
+    </div>
+    </Teleport>
 
     <ConfirmModal
       v-if="showDeleteConfirm"

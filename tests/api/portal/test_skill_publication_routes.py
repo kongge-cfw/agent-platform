@@ -6,7 +6,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.portal.endpoints import personal_skills, skills
+from app.api.portal.endpoints import skills
 from app.core.dependencies import require_api_key, require_permission
 
 
@@ -23,7 +23,6 @@ async def _fake_admin():
 
 def _build_app() -> FastAPI:
     portal = APIRouter()
-    portal.include_router(personal_skills.router, prefix="/skills/personal")
     portal.include_router(skills.router, prefix="/skills")
     app = FastAPI()
     app.dependency_overrides[require_api_key] = _fake_user
@@ -33,8 +32,8 @@ def _build_app() -> FastAPI:
 
 def test_personal_publication_submit_route_exists():
     routes = {route.path for route in _build_app().routes}
-    assert "/api/portal/skills/personal/{skill_id}/publication-requests" in routes
-    assert "/api/portal/skills/personal/{skill_id}/publication-requests/withdraw" in routes
+    assert "/api/portal/skills/personal/{skill_id}/publication-requests" not in routes
+    assert "/api/portal/skills/personal/{skill_id}/publication-requests/withdraw" not in routes
 
 
 def test_admin_publication_review_routes_exist():
@@ -42,46 +41,6 @@ def test_admin_publication_review_routes_exist():
     assert "/api/portal/skills/publication-requests" in routes
     assert "/api/portal/skills/publication-requests/{version_id}/approve" in routes
     assert "/api/portal/skills/publication-requests/{version_id}/reject" in routes
-
-
-def test_personal_submit_returns_publication_summary(monkeypatch):
-    expected = {
-        "publication_id": "publication-1",
-        "version_id": "version-1",
-        "publication_status": "PENDING",
-        "version_number": 1,
-    }
-    monkeypatch.setattr(
-        "app.api.portal.endpoints.personal_skills.submit_personal_skill",
-        AsyncMock(return_value=expected),
-    )
-
-    response = TestClient(_build_app()).post(
-        "/api/portal/skills/personal/demo/publication-requests"
-    )
-
-    assert response.status_code == 200
-    assert response.json()["data"] == expected
-
-
-def test_personal_withdraw_returns_publication_summary(monkeypatch):
-    expected = {
-        "publication_id": "publication-1",
-        "version_id": "version-1",
-        "publication_status": "WITHDRAWN",
-        "version_status": "WITHDRAWN",
-    }
-    monkeypatch.setattr(
-        "app.api.portal.endpoints.personal_skills.withdraw_personal_skill_publication",
-        AsyncMock(return_value=expected),
-    )
-
-    response = TestClient(_build_app()).post(
-        "/api/portal/skills/personal/demo/publication-requests/withdraw"
-    )
-
-    assert response.status_code == 200
-    assert response.json()["data"] == expected
 
 
 def test_reject_requires_non_blank_comment():

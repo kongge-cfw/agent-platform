@@ -29,24 +29,24 @@ async def normalize_resource_scope_for_user(
     from app.models.knowledge import KnowledgeBaseMetadata
     from app.services.metadata_service import MetadataService
     from app.core.config import settings
-    from app.services.ai.skill_resolver import get_user_personal_skills_dir
     from app.services.permission_service import PermissionService
     from app.api.portal.endpoints.skills import parse_skill_metadata
     from app.services.embed_identity import resolve_catalog_acl, resource_visible_for_tenant
-    from sqlalchemy import and_, select
-    from sqlalchemy.orm import joinedload
+    from sqlalchemy import select
 
     raw_scope = raw_scope if isinstance(raw_scope, dict) else {}
     acl = resolve_catalog_acl(user_info)
     user_id = acl.get("user_id")
     is_admin = bool(acl.get("is_admin"))
+    embed_role_id = acl.get("embed_role_id")
     datasets = await MetadataService.list_accessible_dataset_options(
         db,
         user_id=user_id,
-        is_admin=is_admin,
+        is_admin=is_admin and embed_role_id is None,
         status=1,
         tenant_id=acl.get("tenant_id") or "",
         isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+        embed_role_id=embed_role_id,
     )
     dataset_by_token: Dict[str, Any] = {}
     for dataset in datasets:
@@ -78,9 +78,17 @@ async def normalize_resource_scope_for_user(
             "description": str(getattr(dataset, "description", None) or ""),
         }
 
-    kb_access = await PermissionService(db).get_knowledge_base_access(
-        int(user_id), acl.get("user_name") or user_info.get("user_name")
-    ) if user_id is not None else {"is_admin": False, "accessible_ids": set()}
+    if embed_role_id is not None:
+        kb_access = {
+            "is_admin": False,
+            "accessible_ids": await PermissionService(db).get_role_knowledge_base_ids(int(embed_role_id)),
+        }
+    elif user_id is not None:
+        kb_access = await PermissionService(db).get_knowledge_base_access(
+            int(user_id), acl.get("user_name") or user_info.get("user_name")
+        )
+    else:
+        kb_access = {"is_admin": False, "accessible_ids": set()}
     kb_stmt = select(KnowledgeBaseMetadata).where(KnowledgeBaseMetadata.status != "deleted")
     kb_rows = list((await db.execute(kb_stmt)).scalars().all())
     allowed_kb_ids = kb_access.get("accessible_ids")
@@ -138,10 +146,6 @@ async def normalize_resource_scope_for_user(
             }
 
     collect_skills(str(getattr(settings, "SKILLS_DIR", "") or ""), "global")
-    try:
-        collect_skills(str(get_user_personal_skills_dir(user_info) or ""), "personal")
-    except Exception:
-        pass
 
     normalized_skills: list[Dict[str, Any]] = []
     for item in raw_scope.get("skills", []) or []:
@@ -149,72 +153,17 @@ async def normalize_resource_scope_for_user(
             continue
         skill_id = str(item.get("id") or "").strip()
         requested_scope = str(item.get("scope") or "").strip().lower()
-        candidates = (
-            [(requested_scope, skill_id.casefold())]
-            if requested_scope in {"global", "personal"}
-            else [("global", skill_id.casefold()), ("personal", skill_id.casefold())]
-        )
+        if requested_scope == "personal":
+            continue
+        candidates = [("global", skill_id.casefold())]
         skill = next((skill_by_token.get(key) for key in candidates if skill_by_token.get(key)), None)
         if skill:
             normalized_skills.append(skill)
-
-    from app.models.mcp import McpServer, McpToolCache
-
-    mcp_personal_cond = and_(
-        McpServer.scope == "personal",
-        McpServer.user_id == int(user_id) if user_id is not None else -1,
-    )
-    # 会话动态挂载仅允许个人已发布 MCP；平台 MCP 走智能体版本配置
-    mcp_stmt = (
-        select(McpToolCache)
-        .join(McpToolCache.server)
-        .options(joinedload(McpToolCache.server))
-        .where(
-            McpToolCache.is_published == True,  # noqa: E712
-            McpToolCache.is_available == True,  # noqa: E712
-            mcp_personal_cond if user_id is not None else False,
-        )
-    )
-    mcp_rows = list((await db.execute(mcp_stmt)).scalars().unique().all())
-    mcp_by_token: Dict[str, Dict[str, Any]] = {}
-    for row in mcp_rows:
-        server = row.server
-        snapshot = {
-            "id": str(row.id),
-            "name": str(row.tool_name or ""),
-            "description": str(row.tool_description or ""),
-            "server_name": str(getattr(server, "server_name", None) or "Unknown"),
-            "scope": str(getattr(server, "scope", None) or "global"),
-        }
-        if not snapshot["name"]:
-            continue
-        for token in (snapshot["id"], snapshot["name"]):
-            if token.strip():
-                mcp_by_token[token.strip().casefold()] = snapshot
-
-    normalized_mcp_tools: list[Dict[str, Any]] = []
-    seen_mcp_names: set[str] = set()
-    for item in raw_scope.get("mcp_tools", []) or []:
-        if not isinstance(item, dict):
-            continue
-        matched = None
-        for key in ("id", "name"):
-            token = str(item.get(key) or "").strip().casefold()
-            if token and token in mcp_by_token:
-                matched = mcp_by_token[token]
-                break
-        if not matched:
-            continue
-        name = matched["name"]
-        if name in seen_mcp_names:
-            continue
-        seen_mcp_names.add(name)
-        normalized_mcp_tools.append(matched)
 
     return {
         "project_name": str(raw_scope.get("project_name") or "").strip()[:100],
         "datasets": [item for raw in raw_scope.get("datasets", []) or [] if (item := normalize_dataset(raw))],
         "knowledge_bases": [item for raw in raw_scope.get("knowledge_bases", []) or [] if (item := normalize_kb(raw))],
         "skills": normalized_skills,
-        "mcp_tools": normalized_mcp_tools,
+        "mcp_tools": [],
     }

@@ -1594,6 +1594,7 @@ async def create_chat_completion(
                 is_admin=bool(acl.get("is_admin")),
                 tenant_id=acl.get("tenant_id") or "",
                 isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+                embed_role_id=acl.get("embed_role_id"),
             )
         authorized_resource_scope = accessible_resource_snapshot.counts
     except Exception as exc:  # 目录统计只用于可观测性，不能阻断聊天请求

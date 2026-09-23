@@ -27,12 +27,6 @@ const PersonalTokenUsage = defineAsyncComponent(
 const DataPortalHome = defineAsyncComponent(
   () => import('@/views/DataPortalHome.vue'),
 )
-const SkillsManagement = defineAsyncComponent(
-  () => import('@/views/SkillsManagement.vue'),
-)
-const McpManagement = defineAsyncComponent(
-  () => import('@/views/McpManagement.vue'),
-)
 const TaskCenter = defineAsyncComponent(
   () => import('@/views/TaskCenter.vue'),
 )
@@ -108,8 +102,6 @@ const setTab = (tab: PersonalResourceTab) => {
           @open-conversation="emit('open-conversation', $event)"
           @open-question="emit('open-question', $event)"
         />
-        <SkillsManagement v-else-if="activeTab === 'skills'" personal-only />
-        <McpManagement v-else-if="activeTab === 'mcp'" personal-only />
         <TaskCenter
           v-else-if="activeTab === 'tasks'"
           personal-only

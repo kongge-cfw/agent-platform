@@ -409,8 +409,6 @@ class AgentContextManager:
                     logger.warning(f"Failed to parse or flatten extra_data: {e}")
 
             user_dims["extra_data"] = extra_data
-        else:
-            from app.services.embed_identity import is_embed_session
 
         from app.services.ai.knowledge_utils import merge_dataset_id_sources
 
@@ -433,18 +431,25 @@ class AgentContextManager:
                 else config.agent_dataset_ids
             )
         )
-        if request_dataset_ids:
-            if is_embed_session(user_info):
-                allowed = set(configured_agent_dataset_ids or [])
+        from app.services.embed_identity import embed_catalog_role_id
+
+        embed_role_for_knowledge = embed_catalog_role_id(user_info)
+        if embed_role_for_knowledge is not None:
+            from app.services.permission_service import PermissionService
+
+            async with AsyncSessionLocal() as session:
+                role_kb_ids = await PermissionService(session).get_role_knowledge_base_ids(
+                    int(embed_role_for_knowledge)
+                )
+            if request_dataset_ids:
                 effective_dataset_ids = [
-                    dataset_id for dataset_id in request_dataset_ids if dataset_id in allowed
+                    dataset_id for dataset_id in request_dataset_ids if dataset_id in role_kb_ids
                 ]
             else:
-                # 用户显式选择是硬范围，不能被智能体默认知识库扩展。
-                effective_dataset_ids = request_dataset_ids
-        elif is_embed_session(user_info):
-            # 嵌入执行只使用智能体绑定的知识库，不合并影子账号或服务账号的个人知识库授权。
-            effective_dataset_ids = configured_agent_dataset_ids
+                effective_dataset_ids = list(role_kb_ids)
+        elif request_dataset_ids:
+            # 用户显式选择是硬范围，不能被智能体默认知识库扩展。
+            effective_dataset_ids = request_dataset_ids
         else:
             # 无显式选择时，智能体绑定知识库与当前用户可访问知识库合并。
             user_permitted_ids = []

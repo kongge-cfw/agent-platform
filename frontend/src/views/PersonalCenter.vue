@@ -399,17 +399,14 @@ import PersonalTokenUsage from '../components/personal/PersonalTokenUsage.vue'
 import PersonalMemoryPanel from '../components/personal/PersonalMemoryPanel.vue'
 import NotificationConfigs from '../components/personal/NotificationConfigs.vue'
 import DataPortalHome from './DataPortalHome.vue'
-import SkillsManagement from './SkillsManagement.vue'
-import McpManagement from './McpManagement.vue'
 import TaskCenter from './TaskCenter.vue'
 import { useRoute, useRouter } from 'vue-router'
 
-type PersonalTab = 'info' | 'permissions' | 'memory' | 'tokens' | 'notifications' | 'data' | 'skills' | 'mcp' | 'tasks'
+type PersonalTab = 'info' | 'permissions' | 'memory' | 'tokens' | 'notifications' | 'data' | 'tasks'
 const route = useRoute()
 const router = useRouter()
-const personalTabs: PersonalTab[] = ['info', 'permissions', 'memory', 'tokens', 'notifications', 'data', 'skills', 'mcp', 'tasks']
+const personalTabs: PersonalTab[] = ['info', 'permissions', 'memory', 'tokens', 'notifications', 'data', 'tasks']
 const activeTab = ref<PersonalTab>(personalTabs.includes(route.query.tab as PersonalTab) ? route.query.tab as PersonalTab : 'info')
-const skillsInitialId = computed(() => String(route.query.skill_id || '').trim())
 const permissionsSubTab = ref<'list' | 'about'>('list')
 const showAboutTab = computed(() => !!branding.value.contact_markdown?.trim())
 const contactHtml = computed(() => renderMarkdown(branding.value.contact_markdown || ''))
@@ -480,22 +477,13 @@ watch(activeTab, (val) => {
     } else {
         nextQuery.tab = val
     }
-    // 离开「我的技能」时清掉深链 skill_id，避免再切回来又自动弹出编辑抽屉
-    if (val !== 'skills') {
-        delete nextQuery.skill_id
-    }
+    delete nextQuery.skill_id
     router.replace({ query: nextQuery })
     if (val === 'permissions' && !permissions.value.details) {
         fetchPermissions()
     }
 })
 
-const clearSkillsDeepLink = () => {
-    if (!route.query.skill_id) return
-    const nextQuery: Record<string, any> = { ...route.query }
-    delete nextQuery.skill_id
-    router.replace({ query: nextQuery })
-}
 watch(() => route.query.tab, (value) => {
     activeTab.value = personalTabs.includes(value as PersonalTab) ? value as PersonalTab : 'info'
 }, { immediate: true })
@@ -575,28 +563,6 @@ onMounted(() => {
                     我的数据门户
                 </button>
                 <button
-                    @click="activeTab = 'skills'"
-                    :class="[
-                        activeTab === 'skills'
-                            ? 'border-blue-500 text-blue-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300',
-                        'whitespace-nowrap py-3 sm:py-4 px-1 border-b-2 font-medium text-xs sm:text-sm transition-colors'
-                    ]"
-                >
-                    我的技能
-                </button>
-                <button
-                    @click="activeTab = 'mcp'"
-                    :class="[
-                        activeTab === 'mcp'
-                            ? 'border-blue-500 text-blue-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300',
-                        'whitespace-nowrap py-3 sm:py-4 px-1 border-b-2 font-medium text-xs sm:text-sm transition-colors'
-                    ]"
-                >
-                    我的 MCP
-                </button>
-                <button
                     @click="activeTab = 'tasks'"
                     :class="[
                         activeTab === 'tasks'
@@ -621,7 +587,7 @@ onMounted(() => {
             </nav>
         </div>
 
-        <div :class="(activeTab === 'data' || activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'tasks' || activeTab === 'info') ? 'pt-4 sm:pt-5' : 'px-4 pt-4 pb-4 sm:px-6 sm:pt-5 sm:pb-6'">
+        <div :class="(activeTab === 'data' || activeTab === 'tasks' || activeTab === 'info') ? 'pt-4 sm:pt-5' : 'px-4 pt-4 pb-4 sm:px-6 sm:pt-5 sm:pb-6'">
         <!-- Info Tab (类似我的数据门户：左侧子菜单 + 右侧主内容) -->
         <div v-if="activeTab === 'info'" class="grid grid-cols-1 overflow-hidden bg-white md:grid-cols-[200px_minmax(0,1fr)] min-h-[560px]">
             <!-- 左侧 Aside 垂直导航栏 -->
@@ -1214,18 +1180,6 @@ onMounted(() => {
         <!-- My Data Tab -->
         <div v-else-if="activeTab === 'data'">
             <DataPortalHome embedded />
-        </div>
-
-        <div v-else-if="activeTab === 'skills'" class="px-4 pb-4 sm:px-6 sm:pb-6">
-            <SkillsManagement
-                personal-only
-                :initial-skill-id="skillsInitialId"
-                @drawer-closed="clearSkillsDeepLink"
-            />
-        </div>
-
-        <div v-else-if="activeTab === 'mcp'" class="px-3 pb-4 sm:px-6 sm:pb-6 min-h-[28rem]">
-            <McpManagement personal-only />
         </div>
 
         <div v-else-if="activeTab === 'tasks'" class="px-4 pb-4 sm:px-6 sm:pb-6 min-h-[32rem]">
