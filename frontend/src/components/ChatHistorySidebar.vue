@@ -34,11 +34,9 @@ const emit = defineEmits<{
   (e: "fetch-history"): void;
   (e: "load-more"): void;
   (e: "load-chat", item: any): void;
-  (e: "open-full-logs", traceId: string): void;
   (e: "delete-history", item: any): void;
   (e: "delete-group", group: any): void;
   (e: "new-chat"): void;
-  (e: "export-chat", item: any): void;
 }>();
 
 const windowWidth = ref(window.innerWidth);
@@ -406,29 +404,6 @@ const confirmDelete = (item: any) => {
 
                   <!-- Hover Action Buttons -->
                   <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <!-- Export Chat -->
-                    <button
-                      @click.stop="emit('export-chat', item)"
-                      class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
-                      title="导出 Markdown 对话记录"
-                    >
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                    </button>
-
-                    <!-- Open Logs Trace -->
-                    <button
-                      v-if="item.trace_id"
-                      @click.stop="emit('open-full-logs', item.trace_id)"
-                      class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-gray-400 hover:text-primary transition-colors"
-                      title="查看回溯日志"
-                    >
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </button>
-
                     <!-- Delete Single -->
                     <button
                       @click.stop="triggerDelete(item)"
@@ -470,10 +445,17 @@ const confirmDelete = (item: any) => {
                     <span
                       v-else
                       class="w-1.5 h-1.5 rounded-full"
-                      :class="item.status === 'failed' || item.status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'"
+                      :class="item.status === 'failed' || item.status === 'error'
+                        ? 'bg-rose-500'
+                        : item.status === 'interrupted'
+                          ? 'bg-gray-400'
+                          : 'bg-emerald-500'"
                     ></span>
                     <span v-if="isItemRunning(item)" class="font-bold text-amber-600 dark:text-amber-400">
                       进行中
+                    </span>
+                    <span v-else-if="item.status === 'interrupted'" class="font-bold text-gray-500 dark:text-gray-400">
+                      已中断
                     </span>
                     <span v-if="item.turn_count !== undefined">
                       {{ item.turn_count }} 轮交互

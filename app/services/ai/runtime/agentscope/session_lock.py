@@ -59,7 +59,9 @@ class AgentScopeSessionLock:
             return None
 
         key = self._lock_key(user_id, conversation_id, agent_name)
-        token = uuid.uuid4().hex
+        from app.services.ai.runtime.session_run_lane import INSTANCE_ID
+
+        token = f"{INSTANCE_ID}|{uuid.uuid4().hex}"
         deadline = asyncio.get_running_loop().time() + wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             try:
@@ -69,6 +71,8 @@ class AgentScopeSessionLock:
                 return None
             if acquired:
                 return key, token
+            if await self._steal_if_owner_dead(redis, key):
+                continue
             await asyncio.sleep(DEFAULT_POLL_INTERVAL_SECONDS)
 
         logger.warning(
@@ -137,6 +141,62 @@ class AgentScopeSessionLock:
                 exc,
             )
         return released
+
+    async def _steal_if_owner_dead(self, redis, key: str) -> bool:
+        """进程已经退出时，立刻拿回它留下的 agent_lock，不再干等 TTL。"""
+        try:
+            raw = await redis.get(key)
+        except Exception as exc:
+            logger.warning("[AgentScopeSessionLock] read lock failed: %s", exc)
+            return False
+        if raw is None:
+            return False
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        token = str(raw)
+        instance_id = token.split("|", 1)[0] if "|" in token else None
+        from app.services.ai.runtime.session_run_lane import conversation_run_lane
+
+        try:
+            alive = await conversation_run_lane._owner_alive(redis, instance_id)
+        except Exception as exc:
+            logger.warning("[AgentScopeSessionLock] owner check failed: %s", exc)
+            return False
+        if alive:
+            return False
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end"
+        )
+        try:
+            deleted = await redis.eval(script, 1, key, token)
+        except Exception as exc:
+            logger.warning("[AgentScopeSessionLock] steal dead lock failed: %s", exc)
+            return False
+        if deleted:
+            logger.info("[AgentScopeSessionLock] dropped dead-owner lock %s", key)
+        return bool(deleted)
+
+    async def reap_orphaned_locks(self) -> int:
+        """启动时清掉已退出进程留下的 agent_lock。仍在跑的实例不碰。"""
+        from app.core.redis import get_redis
+        from app.services.ai.memory_service import memory_service
+
+        redis = await get_redis()
+        if redis is None:
+            return 0
+        dropped = 0
+        pattern = f"{memory_service.KEY_PREFIX}:*:agent_lock:*"
+        try:
+            async for key in redis.scan_iter(match=pattern, count=100):
+                text = key.decode("utf-8", errors="ignore") if isinstance(key, bytes) else str(key)
+                if await self._steal_if_owner_dead(redis, text):
+                    dropped += 1
+        except Exception as exc:
+            logger.warning("[AgentScopeSessionLock] reap orphaned locks failed: %s", exc)
+        if dropped:
+            logger.info("[AgentScopeSessionLock] reaped %s dead agent locks", dropped)
+        return dropped
 
     @asynccontextmanager
     async def hold(

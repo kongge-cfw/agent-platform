@@ -278,7 +278,8 @@ class AuditManager:
         cid = str(conversation_id or "").strip()
         aid = str(agent_id or "").strip()
         tid = str(trace_id or "").strip()
-        if not text or not cid or not aid or not tid or not user_info:
+        # 自动路由在这一步还没有专家。先记下会话，刷新后左侧列表不用等本轮结束。
+        if not text or not cid or not tid or not user_info:
             return
         if _is_history_receipt_query(text):
             return
@@ -328,3 +329,27 @@ class AuditManager:
                 logger.info(f"Opened conversation history for {cid}")
         except Exception as e:
             logger.error(f"Failed to open history for {cid}: {e}")
+
+    @staticmethod
+    async def attach_history_agent(trace_id: str, agent_id: str) -> None:
+        """路由确定专家后，补上打开历史时还没有的智能体。"""
+        tid = str(trace_id or "").strip()
+        aid = str(agent_id or "").strip()
+        if not tid or not aid:
+            return
+        try:
+            from sqlalchemy import select
+
+            from app.models.audit import AgentExecutionHistory
+
+            async with AsyncSessionLocal() as session:
+                existing_result = await session.execute(
+                    select(AgentExecutionHistory).where(AgentExecutionHistory.trace_id == tid)
+                )
+                existing = existing_result.scalar_one_or_none()
+                if existing is None or str(existing.agent_id or "").strip():
+                    return
+                existing.agent_id = aid
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Failed to attach history agent for {tid}: {e}")

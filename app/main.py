@@ -66,6 +66,13 @@ async def lifespan(app: FastAPI):
     install_cancellation_log_filters()
     await database.init_db()
     await redis.init_redis()
+    from app.services.ai.runtime.session_run_lane import (
+        reap_interrupted_conversation_runs,
+        start_conversation_run_owner,
+    )
+
+    await start_conversation_run_owner()
+    await reap_interrupted_conversation_runs()
     await AuditService.start_worker()
     
     # Initialize Oracle Thick Mode if requested
@@ -144,6 +151,9 @@ async def lifespan(app: FastAPI):
     await scheduler_service.stop()
     await GlobalHttpClient.close()
     await AuditService.stop_worker()
+    from app.services.ai.runtime.session_run_lane import stop_conversation_run_owner
+
+    await stop_conversation_run_owner()
     from app.services.ai.browser.browser_runtime import browser_runtime
     await browser_runtime.shutdown()
     from app.services.pool_manager import DataSourcePoolManager

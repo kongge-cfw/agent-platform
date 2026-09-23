@@ -44,13 +44,13 @@ class ContextStep(BasePipelineStep):
         context.shared_state["user_query"] = user_query
 
         conversation_id = context.conversation_id
-        if user_query and conversation_id and context.trace_id and context.agent_id:
+        if user_query and conversation_id and context.trace_id:
             try:
                 from app.services.ai.audit import AuditManager
 
                 await AuditManager.ensure_open_history(
                     trace_id=context.trace_id,
-                    agent_id=str(context.agent_id),
+                    agent_id=str(context.agent_id or ""),
                     query=user_query,
                     user_info=context.user_info,
                     conversation_id=conversation_id,

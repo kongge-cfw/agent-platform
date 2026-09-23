@@ -3,9 +3,18 @@ import uuid
 import pytest
 
 from app.services.ai.runtime.session_run_lane import (
+    INSTANCE_ID,
+    OWNER_KEY_PREFIX,
     ConversationRunBusyError,
     ConversationRunLane,
 )
+
+
+def plant_live_foreign_lock(fake, key: str, trace: str = "occupied") -> None:
+    """另一进程仍在心跳的运行锁。没有心跳的旧锁会被当成已中断并清掉。"""
+    instance_id = "foreign-instance"
+    fake.store[key] = f"{instance_id}|{trace}"
+    fake.store[f"{OWNER_KEY_PREFIX}{instance_id}"] = "other-host|1"
 
 pytestmark = pytest.mark.no_infrastructure
 
@@ -118,7 +127,7 @@ async def test_conversation_run_lane_acquire_preserves_agent_locks(monkeypatch):
     # 回归：成功取得会话 lane 后，不能自动清理同会话的 per-agent 会话锁。
     # 正常 run 持锁期间若其 lane 因续约故障 / 进程暂停 / 显式取消而先行失效，
     # 旧 run 的 executor 仍可能握着自己的 agent_lock 在跑，无条件清理会误删活跃锁、
-    # 破坏互斥并并发操作同一 AgentState。孤儿 agent_lock 依靠自身 TTL 过期自愈。
+    # 破坏互斥并并发操作同一 AgentState。已退出进程的 agent_lock 由会话锁自己回收。
     fake = FakeRedis()
     lane = ConversationRunLane()
     conversation_id = f"conv-stale-{uuid.uuid4().hex}"
@@ -200,7 +209,7 @@ async def test_conversation_run_lane_hold_raises_when_busy(monkeypatch):
     fake = FakeRedis()
     lane = ConversationRunLane()
     key = lane._lock_key("u1", "conv-2")
-    fake.store[key] = "occupied"
+    plant_live_foreign_lock(fake, key)
 
     async def _redis():
         return fake
@@ -230,7 +239,7 @@ async def test_followup_mode_waits_then_proceeds_when_released(monkeypatch):
     fake = FakeRedis()
     lane = ConversationRunLane()
     key = lane._lock_key("u1", "conv-follow")
-    fake.store[key] = "occupied"
+    plant_live_foreign_lock(fake, key)
 
     async def _redis():
         return fake
@@ -265,7 +274,7 @@ async def test_followup_mode_raises_after_wait_timeout(monkeypatch):
     fake = FakeRedis()
     lane = ConversationRunLane()
     key = lane._lock_key("u1", "conv-timeout")
-    fake.store[key] = "occupied"
+    plant_live_foreign_lock(fake, key)
 
     async def _redis():
         return fake
@@ -295,7 +304,7 @@ async def test_followup_wait_mode_accepts_new_config_names(monkeypatch):
     fake = FakeRedis()
     lane = ConversationRunLane()
     key = lane._lock_key("u1", "conv-new-config")
-    fake.store[key] = "occupied"
+    plant_live_foreign_lock(fake, key)
 
     async def _redis():
         return fake
@@ -348,6 +357,9 @@ async def test_conversation_run_lane_is_locked(monkeypatch):
 
     assert await lane.is_locked(user_id="u1", conversation_id=conversation_id) is False
     fake.store[key] = "trace-locked"
+    assert await lane.is_locked(user_id="u1", conversation_id=conversation_id) is False
+    assert key not in fake.store
+    fake.store[key] = f"{INSTANCE_ID}|{uuid.uuid4()}"
     assert await lane.is_locked(user_id="u1", conversation_id=conversation_id) is True
     assert await lane.is_locked(user_id="u1", conversation_id=None) is False
 
@@ -377,6 +389,14 @@ async def test_conversation_run_lane_status_exposes_trace_and_ttl(monkeypatch):
     key = lane._lock_key("u1", conversation_id)
     trace_id = str(uuid.uuid4())
     fake.store[key] = trace_id
+    fake.ttls[key] = 321
+    assert await lane.get_status(user_id="u1", conversation_id=conversation_id) == {
+        "active": False,
+        "trace_id": None,
+        "ttl_seconds": None,
+    }
+    assert key not in fake.store
+    fake.store[key] = f"{INSTANCE_ID}|{trace_id}"
     fake.ttls[key] = 321
     assert await lane.get_status(user_id="u1", conversation_id=conversation_id) == {
         "active": True,

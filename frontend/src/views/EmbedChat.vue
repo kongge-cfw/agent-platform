@@ -16,11 +16,9 @@
       @fetch-history="fetchHistory()"
       @load-more="fetchHistory(true)"
       @load-chat="handleHistoryClick"
-      @open-full-logs="openTraceLogs"
       @delete-history="handleDeleteSingleHistory"
       @delete-group="handleDeleteGroup"
       @new-chat="handleNewChatFromSidebar"
-      @export-chat="handleExportChatFromSidebar"
       class="border-r border-gray-200 dark:border-gray-800"
     />
 
@@ -2276,7 +2274,6 @@ import {
 } from "@/utils/streamErrorPresentation";
 import RagPreviewDrawer from "@/components/RagPreviewDrawer.vue";
 import ChatHistorySidebar from "@/components/ChatHistorySidebar.vue";
-import { downloadMarkdownFile } from "@/utils/chatSessionExport";
 import ConfirmModal from "@/components/ConfirmModal.vue";
 import ChatSettings from "@/components/embed/ChatSettings.vue";
 import ChatCanvas from "@/components/embed/ChatCanvas.vue";
@@ -5216,7 +5213,6 @@ const fetchHistory = async (isLoadMore = false) => {
       group_by_conversation: true
     };
     if (historyKeyword.value) params.keyword = historyKeyword.value;
-    if (config.agentId) params.agent_id = config.agentId;
 
     const res = await axios.get("/api/v1/chat/history", { params });
     if (res.data?.data) {
@@ -5396,39 +5392,6 @@ const handleDeleteSingleHistory = async (item: any) => {
   } catch (e) {
     console.error("Failed to delete conversation", e);
     showToast("删除会话失败", "error");
-  }
-};
-
-const handleExportChatFromSidebar = async (item: any) => {
-  const targetConvId = item.conversation_id;
-  if (!targetConvId) return;
-  try {
-    showToast("正在导出对话记录...", "info");
-    const headers: any = {};
-    if (config.token) {
-      headers["Authorization"] = `Bearer ${config.token}`;
-      headers["X-API-Key"] = config.token;
-    }
-    const res = await axios.get(`/api/v1/chat/conversation/${targetConvId}/history`, { headers });
-    const historyMsgs = res.data?.data?.messages || [];
-    let md = `# 会话导出记录\n\n- **会话 ID**: \`${targetConvId}\`\n- **导出时间**: ${new Date().toLocaleString()}\n\n---\n\n`;
-    if (historyMsgs.length === 0 && targetConvId === conversationId.value && messages.value.length > 0) {
-      messages.value.forEach((m: any) => {
-        const role = m.role === "user" ? "👤 **用户**" : "🤖 **AI 助手**";
-        md += `### ${role}\n\n${m.content || ""}\n\n---\n\n`;
-      });
-    } else {
-      historyMsgs.forEach((msg: any) => {
-        const role = msg.role === "user" ? "👤 **用户**" : "🤖 **AI 助手**";
-        md += `### ${role}\n\n${msg.content || ""}\n\n---\n\n`;
-      });
-    }
-    const filename = `chat_session_${targetConvId.slice(0, 8)}_${Date.now()}.md`;
-    downloadMarkdownFile(filename, md);
-    showToast("导出成功", "success");
-  } catch (e) {
-    console.error("Export conversation failed", e);
-    showToast("导出对话失败", "error");
   }
 };
 
@@ -5615,71 +5578,6 @@ const conversationTurns = ref<any[]>([]); // 新增：存储会话的多个回�
 const loadingTrace = ref(false);
 const expandedTraceSteps = ref<Record<string, boolean>>({});
 const showThinkingProcess = ref(false); // Default collapsed
-
-const openTraceLogs = async (traceIdOrItem: string | any) => {
-  const isString = typeof traceIdOrItem === 'string';
-  const traceId = isString ? traceIdOrItem : traceIdOrItem?.trace_id;
-  let convId = isString ? null : traceIdOrItem?.conversation_id;
-
-  if (isString) {
-      const found = historyList.value.find(h => h.trace_id === traceId);
-      if (found) {
-          activeHistoryItem.value = found;
-          convId = found.conversation_id;
-      } else {
-          activeHistoryItem.value = null;
-      }
-  } else {
-      activeHistoryItem.value = traceIdOrItem;
-  }
-
-  if (!traceId) return;
-
-  showTraceModal.value = true;
-  loadingTrace.value = true;
-  traceLogData.value = null;
-  conversationTurns.value = [];
-  expandedTraceSteps.value = {};
-  showThinkingProcess.value = false;
-
-  try {
-    // 1. 先获取基础信息，特别是如果是从 trace_id 进来的，需要拿到它的 convId
-    const res = await axios.get(`/api/v1/chat/logs/${traceId}`);
-    if (res.data?.data) {
-        traceLogData.value = res.data.data;
-    }
-
-    // 2. 获取整个会话的所有回合
-    const cid = convId || traceLogData.value?.history?.conversation_id;
-    if (cid) {
-        const historyRes = await axios.get(`/api/v1/chat/history`, {
-            params: { conversation_id: cid, page_size: 100 }
-        });
-        if (historyRes.data?.data?.items) {
-            // 结果按时间正序排列（后端返回的是倒序，所以这里反转一下）
-            const sortedItems = [...historyRes.data.data.items].reverse();
-
-            // 初始化每个回合的状态：全部默认折叠
-            conversationTurns.value = sortedItems.map((item: any) => ({
-                ...item,
-                steps: item.trace_id === traceId ? (traceLogData.value?.steps || []) : [],
-                loading: false,
-                isExpanded: false
-            }));
-        }
-    } else if (traceLogData.value?.history) {
-        conversationTurns.value = [{
-            ...traceLogData.value.history,
-            steps: traceLogData.value.steps || [],
-            isExpanded: true
-        }];
-    }
-  } catch (e) {
-    console.error("Failed to load trace logs", e);
-  } finally {
-    loadingTrace.value = false;
-  }
-};
 
 const toggleTurnSteps = async (turn: any) => {
     turn.isExpanded = !turn.isExpanded;

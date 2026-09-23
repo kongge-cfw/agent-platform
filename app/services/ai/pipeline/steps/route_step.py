@@ -173,6 +173,16 @@ class RouteStep(BasePipelineStep):
         if agent_config:
             shared_state["agent_config"] = agent_config
             shared_state["route_details"] = route_details
+            resolved_agent_id = str(getattr(agent_config, "agent_id", "") or "").strip()
+            if resolved_agent_id and not str(context.agent_id or "").strip():
+                context.agent_id = resolved_agent_id
+            if resolved_agent_id and trace_id:
+                try:
+                    from app.services.ai.audit import AuditManager
+
+                    await AuditManager.attach_history_agent(trace_id, resolved_agent_id)
+                except Exception:
+                    logger.debug("[RouteStep] attach history agent skipped", exc_info=True)
             from app.services.ai.turn_decision import TurnDecision
             route_ms = route_elapsed_ms if "route_elapsed_ms" in locals() else 0.0
             direct_agent_selection = bool(agent_id or agent_name or version_id)

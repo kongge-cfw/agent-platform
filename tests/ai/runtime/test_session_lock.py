@@ -31,6 +31,9 @@ class FakeRedis:
             return 1
         return 0
 
+    async def get(self, key):
+        return self.store.get(key)
+
     async def delete(self, key):
         if key in self.store:
             del self.store[key]
@@ -109,7 +112,13 @@ async def test_session_lock_acquire_and_release(monkeypatch):
 @pytest.mark.asyncio
 async def test_session_lock_hold_raises_on_timeout(monkeypatch):
     fake = FakeRedis()
-    await fake.set("conversation:u1:conv-2:agent_lock:DataAgent", "occupied", nx=True)
+    foreign = "foreign-instance"
+    await fake.set(
+        "conversation:u1:conv-2:agent_lock:DataAgent",
+        f"{foreign}|occupied",
+        nx=True,
+    )
+    await fake.set(f"nanzi:conv_run_owner:{foreign}", "other-host|1", nx=True)
 
     async def _redis():
         return fake
@@ -124,6 +133,28 @@ async def test_session_lock_hold_raises_on_timeout(monkeypatch):
             wait_seconds=0.2,
         ):
             pass
+
+
+@pytest.mark.asyncio
+async def test_session_lock_steals_dead_owner_lock(monkeypatch):
+    fake = FakeRedis()
+    await fake.set("conversation:u1:conv-dead:agent_lock:DataAgent", "occupied", nx=True)
+
+    async def _redis():
+        return fake
+
+    monkeypatch.setattr("app.core.redis.get_redis", _redis)
+    lock = AgentScopeSessionLock()
+    handle = await lock.acquire(
+        user_id="u1",
+        conversation_id="conv-dead",
+        agent_name="DataAgent",
+        wait_seconds=0.5,
+    )
+    assert handle is not None
+    key, token = handle
+    assert fake.store[key] == token
+    assert "|occupied" not in token
 
 
 @pytest.mark.asyncio

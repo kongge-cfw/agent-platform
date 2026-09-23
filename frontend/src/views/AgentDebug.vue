@@ -4444,7 +4444,6 @@ onUnmounted(() => {
       :settled-conversation-ids="settledRunIds"
       @fetch-history="fetchHistory"
       @load-chat="openSessionPreview"
-      @open-full-logs="openSessionPreview"
     />
 
     <!-- Center: Main Chat Area -->
