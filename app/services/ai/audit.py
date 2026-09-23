@@ -8,6 +8,17 @@ from app.services.ai.audit_payload import bound_audit_payload
 
 logger = logging.getLogger(__name__)
 
+
+def _is_history_receipt_query(text: str | None) -> bool:
+    """确认回执和答题回执不是用户最初的问题，不能当历史卡片标题。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    from app.services.ai.business_confirmation import is_business_confirmation_receipt_message
+    from app.services.ai.user_question import is_user_question_receipt_message
+
+    return is_business_confirmation_receipt_message(raw) or is_user_question_receipt_message(raw)
+
 # 仅这些步骤类型对应真实的 LLM API 调用；tool_call / router 等不计入 Token。
 # model_call：AgentScope ReAct 每次 MODEL_CALL_END 一条，与前端 SSE 累加口径一致。
 # thought / synthesis：直连 LLM 或总结阶段（无 model_call 时由 synthesis 承载单次调用）。
@@ -192,10 +203,42 @@ class AuditManager:
         Saves the high-level conversation entry.
         """
         try:
+            from sqlalchemy import select
+
             from app.models.audit import AgentExecutionHistory
             history_user_id = require_user_id(user_info)
             
             async with AsyncSessionLocal() as session:
+                existing_result = await session.execute(
+                    select(AgentExecutionHistory).where(AgentExecutionHistory.trace_id == trace_id)
+                )
+                existing = existing_result.scalar_one_or_none()
+                if existing is not None:
+                    if query and not (
+                        _is_history_receipt_query(query) and not _is_history_receipt_query(existing.query)
+                    ):
+                        existing.query = query
+                    existing.summary = summary
+                    existing.status = status
+                    existing.execution_time_ms = execution_time_ms
+                    existing.agent_version = agent_version
+                    existing.model_id = model_id
+                    existing.model_config_id = model_config_id
+                    existing.prompt_tokens = prompt_tokens
+                    existing.completion_tokens = completion_tokens
+                    existing.total_tokens = total_tokens
+                    existing.reasoning_content = reasoning_content
+                    existing.process_timeline = process_timeline
+                    if has_data_output is not None:
+                        existing.has_data_output = 1 if has_data_output else 0
+                    if agent_id:
+                        existing.agent_id = agent_id
+                    if conversation_id:
+                        existing.conversation_id = conversation_id
+                    await session.commit()
+                    logger.info(f"Updated conversation history for trace {trace_id}")
+                    return
+
                 history_entry = AgentExecutionHistory(
                     trace_id=trace_id,
                     agent_id=agent_id,
@@ -221,3 +264,67 @@ class AuditManager:
                 logger.info(f"Saved conversation history for trace {trace_id} (Version: {agent_version})")
         except Exception as e:
             logger.error(f"Failed to save history for {trace_id}: {e}")
+
+    @staticmethod
+    async def ensure_open_history(
+        trace_id: str,
+        agent_id: str,
+        query: str,
+        user_info: Optional[Dict[str, Any]],
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """第一条用户问题发出时就写入历史，侧栏不必等本轮结束。"""
+        text = str(query or "").strip()
+        cid = str(conversation_id or "").strip()
+        aid = str(agent_id or "").strip()
+        tid = str(trace_id or "").strip()
+        if not text or not cid or not aid or not tid or not user_info:
+            return
+        if _is_history_receipt_query(text):
+            return
+        try:
+            history_user_id = require_user_id(user_info)
+        except Exception:
+            return
+        try:
+            from sqlalchemy import select
+
+            from app.models.audit import AgentExecutionHistory
+
+            async with AsyncSessionLocal() as session:
+                existing_trace = await session.execute(
+                    select(AgentExecutionHistory.id).where(AgentExecutionHistory.trace_id == tid)
+                )
+                if existing_trace.scalar_one_or_none() is not None:
+                    return
+                existing_conversation = await session.execute(
+                    select(AgentExecutionHistory.id)
+                    .where(
+                        AgentExecutionHistory.conversation_id == cid,
+                        AgentExecutionHistory.user_id == history_user_id,
+                    )
+                    .limit(1)
+                )
+                if existing_conversation.scalar_one_or_none() is not None:
+                    return
+                session.add(
+                    AgentExecutionHistory(
+                        trace_id=tid,
+                        agent_id=aid,
+                        conversation_id=cid,
+                        user_id=history_user_id,
+                        username=user_info.get("user_name") if user_info else None,
+                        query=text,
+                        summary="",
+                        status="running",
+                        execution_time_ms=0,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                        has_data_output=0,
+                    )
+                )
+                await session.commit()
+                logger.info(f"Opened conversation history for {cid}")
+        except Exception as e:
+            logger.error(f"Failed to open history for {cid}: {e}")

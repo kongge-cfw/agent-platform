@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +21,13 @@ from app.schemas.embed_app import (
     SysEmbedAppUpdate,
     dump_json_list,
     dump_chat_settings,
+    dump_examples,
     dump_shortcut_prompts,
+)
+from app.utils.fs_access import (
+    get_embed_example_dir,
+    open_upload_storage_file,
+    reject_invalid_office_upload,
 )
 from app.services.embed_app_service import (
     ensure_default_entry_allowed,
@@ -39,6 +46,8 @@ def _dump_lists(data: dict[str, Any]) -> dict[str, Any]:
             payload[key] = dump_json_list(payload[key])
     if "shortcut_prompts" in payload and payload["shortcut_prompts"] is not None:
         payload["shortcut_prompts"] = dump_shortcut_prompts(payload["shortcut_prompts"])
+    if "examples" in payload and payload["examples"] is not None:
+        payload["examples"] = dump_examples(payload["examples"])
     if "chat_settings" in payload and payload["chat_settings"] is not None:
         payload["chat_settings"] = dump_chat_settings(payload["chat_settings"])
     return payload
@@ -181,6 +190,49 @@ async def create_embed_app(
     await db.commit()
     await db.refresh(app)
     return await _app_response(db, app)
+
+
+_EXAMPLE_UPLOAD_MAX = 20 * 1024 * 1024
+_EXAMPLE_FORBIDDEN_EXTS = {".exe", ".bat", ".sh", ".cmd", ".com", ".msi", ".php", ".jsp", ".asp", ".py", ".pl"}
+
+
+@router.post("/{app_id}/example-files")
+async def upload_embed_example_file(
+    app_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_session),
+    user: Dict = Depends(require_permission("element", "element:embed_apps:edit")),
+):
+    """把示例附件存到该嵌入应用目录，不写入上传人的私有工作区。"""
+    del user
+    result = await db.execute(select(SysEmbedApp).where(SysEmbedApp.id == app_id))
+    app = result.scalars().first()
+    if not app:
+        raise HTTPException(status_code=404, detail="嵌入应用不存在")
+    contents = await file.read(_EXAMPLE_UPLOAD_MAX + 1)
+    if len(contents) > _EXAMPLE_UPLOAD_MAX:
+        raise HTTPException(status_code=400, detail="文件大小超出 20MB 限制")
+    reject_invalid_office_upload(file.filename, contents)
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext in _EXAMPLE_FORBIDDEN_EXTS:
+        raise HTTPException(status_code=403, detail=f"禁止上传该类型文件: {ext}")
+    upload_dir = get_embed_example_dir(app.id)
+    os.makedirs(upload_dir, exist_ok=True)
+    try:
+        file_path, handle = open_upload_storage_file(upload_dir, file.filename)
+        with handle as stored:
+            stored.write(contents)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="保存示例附件失败，请稍后重试。") from exc
+    return {
+        "status": "success",
+        "data": {
+            "url": file_path,
+            "filename": file.filename or os.path.basename(file_path),
+            "size": len(contents),
+            "ext": ext.replace(".", ""),
+        },
+    }
 
 
 @router.put("/{app_id}", response_model=SysEmbedAppResponse)

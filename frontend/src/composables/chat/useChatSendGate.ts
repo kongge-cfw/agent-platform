@@ -2,7 +2,9 @@ import { ref } from 'vue';
 
 export interface ChatSendGate {
   locked: ReturnType<typeof ref<boolean>>;
+  submittingIds: ReturnType<typeof ref<string[]>>;
   runExclusive<T>(task: () => Promise<T> | T): Promise<T | undefined>;
+  runForConversation<T>(conversationId: string, task: () => Promise<T> | T): Promise<T | undefined>;
 }
 
 /**
@@ -13,6 +15,7 @@ export interface ChatSendGate {
  */
 export function createChatSendGate(): ChatSendGate {
   const locked = ref(false);
+  const submittingIds = ref<string[]>([]);
 
   const runExclusive = async <T>(task: () => Promise<T> | T): Promise<T | undefined> => {
     if (locked.value) return undefined;
@@ -24,5 +27,19 @@ export function createChatSendGate(): ChatSendGate {
     }
   };
 
-  return { locked, runExclusive };
+  const runForConversation = async <T>(
+    conversationId: string,
+    task: () => Promise<T> | T,
+  ): Promise<T | undefined> => {
+    const cid = String(conversationId || "").trim();
+    if (!cid || submittingIds.value.includes(cid)) return undefined;
+    submittingIds.value = [...submittingIds.value, cid];
+    try {
+      return await task();
+    } finally {
+      submittingIds.value = submittingIds.value.filter((id) => id !== cid);
+    }
+  };
+
+  return { locked, submittingIds, runExclusive, runForConversation };
 }

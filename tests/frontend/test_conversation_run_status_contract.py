@@ -76,7 +76,7 @@ def test_both_chat_surfaces_refresh_remote_status_on_visibility_and_bind_busy_st
         assert "refreshCurrentRunStatus" in source
         assert "visibilitychange" in source
         assert ':is-processing="isProcessing || remoteRunActive"' in source
-        assert ':is-submitting="sendLocked"' in source
+        assert ':is-submitting="submittingIds.includes(conversationId)"' in source
         assert "if (isProcessing.value || remoteRunActive.value) return;" in source
 
 
@@ -84,8 +84,8 @@ def test_embed_chat_focuses_desktop_input_only_after_all_busy_states_clear():
     source = (ROOT / "frontend/src/views/EmbedChat.vue").read_text(encoding="utf-8")
 
     assert "const focusChatInputWhenReady = () =>" in source
-    assert "if (isMobile.value || isProcessing.value || remoteRunActive.value || sendLocked.value) return;" in source
-    assert "watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);" in source
+    assert "if (isMobile.value || isCurrentConversationSendBlocked()) return;" in source
+    assert "watch([isProcessing, remoteRunActive, sendLocked, submittingIds], focusChatInputWhenReady);" in source
     assert "nextTick(() => chatInputRef.value?.focus());" in source
 
     completion_block = source[source.index("isProcessing.value = false;", source.index("const sendMessageInternal")):source.index("const BOTTOM_THRESHOLD_PX")]
@@ -95,12 +95,12 @@ def test_embed_chat_focuses_desktop_input_only_after_all_busy_states_clear():
 def test_agent_debug_focuses_desktop_input_only_after_all_busy_states_clear():
     source = (ROOT / "frontend/src/views/AgentDebug.vue").read_text(encoding="utf-8")
 
-    watch_index = source.index("watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);")
+    watch_index = source.index("watch([isProcessing, remoteRunActive, sendLocked, submittingIds], focusChatInputWhenReady);")
     assert source.index("const isProcessing = ref(false);") < watch_index
     assert source.index("const { locked: sendLocked", source.index("const isProcessing = ref(false);")) < watch_index
     assert "const focusChatInputWhenReady = () =>" in source
-    assert "if (isMobile.value || isProcessing.value || remoteRunActive.value || sendLocked.value) return;" in source
-    assert "watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);" in source
+    assert "if (isMobile.value || isCurrentConversationSendBlocked()) return;" in source
+    assert "watch([isProcessing, remoteRunActive, sendLocked, submittingIds], focusChatInputWhenReady);" in source
     assert "nextTick(() => chatInputRef.value?.focus());" in source
 
     completion_block = source[source.index("isProcessing.value = false;", source.index("const sendMessageInternal")):source.index("const addRealLog")]

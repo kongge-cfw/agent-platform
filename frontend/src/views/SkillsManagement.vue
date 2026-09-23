@@ -355,25 +355,95 @@ const isArchiveFilename = (name: string) => {
     || n.endsWith('.tar')
 }
 
-const collectDroppedFiles = (e: DragEvent) => {
-  const files: File[] = []
-  let skippedDirectory = false
+type SkillUploadItem = {
+  file: File
+  /** 相对本次拖入内容的父目录。单文件为空，文件夹内文件带上各级目录名。 */
+  relativeDir?: string
+}
+
+const joinSkillPath = (...parts: string[]) => {
+  return parts
+    .flatMap((part) => part.split('/'))
+    .map((part) => part.trim())
+    .filter((part) => part && part !== '.' && part !== '..')
+    .join('/')
+}
+
+const readDirectoryEntries = (reader: FileSystemDirectoryReader) => {
+  return new Promise<FileSystemEntry[]>((resolve, reject) => {
+    const all: FileSystemEntry[] = []
+    const readBatch = () => {
+      reader.readEntries((batch) => {
+        if (!batch.length) {
+          resolve(all)
+          return
+        }
+        all.push(...batch)
+        readBatch()
+      }, (err) => reject(err))
+    }
+    readBatch()
+  })
+}
+
+const fileFromEntry = (entry: FileSystemFileEntry) => {
+  return new Promise<File>((resolve, reject) => entry.file(resolve, reject))
+}
+
+const walkDroppedEntry = async (
+  entry: FileSystemEntry,
+  parentRel: string,
+  files: SkillUploadItem[],
+  directories: string[],
+) => {
+  const name = entry.name
+  if (!name || name === '.' || name === '..' || name === '__MACOSX') return
+  if (entry.isFile) {
+    if (name === '.DS_Store') return
+    const file = await fileFromEntry(entry as FileSystemFileEntry)
+    files.push({ file, relativeDir: parentRel })
+    return
+  }
+  if (!entry.isDirectory) return
+  const relativeDir = parentRel ? `${parentRel}/${name}` : name
+  directories.push(relativeDir)
+  const children = await readDirectoryEntries((entry as FileSystemDirectoryEntry).createReader())
+  for (const child of children) {
+    await walkDroppedEntry(child, relativeDir, files, directories)
+  }
+}
+
+const expandDroppedEntries = async (entries: FileSystemEntry[]) => {
+  const files: SkillUploadItem[] = []
+  const directories: string[] = []
+  for (const entry of entries) {
+    await walkDroppedEntry(entry, '', files, directories)
+  }
+  return { files, directories }
+}
+
+/** 必须在 drop 事件里同步取出，之后 dataTransfer 会被清空。 */
+const collectDropPayload = (e: DragEvent) => {
+  const entries: FileSystemEntry[] = []
+  const looseFiles: File[] = []
   const items = e.dataTransfer?.items
   if (items && items.length > 0) {
+    let canReadEntry = false
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
-      if (item.kind !== 'file') continue
+      if (!item || item.kind !== 'file') continue
+      if (typeof item.webkitGetAsEntry === 'function') canReadEntry = true
       const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null
-      if (entry?.isDirectory) {
-        skippedDirectory = true
+      if (entry) {
+        entries.push(entry)
         continue
       }
       const file = item.getAsFile()
-      if (file) files.push(file)
+      if (file) looseFiles.push(file)
     }
-    return { files, skippedDirectory }
+    if (canReadEntry) return { entries, looseFiles }
   }
-  return { files: Array.from(e.dataTransfer?.files || []), skippedDirectory }
+  return { entries, looseFiles: Array.from(e.dataTransfer?.files || []) }
 }
 
 const resetAssetDragState = () => {
@@ -402,34 +472,39 @@ const onAssetDragLeave = (e: DragEvent) => {
   if (assetDragDepth.value === 0) resetAssetDragState()
 }
 
-const ingestDroppedFiles = async (files: File[] | FileList, folderPath: string, skippedDirectory = false) => {
-  const list = Array.from(files)
-  if (skippedDirectory && list.length === 0) {
-    showToast('暂不支持拖入文件夹，请拖入文件或压缩包', 'warning')
-    return
-  }
-  if (list.length === 0) return
-  if (skippedDirectory) {
-    showToast('已忽略拖入的文件夹，仅上传文件', 'warning')
-  }
+const importDroppedPayload = async (e: DragEvent, folderPath: string) => {
+  const payload = collectDropPayload(e)
+  resetAssetDragState()
+  if (uploading.value) return
   selectedDirectoryPath.value = folderPath
-  await uploadFiles(list, { folder: folderPath, type: 'auto' })
+  uploading.value = true
+  try {
+    const expanded = await expandDroppedEntries(payload.entries)
+    const items = [
+      ...expanded.files,
+      ...payload.looseFiles.map((file) => ({ file, relativeDir: '' })),
+    ]
+    if (items.length === 0 && expanded.directories.length === 0) {
+      showToast('没有读取到可上传的文件', 'warning')
+      return
+    }
+    await uploadFiles(items, { folder: folderPath, type: 'auto', directories: expanded.directories })
+  } catch {
+    showToast('读取拖入的文件夹失败', 'error')
+  } finally {
+    uploading.value = false
+  }
 }
 
 const onAssetDrop = async (e: DragEvent) => {
   if (!isOsFileDrag(e)) return
   e.preventDefault()
-  const { files, skippedDirectory } = collectDroppedFiles(e)
-  resetAssetDragState()
-  if (uploading.value) return
-  await ingestDroppedFiles(files, selectedDirectoryPath.value, skippedDirectory)
+  const folderPath = dropHoverFolderPath.value || selectedDirectoryPath.value
+  await importDroppedPayload(e, folderPath)
 }
 
 const onTreeDropFiles = async (data: { event: DragEvent, folderPath: string }) => {
-  const { files, skippedDirectory } = collectDroppedFiles(data.event)
-  resetAssetDragState()
-  if (uploading.value) return
-  await ingestDroppedFiles(files, data.folderPath, skippedDirectory)
+  await importDroppedPayload(data.event, data.folderPath)
 }
 
 // 右键菜单相关
@@ -1083,17 +1158,49 @@ const handleFileUpload = async (event: Event) => {
 }
 
 // 物理上传执行 (单文件限 10MB / 压缩包限 20MB)
+const ensureSkillDirectories = async (paths: string[]) => {
+  const unique = [...new Set(paths.filter(Boolean))]
+    .sort((a, b) => a.split('/').length - b.split('/').length)
+  if (!unique.length || !activeSkillId.value) return 0
+  const apiPrefix = resolveSkillApiPrefix(activeSkillId.value)
+  let created = 0
+  for (const path of unique) {
+    try {
+      await axios.post(`${apiPrefix}/${activeSkillId.value}/files`, { path, type: 'folder' })
+      created += 1
+    } catch (e: any) {
+      const status = e.response?.status
+      const detail = String(e.response?.data?.detail || '')
+      if (status === 409) continue
+      if (status === 400 && (detail.includes('隐藏') || detail.includes('父文件夹'))) continue
+      throw e
+    }
+  }
+  return created
+}
+
 const uploadFiles = async (
-  files: FileList | File[],
-  options?: { folder?: string; type?: 'normal' | 'archive' | 'auto' }
+  files: FileList | File[] | SkillUploadItem[],
+  options?: { folder?: string; type?: 'normal' | 'archive' | 'auto'; directories?: string[] }
 ) => {
   if (!activeSkillId.value) return
   const folder = (options?.folder ?? uploadFolder.value).trim()
   const mode = options?.type ?? uploadType.value
+  const items: SkillUploadItem[] = Array.from(files as ArrayLike<File | SkillUploadItem>).map((item) => (
+    item instanceof File ? { file: item } : item
+  ))
+  const directories = (options?.directories || [])
+    .map((relativeDir) => joinSkillPath(folder, relativeDir))
+    .filter(Boolean)
+  if (items.length === 0 && directories.length === 0) return
+  const summarize = items.length > 1 || directories.length > 0 || items.some((item) => item.relativeDir)
   uploading.value = true
   try {
-    for (const file of Array.from(files)) {
-      const isArchive = mode === 'archive' || (mode === 'auto' && isArchiveFilename(file.name))
+    const createdDirs = await ensureSkillDirectories(directories)
+    let uploaded = 0
+    for (const item of items) {
+      const file = item.file
+      const isArchive = mode === 'archive' || (mode === 'auto' && !item.relativeDir && isArchiveFilename(file.name))
       const limit = isArchive ? 20 * 1024 * 1024 : 10 * 1024 * 1024
       if (file.size > limit) {
         showToast(`文件 ${file.name} 超过限制大小 (${isArchive ? '20MB' : '10MB'})，已拦截上传`, 'warning')
@@ -1102,17 +1209,28 @@ const uploadFiles = async (
 
       const formData = new FormData()
       formData.append('file', file)
-      if (folder) {
-        formData.append('folder', folder)
+      const targetFolder = joinSkillPath(folder, item.relativeDir || '')
+      if (targetFolder) {
+        formData.append('folder', targetFolder)
       }
 
       const apiPrefix = resolveSkillApiPrefix(activeSkillId.value)
       if (isArchive) {
         await axios.post(`${apiPrefix}/${activeSkillId.value}/upload-archive`, formData)
-        showToast(`压缩包 ${file.name} 上传解压成功！`, 'success')
+        if (!summarize) showToast(`压缩包 ${file.name} 上传解压成功！`, 'success')
       } else {
         await axios.post(`${apiPrefix}/${activeSkillId.value}/upload`, formData)
-        showToast(`文件 ${file.name} 上传成功！`, 'success')
+        if (!summarize) showToast(`文件 ${file.name} 上传成功！`, 'success')
+      }
+      uploaded += 1
+    }
+    if (summarize) {
+      if (uploaded > 0) {
+        showToast(`已上传 ${uploaded} 个文件，文件夹结构已保留`, 'success')
+      } else if (createdDirs > 0) {
+        showToast('文件夹已放入', 'success')
+      } else if (directories.length > 0) {
+        showToast('这些文件夹已经存在', 'warning')
       }
     }
     // 重置上传目录与状态并重新获取详情更新文件树
@@ -2645,12 +2763,12 @@ description: 专门审查 Markdown 与技术文档的格式与结构守则。当
                       </svg>
                     </button>
                   </div>
-                  <span class="flex items-center gap-1.5 text-[10px] text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full font-medium shadow-sm transition-all hover:border-slate-350" title="可拖入文件到列表，或右键新建/上传">
+                  <span class="flex items-center gap-1.5 text-[10px] text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full font-medium shadow-sm transition-all hover:border-slate-350" title="可拖入文件或文件夹，子目录会一并放入">
                   <span class="relative flex h-1.5 w-1.5">
                     <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
                   </span>
-                  右键或拖入文件
+                  右键或拖入文件、文件夹
                 </span>
                 </div>
               </div>
@@ -2703,10 +2821,10 @@ description: 专门审查 Markdown 与技术文档的格式与结构守则。当
                   class="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col items-center rounded-xl border border-primary/30 bg-white/95 px-3 py-2 shadow-sm"
                 >
                   <p class="text-xs font-semibold text-primary">松开即可上传到 {{ dropTargetLabel }}</p>
-                  <p class="mt-0.5 text-[10px] text-primary/70">压缩包将自动解压；暂不支持拖入文件夹</p>
+                  <p class="mt-0.5 text-[10px] text-primary/70">文件夹会连同子目录和文件一起放入；单独拖入的压缩包仍会解压</p>
                 </div>
                 <div v-if="fileTree.length === 0" class="text-center py-10 text-xs text-gray-400 italic flex-1 flex items-center justify-center">
-                  暂无技能文件，可将文件拖到此处上传
+                  暂无技能文件，可将文件或文件夹拖到此处上传
                 </div>
                 <SkillFileTree 
                   v-else

@@ -12,6 +12,7 @@ import { useBranding } from '@/composables/useBranding';
 import WorkbenchPersonalResources from '@/components/workbench/WorkbenchPersonalResources.vue';
 import type { WorkbenchPersonalResource } from '@/types/workbench';
 import { isEmbeddedInIframe } from '@/utils/embedHost';
+import { shortcutCommandPreview } from '@/utils/shortcutSkill';
 
 const { branding } = useBranding();
 const embeddedInIframe = isEmbeddedInIframe();
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'quick-question', command: string): void;
+  (e: 'apply-shortcut', command: string): void;
   (e: 'open-data-portal'): void;
   (e: 'select-knowledge-base'): void;
   (e: 'open-workspace'): void;
@@ -109,6 +111,12 @@ const recommendedPrompts = computed(() => {
     .filter(c => !String(c.id).startsWith('sys_'))
     .slice(0, 4);
 });
+
+const promptPreview = (cmd: { scenario?: string; command?: string }) => {
+  const scenario = String(cmd?.scenario || '').trim();
+  if (scenario) return scenario;
+  return shortcutCommandPreview(String(cmd?.command || ''));
+};
 </script>
 
 <template>
@@ -212,7 +220,7 @@ const recommendedPrompts = computed(() => {
         <button 
           v-for="cmd in recommendedPrompts" 
           :key="cmd.id"
-          @click="emit('quick-question', cmd.command)"
+          @click="emit('apply-shortcut', cmd.command)"
           class="flex items-center space-x-3 p-4 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl text-left hover:border-primary/50 hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-all group"
         >
           <div class="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-white transition-colors">
@@ -220,7 +228,7 @@ const recommendedPrompts = computed(() => {
           </div>
           <div class="flex-1 min-w-0">
             <div class="text-xs font-bold text-gray-800 dark:text-gray-200 truncate">{{ cmd.label }}</div>
-            <div class="text-[10px] text-gray-400 truncate">{{ cmd.command }}</div>
+            <div class="text-[10px] text-gray-400 truncate">{{ promptPreview(cmd) }}</div>
           </div>
           <svg class="w-3.5 h-3.5 text-gray-300 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
         </button>

@@ -87,7 +87,7 @@
 - `requirement`：提交给 MCP 时必须是拼好的 Markdown 表（`## 车辆问题` 等 + 表）。这就是企业端「任务说明」。问题整改有事实时必填，必须含 `##` 和 `|` 表，禁止一句话摘要，禁止建议句，禁止把 `problems` JSON 原样传进来。有车牌进车辆节，无车牌有人进驾驶员节，都无进企业节。文件中无车牌、无姓名的事项进企业节。带「汇总、合计、小计、总计」的加总行不写。不要分析/建议三节，不要 HTML。仅当与共性完全相同且无对象级事实时可空
 - `attachments`：本企业附件 URL，最多 10 个
 
-出确认卡前读全源明细并写入 `pending_write/create.json`。问题整改每个 item 冻结 `problems`（一车一条或一驾驶员一条），禁止概要/统计，禁止在冻结文件里手写 `requirement`。必须 `python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json` 退出码 0（路径不对就 `find skills /workspace/skills -name validate_create_json.py`）。禁止 Read `.py`。缺文件、缺家、检查不通过：禁止出卡、禁止调用本工具。确认后禁止再 Write `create.json`。`render` 传入卡上 `--name` `--task-type` `--need-audit` `--deadline`（退出码 0 已含校验），再提交 `submit.json`；不得改写 facts。问题处置只传 `items`，不要传 `enterpriseIds`。会议通知用短 Markdown，不套整改三节。
+出确认卡前读全源明细并写入 `pending_write/create.json`。问题整改每个 item 冻结 `problems`（一车一条或一驾驶员一条），禁止概要/统计，禁止在冻结文件里手写 `requirement`。必须 `python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json` 退出码 0（路径不对就 `find skills /workspace/skills -name validate_create_json.py`）。确认卡 `enterpriseCount` 写成 `可下发企业数=` 的整数加「家」，`enterprises` 原样粘贴 `可下发企业清单=` 等号后整段，`summary` 的 N 用同一个整数。禁止按 resolve 或顿号重数，禁止把 `check` 删掉的企业补回。禁止 Read `.py`。缺文件、缺家、检查不通过：禁止出卡、禁止调用本工具。确认后禁止再 Write `create.json`。`render` 传入卡上 `--name` `--task-type` `--need-audit` `--deadline`（退出码 0 已含校验），再提交 `submit.json`；不得改写 facts。问题处置只传 `items`，不要传 `enterpriseIds`。会议通知用短 Markdown，不套整改三节。
 
 立即下发时至少一家企业，否则报「请至少选择一家企业」。`sourceType` 由后端写成 `MCP`，不必传。
 

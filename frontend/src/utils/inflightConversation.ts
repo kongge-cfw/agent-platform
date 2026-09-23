@@ -1,3 +1,5 @@
+import { ref } from "vue";
+
 /** 切走会话时按 conversationId 缓存正在生成的消息，切回直接还原，避免被 Redis 旧历史覆盖。 */
 
 export type InflightChatMessage = {
@@ -21,6 +23,15 @@ export type InflightSnapshot<T = InflightChatMessage> = {
 };
 
 const inflightByConversation = new Map<string, InflightSnapshot>();
+
+/** 本地仍在生成的会话。历史卡片用它标「进行中」，不依赖服务端 status 刷新。 */
+export const processingConversationIds = ref<string[]>([]);
+
+const syncProcessingConversationIds = () => {
+  processingConversationIds.value = [...inflightByConversation.entries()]
+    .filter(([, snapshot]) => snapshot.isProcessing)
+    .map(([conversationId]) => conversationId);
+};
 
 const normalizeConversationId = (conversationId?: string | null): string =>
   String(conversationId || "").trim();
@@ -105,6 +116,7 @@ export const stashInflightConversation = <T extends InflightChatMessage>(
   const cid = normalizeConversationId(conversationId);
   if (!cid) return;
   inflightByConversation.set(cid, snapshot as InflightSnapshot);
+  syncProcessingConversationIds();
 };
 
 export const peekInflightConversation = <T extends InflightChatMessage>(
@@ -125,12 +137,14 @@ export const patchInflightConversation = (
   const snap = peekInflightConversation(conversationId);
   if (!snap) return;
   Object.assign(snap, patch);
+  syncProcessingConversationIds();
 };
 
 export const discardInflightConversation = (conversationId?: string | null): void => {
   const cid = normalizeConversationId(conversationId);
   if (!cid) return;
   inflightByConversation.delete(cid);
+  syncProcessingConversationIds();
 };
 
 export const hasLiveGeneratingAgent = (

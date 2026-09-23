@@ -9,7 +9,7 @@ pytestmark = pytest.mark.no_infrastructure
 
 def _assert_send_lock_contract(source: str) -> None:
     assert 'createChatSendGate' in source
-    assert 'const { locked: sendLocked, runExclusive: runSendExclusive }' in source
+    assert 'const { locked: sendLocked, submittingIds, runForConversation: runSendForConversation }' in source
     assert 'const sendPreparedMessage = async (' in source
     assert 'return sendMessageInternal(snapshot);' in source
     assert 'clientRequestId' in source
@@ -26,7 +26,7 @@ def test_chat_surfaces_lock_duplicate_sends_before_async_preflight_finishes():
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         _assert_send_lock_contract(source)
         assert ':is-processing="isProcessing || remoteRunActive"' in source
-        assert ':is-submitting="sendLocked"' in source
+        assert ':is-submitting="submittingIds.includes(conversationId)"' in source
 
 
 def test_preflight_send_paths_claim_the_gate_before_history_or_render_awaits():

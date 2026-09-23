@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import time
 import asyncio
 import secrets
@@ -19,7 +20,12 @@ from app.core.context import set_debug_context
 from app.core.dependencies import require_api_key
 from app.schemas.response import StandardResponse, ListResponse
 from app.schemas.agent import TraceLogResponse, AgentExecutionHistoryListResponse
-from app.utils.fs_access import get_user_uploads_dir, open_upload_storage_file, reject_invalid_office_upload
+from app.utils.fs_access import (
+    get_user_uploads_dir,
+    open_upload_storage_file,
+    reject_invalid_office_upload,
+    resolve_embed_example_file,
+)
 from app.services.permission_service import PermissionService
 from app.services.conversation_resource_service import ConversationResourceService
 from app.services.resource_scope_normalizer import normalize_resource_scope_for_user
@@ -1982,6 +1988,27 @@ async def resume_external_execution(
     )
 
 
+def _history_card_query(first_query: Optional[str], latest_query: Optional[str]) -> str:
+    """历史卡片标题用第一段用户问题，不用确认回执或答题回执。"""
+    for candidate in (first_query, latest_query):
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        if text.startswith("【业务确认】") or text.startswith("【用户回答】"):
+            continue
+        if "---" in text:
+            head = text.split("---", 1)[0].strip()
+            if head:
+                text = head
+        return text
+    fallback = str(first_query or latest_query or "").strip()
+    if "---" in fallback:
+        head = fallback.split("---", 1)[0].strip()
+        if head:
+            return head
+    return fallback
+
+
 @router.get("/history", 
     response_model=StandardResponse[AgentExecutionHistoryListResponse],
     summary="查询历史记录",
@@ -2035,42 +2062,59 @@ async def get_history(
         scope_filters.append(AgentExecutionHistory.username == username)
 
     # 1. Base Query
+    first_history = None
     if group_by_conversation:
-        # Aggregation Logic: Get latest record AND total count per conversation
-        subquery = (
+        from sqlalchemy.orm import aliased
+
+        # 最新一行决定排序和状态，最早一行的 query 作为卡片标题。
+        latest_history = aliased(AgentExecutionHistory)
+        first_history = aliased(AgentExecutionHistory)
+        conv_key = func.coalesce(AgentExecutionHistory.conversation_id, AgentExecutionHistory.trace_id)
+        grouped = (
             select(
+                conv_key.label("conv_key"),
                 func.max(AgentExecutionHistory.id).label("max_id"),
-                func.count(AgentExecutionHistory.id).label("turn_count")
+                func.min(AgentExecutionHistory.id).label("min_id"),
+                func.count(AgentExecutionHistory.id).label("turn_count"),
             )
             .where(*scope_filters)
-            .group_by(func.coalesce(AgentExecutionHistory.conversation_id, AgentExecutionHistory.trace_id))
+            .group_by(conv_key)
             .subquery()
         )
         query = (
-            select(AgentExecutionHistory, subquery.c.turn_count)
-            .join(subquery, AgentExecutionHistory.id == subquery.c.max_id)
+            select(latest_history, grouped.c.turn_count, first_history.query.label("first_query"))
+            .join(grouped, latest_history.id == grouped.c.max_id)
+            .join(first_history, first_history.id == grouped.c.min_id)
         )
+        history_row = latest_history
     else:
         query = select(AgentExecutionHistory)
+        history_row = AgentExecutionHistory
 
     # 2. User Filter (Security)
-    if scope_filters:
+    if scope_filters and not group_by_conversation:
         query = query.where(*scope_filters)
 
     # 3. Apply Filters
     if agent_id:
-        query = query.where(AgentExecutionHistory.agent_id == agent_id)
+        query = query.where(history_row.agent_id == agent_id)
     if conversation_id: # 应用会话过滤
-        query = query.where(AgentExecutionHistory.conversation_id == conversation_id)
+        query = query.where(history_row.conversation_id == conversation_id)
     if status:
-        query = query.where(AgentExecutionHistory.status == status)
+        query = query.where(history_row.status == status)
     if keyword:
         search_pattern = f"%{keyword}%"
-        query = query.where(or_(AgentExecutionHistory.query.like(search_pattern), AgentExecutionHistory.summary.like(search_pattern)))
+        keyword_match = [
+            history_row.query.like(search_pattern),
+            history_row.summary.like(search_pattern),
+        ]
+        if first_history is not None:
+            keyword_match.append(first_history.query.like(search_pattern))
+        query = query.where(or_(*keyword_match))
     if start_dt:
-        query = query.where(AgentExecutionHistory.created_at >= start_dt)
+        query = query.where(history_row.created_at >= start_dt)
     if end_dt:
-        query = query.where(AgentExecutionHistory.created_at <= end_dt)
+        query = query.where(history_row.created_at <= end_dt)
 
     # 4. Get Total Count
     count_query = select(func.count()).select_from(query.subquery())
@@ -2078,10 +2122,7 @@ async def get_history(
     total = total_result.scalar() or 0
 
     # 5. Pagination & Ordering
-    if group_by_conversation:
-        query = query.order_by(desc(AgentExecutionHistory.id))
-    else:
-        query = query.order_by(desc(AgentExecutionHistory.id))
+    query = query.order_by(desc(history_row.id))
         
     query = query.offset((page - 1) * page_size).limit(page_size)
 
@@ -2129,23 +2170,26 @@ async def get_history(
         rows = result.all()
         if (user_info or {}).get("role") == "admin":
             from app.models.user import User
-            usernames = {row_obj.username for row_obj, _ in rows if row_obj.username}
+            usernames = {row_obj.username for row_obj, *_ in rows if row_obj.username}
             owner_result = await db.execute(select(User.user_name, User.id).where(User.user_name.in_(usernames))) if usernames else None
             owner_map = {str(row.user_name): row.id for row in owner_result.all()} if owner_result else {}
             scopes = await ConversationResourceService.get_many_for_owners(
-                [(owner_map.get(row_obj.username), row_obj.conversation_id) for row_obj, _ in rows if row_obj.conversation_id and owner_map.get(row_obj.username) is not None]
+                [(owner_map.get(row_obj.username), row_obj.conversation_id) for row_obj, *_ in rows if row_obj.conversation_id and owner_map.get(row_obj.username) is not None]
             )
             scope_key = lambda item: (str(owner_map.get(item.username)), item.conversation_id)
         else:
             scopes = await ConversationResourceService.get_many(
                 history_user_id,
-                [row_obj.conversation_id for row_obj, _ in rows if row_obj.conversation_id],
+                [row_obj.conversation_id for row_obj, *_ in rows if row_obj.conversation_id],
             )
             scope_key = lambda item: item.conversation_id
-        for row_obj, turn_count in rows:
+        for row_obj, turn_count, first_query in rows:
             item = AgentExecutionHistoryResponse.from_orm(row_obj)
             item = item.model_copy(update=reusable_metadata_by_trace.get(str(item.trace_id), {}))
             item.turn_count = turn_count
+            card_query = _history_card_query(first_query, row_obj.query)
+            if card_query:
+                item.query = card_query
             if item.agent_id in agent_map:
                 item.agent_name = agent_map[item.agent_id][0]
                 item.agent_display_name = agent_map[item.agent_id][1]
@@ -2580,6 +2624,56 @@ async def upload_chat_file(
         size=len(contents),
         ext=ext.replace(".", "")
     ))
+
+
+class ExampleFileRef(BaseModel):
+    url: str
+    filename: str
+    size: int = 0
+    ext: str = ""
+
+
+class CopyExampleFilesRequest(BaseModel):
+    files: List[ExampleFileRef] = Field(default_factory=list, max_length=10)
+
+
+@router.post(
+    "/example-files/copy",
+    response_model=StandardResponse[List[UploadResponse]],
+    summary="把嵌入应用示例附件复制到当前用户上传目录",
+)
+async def copy_example_files(
+    body: CopyExampleFilesRequest,
+    user_info: Dict[str, Any] = Depends(require_api_key),
+):
+    app_id = str(user_info.get("embed_app_id") or "").strip()
+    if not app_id:
+        raise HTTPException(status_code=403, detail="仅嵌入应用会话可以套用示例附件")
+    upload_dir = get_user_uploads_dir(user_info)
+    if not upload_dir:
+        raise HTTPException(status_code=403, detail="无法解析用户工作目录，复制示例附件失败。")
+    os.makedirs(upload_dir, exist_ok=True)
+    copied: List[UploadResponse] = []
+    for item in body.files:
+        source = resolve_embed_example_file(app_id, item.url)
+        try:
+            dest_path, handle = open_upload_storage_file(upload_dir, item.filename or os.path.basename(source))
+            with handle:
+                pass
+            shutil.copyfile(source, dest_path)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Failed to copy example attachment: %s", exc)
+            raise HTTPException(status_code=500, detail="复制示例附件失败，请稍后重试。") from exc
+        ext = os.path.splitext(dest_path)[1].lower().replace(".", "")
+        copied.append(UploadResponse(
+            url=dest_path,
+            filename=item.filename or os.path.basename(dest_path),
+            size=os.path.getsize(dest_path),
+            ext=ext or str(item.ext or "").lstrip("."),
+        ))
+    return StandardResponse(data=copied)
 
 
 class ActiveConversationRequest(BaseModel):

@@ -20,6 +20,11 @@ _STANDARD_CLAIM_KEYS = (
 _MAX_SHORTCUT_PROMPTS = 20
 _SHORTCUT_LABEL_MAX = 50
 _SHORTCUT_COMMAND_MAX = 500
+_SHORTCUT_SCENARIO_MAX = 200
+_MAX_EXAMPLES = 20
+_MAX_EXAMPLE_ATTACHMENTS = 10
+_EXAMPLE_URL_MAX = 1024
+_EXAMPLE_FILENAME_MAX = 255
 _GROUNDING_BLOCK_MODES = frozenset({"strict_buffer", "stream_with_retraction"})
 _CHAT_THEMES = frozenset({"light", "dark"})
 _MARKDOWN_THEMES = frozenset({
@@ -79,9 +84,10 @@ def parse_shortcut_prompts(value: Any) -> list[dict[str, str]]:
             continue
         label = str(item.get("label") or "").strip()[:_SHORTCUT_LABEL_MAX]
         command = str(item.get("command") or "").strip()[:_SHORTCUT_COMMAND_MAX]
+        scenario = str(item.get("scenario") or "").strip()[:_SHORTCUT_SCENARIO_MAX]
         if not label or not command:
             continue
-        prompts.append({"label": label, "command": command})
+        prompts.append({"label": label, "command": command, "scenario": scenario})
         if len(prompts) >= _MAX_SHORTCUT_PROMPTS:
             break
     return prompts
@@ -89,6 +95,67 @@ def parse_shortcut_prompts(value: Any) -> list[dict[str, str]]:
 
 def dump_shortcut_prompts(value: Any) -> str:
     return json.dumps(parse_shortcut_prompts(value), ensure_ascii=False)
+
+
+def _parse_example_attachment(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    url = str(item.get("url") or "").strip()[:_EXAMPLE_URL_MAX]
+    filename = str(item.get("filename") or "").strip()[:_EXAMPLE_FILENAME_MAX]
+    if not url or not filename or ".." in url.replace("\\", "/"):
+        return None
+    try:
+        size = int(item.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    ext = str(item.get("ext") or "").strip().lstrip(".")[:16]
+    return {"url": url, "filename": filename, "size": max(0, size), "ext": ext}
+
+
+def parse_examples(value: Any) -> list[dict[str, Any]]:
+    """嵌入应用示例：名称、指令（可含技能标记）、使用场景、附件。"""
+    raw: Any = value
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    examples: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()[:_SHORTCUT_LABEL_MAX]
+        command = str(item.get("command") or "").strip()[:_SHORTCUT_COMMAND_MAX]
+        scenario = str(item.get("scenario") or "").strip()[:_SHORTCUT_SCENARIO_MAX]
+        attachments = []
+        for raw_file in item.get("attachments") or []:
+            parsed = _parse_example_attachment(raw_file)
+            if parsed:
+                attachments.append(parsed)
+            if len(attachments) >= _MAX_EXAMPLE_ATTACHMENTS:
+                break
+        if not label or not (command or attachments):
+            continue
+        examples.append({
+            "label": label,
+            "command": command,
+            "scenario": scenario,
+            "attachments": attachments,
+        })
+        if len(examples) >= _MAX_EXAMPLES:
+            break
+    return examples
+
+
+def dump_examples(value: Any) -> str:
+    return json.dumps(parse_examples(value), ensure_ascii=False)
 
 
 def default_chat_settings() -> dict[str, Any]:
@@ -198,6 +265,7 @@ class SysEmbedAppBase(BaseModel):
     claim_keys: list[str] = Field(default_factory=list)
     data_permission_mode: str = "nanzi_sql_rewrite"
     shortcut_prompts: list[dict[str, str]] = Field(default_factory=list)
+    examples: list[dict[str, Any]] = Field(default_factory=list)
     chat_settings: dict[str, Any] = Field(default_factory=default_chat_settings)
     is_active: bool = True
 
@@ -254,6 +322,11 @@ class SysEmbedAppBase(BaseModel):
     def _shortcut_prompts(cls, value: Any) -> list[dict[str, str]]:
         return parse_shortcut_prompts(value)
 
+    @field_validator("examples", mode="before")
+    @classmethod
+    def _examples(cls, value: Any) -> list[dict[str, Any]]:
+        return parse_examples(value)
+
     @field_validator("chat_settings", mode="before")
     @classmethod
     def _chat_settings(cls, value: Any) -> dict[str, Any]:
@@ -294,6 +367,7 @@ class SysEmbedAppUpdate(BaseModel):
     claim_keys: Optional[list[str]] = None
     data_permission_mode: Optional[str] = None
     shortcut_prompts: Optional[list[dict[str, str]]] = None
+    examples: Optional[list[dict[str, Any]]] = None
     chat_settings: Optional[dict[str, Any]] = None
     is_active: Optional[bool] = None
 
@@ -338,6 +412,13 @@ class SysEmbedAppUpdate(BaseModel):
             return value
         return parse_shortcut_prompts(value)
 
+    @field_validator("examples", mode="before")
+    @classmethod
+    def _update_examples(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        return parse_examples(value)
+
     @field_validator("chat_settings", mode="before")
     @classmethod
     def _update_chat_settings(cls, value: Any) -> Any:
@@ -374,6 +455,11 @@ class SysEmbedAppResponse(SysEmbedAppBase):
     @classmethod
     def _response_prompts(cls, value: Any) -> list[dict[str, str]]:
         return parse_shortcut_prompts(value)
+
+    @field_validator("examples", mode="before")
+    @classmethod
+    def _response_examples(cls, value: Any) -> list[dict[str, Any]]:
+        return parse_examples(value)
 
 
 class EmbedRoleOption(BaseModel):

@@ -81,7 +81,13 @@ export interface SysEmbedApp {
   require_identity: boolean
   claim_keys: string[]
   data_permission_mode: 'nanzi_sql_rewrite' | 'mcp_only'
-  shortcut_prompts: Array<{ label: string; command: string }>
+  shortcut_prompts: Array<{ label: string; command: string; scenario?: string }>
+  examples?: Array<{
+    label: string
+    command: string
+    scenario?: string
+    attachments?: Array<{ url: string; filename: string; size?: number; ext?: string }>
+  }>
   chat_settings?: EmbedChatSettings | null
   is_active: boolean
   created_by?: string | null
@@ -101,7 +107,13 @@ export interface SysEmbedAppPayload {
   require_identity?: boolean
   claim_keys?: string[]
   data_permission_mode?: 'nanzi_sql_rewrite' | 'mcp_only'
-  shortcut_prompts?: Array<{ label: string; command: string }>
+  shortcut_prompts?: Array<{ label: string; command: string; scenario?: string }>
+  examples?: Array<{
+    label: string
+    command: string
+    scenario?: string
+    attachments?: Array<{ url: string; filename: string; size?: number; ext?: string }>
+  }>
   chat_settings?: EmbedChatSettings
   is_active?: boolean
 }

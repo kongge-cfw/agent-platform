@@ -1,7 +1,53 @@
 export interface ChatHistoryItem {
+  conversation_id?: string | null;
+  query?: string | null;
   created_at?: string | null;
   [key: string]: unknown;
 }
+
+const HISTORY_RECEIPT_PREFIXES = ["【业务确认】", "【用户回答】"];
+
+export const historyCardTitle = (text: unknown): string => {
+  const raw = String(text ?? "").trim();
+  if (!raw || HISTORY_RECEIPT_PREFIXES.some((prefix) => raw.startsWith(prefix))) return "";
+  const head = raw.includes("---") ? (raw.split("---", 1)[0] || "").trim() : raw;
+  return head;
+};
+
+export const upsertPendingHistoryCard = <T extends ChatHistoryItem>(list: T[], card: T): T[] => {
+  const cid = String(card.conversation_id || "");
+  const title = historyCardTitle(card.query);
+  if (!cid || !title) return list;
+  const index = list.findIndex((item) => item.conversation_id === cid);
+  if (index === -1) return [{ ...card, query: title }, ...list];
+  if (historyCardTitle(list[index]?.query)) return list;
+  const next = list.slice();
+  next[index] = { ...list[index], query: title };
+  return next;
+};
+
+export const mergePendingHistoryCards = <T extends ChatHistoryItem>(
+  serverItems: T[],
+  pending: Record<string, T>,
+): { items: T[]; pending: Record<string, T> } => {
+  const nextPending = { ...pending };
+  const items = serverItems.map((item) => {
+    const cid = String(item.conversation_id || "");
+    const pin = cid ? nextPending[cid] : undefined;
+    if (!pin) return item;
+    if (historyCardTitle(item.query)) {
+      delete nextPending[cid];
+      return item;
+    }
+    return { ...item, query: historyCardTitle(pin.query) || item.query };
+  });
+  Object.entries(nextPending).forEach(([cid, card]) => {
+    if (!items.some((item) => item.conversation_id === cid)) {
+      items.unshift(card);
+    }
+  });
+  return { items, pending: nextPending };
+};
 
 export interface ChatHistoryDateGroup<T extends ChatHistoryItem> {
   id: string;

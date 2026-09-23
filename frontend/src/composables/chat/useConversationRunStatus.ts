@@ -58,7 +58,16 @@ export function createConversationRunStatusController(
 
   const refresh = async (conversationId: string): Promise<boolean> => {
     const normalizedConversationId = String(conversationId || "").trim();
-    if (normalizedConversationId !== currentConversationId) outputCompleted = false;
+    if (normalizedConversationId !== currentConversationId) {
+      outputCompleted = false;
+      // 切到另一条会话时立刻放开输入，不要等这条会话的状态请求返回。
+      remoteRunActive.value = false;
+      status.value = { ...EMPTY_STATUS };
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }
     currentConversationId = normalizedConversationId;
     const sequence = ++requestSequence;
     if (!normalizedConversationId) {

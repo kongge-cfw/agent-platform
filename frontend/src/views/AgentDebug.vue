@@ -79,6 +79,7 @@ import {
   needsGeneratingPlaceholder,
   patchInflightConversation,
   peekInflightConversation,
+  processingConversationIds,
   shouldSkipHistoryReplace,
   stashInflightConversation,
 } from "@/utils/inflightConversation";
@@ -160,6 +161,7 @@ import {
 } from "@/composables/chat/useSavedReportWorkflow";
 import { useWorkspaceCanvas } from "@/composables/chat/useWorkspaceCanvas";
 import { createChatSendGate } from "@/composables/chat/useChatSendGate";
+import { readHistorySidebarOpen, writeHistorySidebarOpen } from "@/utils/chatHistorySidebarPref";
 import { useConversationRunStatus } from "@/composables/chat/useConversationRunStatus";
 import { createClientRequestId } from "@/utils/clientRequestId";
 import {
@@ -167,7 +169,7 @@ import {
   splitUserMessageContent,
   useChatAttachments,
 } from "@/composables/chat/useChatAttachments";
-import { groupChatHistoryByDate } from "@/composables/chat/useChatHistoryGroups";
+import { groupChatHistoryByDate, historyCardTitle, mergePendingHistoryCards, upsertPendingHistoryCard } from "@/composables/chat/useChatHistoryGroups";
 import { chatMessageRenderKey } from "@/utils/chatMessageRenderKey";
 import {
   applyResumeRunStatusEvent,
@@ -329,6 +331,7 @@ const continueChatFromTrace = () => {
             afterConversationActivated(targetId);
         } else {
             messages.value = [];
+            isProcessing.value = false;
             loadSessionHistory(targetId).then(() => afterConversationActivated(targetId));
         }
         showSessionPreview.value = false;
@@ -347,6 +350,7 @@ interface SlashCommand {
   id?: number;
   label: string;
   command: string;
+  scenario?: string;
   sort_order: number;
 }
 
@@ -362,7 +366,23 @@ const agentParams = reactive<{
 const historyList = ref<any[]>([]);
 const loadingHistory = ref(false);
 const historyKeyword = ref("");
+const pendingHistoryCards = ref<Record<string, any>>({});
 let searchTimer: any = null;
+
+const rememberSentHistoryCard = (cid: string, query: string) => {
+  const title = historyCardTitle(query);
+  if (!cid || !title) return;
+  const card = {
+    conversation_id: cid,
+    query: title,
+    summary: "",
+    status: "running",
+    turn_count: 1,
+    created_at: new Date().toISOString(),
+  };
+  pendingHistoryCards.value = { ...pendingHistoryCards.value, [cid]: card };
+  historyList.value = upsertPendingHistoryCard(historyList.value, card);
+};
 
 const fetchHistory = async () => {
   loadingHistory.value = true;
@@ -375,7 +395,16 @@ const fetchHistory = async () => {
       params.keyword = historyKeyword.value;
     }
     const res = await axios.get("/api/v1/chat/history", { params });
-    if (res.data?.data) historyList.value = res.data.data.items || [];
+    if (res.data?.data) {
+      const merged = mergePendingHistoryCards(res.data.data.items || [], pendingHistoryCards.value);
+      historyList.value = merged.items;
+      pendingHistoryCards.value = merged.pending;
+      historyList.value.forEach((item) => {
+        if (item?.status === "running" && settledRunIds.value.includes(item.conversation_id)) {
+          item.status = "success";
+        }
+      });
+    }
   } catch (e) {
     console.error("Failed to fetch history", e);
   } finally {
@@ -668,6 +697,7 @@ const generateNewConversation = (isManual = false) => {
     messages.value = [];
     loadGreeting();
   }
+  isProcessing.value = false;
 };
 
 const mapDebugConversationMessages = (rawMessages: any[]): Message[] => {
@@ -1506,7 +1536,10 @@ const isChatContextMessage = (message: Message): boolean => (
 );
 
 // --- Debug Config State ---
-const showHistorySidebar = ref(false);
+const showHistorySidebar = ref(readHistorySidebarOpen());
+watch(showHistorySidebar, (open) => {
+  writeHistorySidebarOpen(open);
+});
 const showConfigPanel = ref(true);
 const isConfigPanelFloating = ref(false);
 const debugConfig = reactive({
@@ -1636,6 +1669,29 @@ const manualCompactDebugContext = async (retainRatio: 0.25 | 0.5 | 0.75 = 0.5, m
 // useSandboxWorkspace 内部 watch(..., { immediate: true }) 会立即读取 isProcessing，
 // 因此 isProcessing 必须在沙箱组合式函数调用之前完成声明，否则触发 TDZ 运行时崩溃。
 const isProcessing = ref(false);
+const settledRunIds = ref<string[]>([]);
+const historyProcessingIds = computed(() => {
+  const ids = new Set(processingConversationIds.value);
+  if ((isProcessing.value || remoteRunActive.value) && conversationId.value) {
+    ids.add(conversationId.value);
+  }
+  return [...ids];
+});
+const settleHistoryRun = (cid: string) => {
+  if (!cid) return;
+  if (!settledRunIds.value.includes(cid)) {
+    settledRunIds.value = [...settledRunIds.value, cid];
+  }
+  const item = historyList.value.find((row) => row.conversation_id === cid);
+  if (item?.status === "running") item.status = "success";
+};
+watch(historyProcessingIds, (ids, prev = []) => {
+  const live = new Set(ids);
+  settledRunIds.value = settledRunIds.value.filter((cid) => !live.has(cid));
+  prev.forEach((cid) => {
+    if (!live.has(cid)) settleHistoryRun(cid);
+  });
+});
 
 const {
   sandboxWorkspaceStatus,
@@ -1748,6 +1804,7 @@ const showCommandManager = ref(false);
 const editingCommand = ref<SlashCommand>({
   label: "",
   command: "",
+  scenario: "",
   sort_order: 0,
 });
 const isEditingCmd = ref(false);
@@ -1760,13 +1817,14 @@ const openCommandManager = () => {
 };
 
 const resetCommandForm = () => {
-  editingCommand.value = { label: "", command: "", sort_order: 0 };
+  editingCommand.value = { label: "", command: "", scenario: "", sort_order: 0 };
   isEditingCmd.value = false;
 };
 
 const editCommand = (cmd: any) => {
   isEditingCmd.value = true;
   editingCommand.value = { ...cmd };
+  showCommandManager.value = true;
 };
 
 const confirmDeleteCommand = (cmdId: number) => {
@@ -2464,13 +2522,17 @@ const enterFullScreenFromTip = () => {
 };
 
 const userInput = ref("");
-const { locked: sendLocked, runExclusive: runSendExclusive } = createChatSendGate();
+const { locked: sendLocked, submittingIds, runForConversation: runSendForConversation } = createChatSendGate();
+const isCurrentConversationSendBlocked = () =>
+  isProcessing.value
+  || remoteRunActive.value
+  || submittingIds.value.includes(conversationId.value);
 const focusChatInputWhenReady = () => {
-  if (isMobile.value || isProcessing.value || remoteRunActive.value || sendLocked.value) return;
+  if (isMobile.value || isCurrentConversationSendBlocked()) return;
   nextTick(() => chatInputRef.value?.focus());
 };
 
-watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);
+watch([isProcessing, remoteRunActive, sendLocked, submittingIds], focusChatInputWhenReady);
 
 const activeTodoTimeline = computed(() =>
   activeTodoTimelineFromMessages(messages.value),
@@ -2722,7 +2784,7 @@ const handleChatBIResultAction = async (
 
 const handleQuickQuestion = async (question: string, action: "send" | "fill" = "send", sourceContent?: string) => {
   if (!question) return;
-  if (action === "send" && (isProcessing.value || remoteRunActive.value || sendLocked.value)) return;
+  if (action === "send" && isCurrentConversationSendBlocked()) return;
   const selectedSource = sourceContent?.trim();
   const nextContent = selectedSource
     ? `${question}${USER_MESSAGE_CONTEXT_DIVIDER}【被点击的 AI 回复】\n${selectedSource}`
@@ -2743,7 +2805,7 @@ const handleGroundingAction = async (
   payload: GroundingBlockedPayload | undefined,
   action: GroundingBlockedAction,
 ) => {
-  if (!payload || isProcessing.value || remoteRunActive.value || sendLocked.value) return;
+  if (!payload || isCurrentConversationSendBlocked()) return;
   if (action.kind === "grounding_retry") {
     const groundingAction = {
       ...(action.payload || {}),
@@ -3422,19 +3484,20 @@ const captureSendSnapshot = (overrides: ChatSendOverrides = {}): ChatSendSnapsho
 
 const sendPreparedMessage = async (
   prepare: () => Promise<ChatSendSnapshot | null>,
-) => runSendExclusive(async () => {
+) => runSendForConversation(conversationId.value, async () => {
   if (isProcessing.value || remoteRunActive.value) return;
   const snapshot = await prepare();
   if (!snapshot) return;
   return sendMessageInternal(snapshot);
 });
 
-const sendMessage = async (overrides: ChatSendOverrides = {}) => runSendExclusive(async () => {
+const sendMessage = async (overrides: ChatSendOverrides = {}) => runSendForConversation(conversationId.value, async () => {
   if (isProcessing.value || remoteRunActive.value) return;
   return sendMessageInternal(captureSendSnapshot(overrides));
 });
 
 const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
+  const ownerConversationId = conversationId.value;
   const { content, files } = snapshot;
   const turnMetadataDatasetIds = [...activeMetadataDatasetIds.value];
   if (!content && files.length === 0) return;
@@ -3460,6 +3523,8 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     }
     return;
   }
+  if (ownerConversationId && conversationId.value !== ownerConversationId) return;
+  rememberSentHistoryCard(conversationId.value, content);
 
   // 1. Add User Message
   messages.value.push({
@@ -3477,7 +3542,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     chatInputRef.value.uploadedFiles = [];
   }
   isProcessing.value = true;
-  const streamConversationId = conversationId.value;
+  const streamConversationId = ownerConversationId || conversationId.value;
 
   // 2. Add Agent Placeholder
   const agentMsgId = Date.now() + 1;
@@ -3527,9 +3592,11 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
   }, 100);
 
   // 3. Call Real API with SSE
-  // SSE 可能因切后台/网络变化提前结束；在状态接口确认释放前继续阻止新一轮发送。
-  remoteRunActive.value = true;
-  runStatusHydrateCid = streamConversationId;
+  // SSE 可能因切后台/网络变化提前结束；只锁住这条会话，切走后新会话可以继续输入。
+  if (isViewingStream()) {
+    remoteRunActive.value = true;
+    runStatusHydrateCid = streamConversationId;
+  }
   abortController = new AbortController();
   ragRetrievalMeta.value = null;
 
@@ -4372,6 +4439,9 @@ onUnmounted(() => {
       :loading="loadingHistory"
       :history-list="groupedHistoryList"
       :active-trace-id="activeTraceId"
+      :active-conversation-id="conversationId"
+      :processing-conversation-ids="historyProcessingIds"
+      :settled-conversation-ids="settledRunIds"
       @fetch-history="fetchHistory"
       @load-chat="openSessionPreview"
       @open-full-logs="openSessionPreview"
@@ -5164,8 +5234,8 @@ onUnmounted(() => {
         <ChatInput
           ref="chatInputRef"
           v-model="userInput"
-          :is-processing="isProcessing || remoteRunActive"
-          :is-submitting="sendLocked"
+        :is-processing="isProcessing || remoteRunActive"
+        :is-submitting="submittingIds.includes(conversationId)"
           :show-shortcuts="debugConfig.showShortcuts"
           :slash-commands="slashCommands"
           :allowed-agents="agents"
@@ -5326,7 +5396,7 @@ onUnmounted(() => {
     <!-- Modal: Command Manager -->
     <div
       v-if="showCommandManager"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+      class="fixed inset-0 z-[1500] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
     >
       <div
         class="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col overflow-hidden animate-fade-in-up"
@@ -5372,9 +5442,10 @@ onUnmounted(() => {
               </div>
               <div class="col-span-6">
                 <input
-                  v-model="editingCommand.command"
+                  v-model="editingCommand.scenario"
                   type="text"
-                  placeholder="执行内容"
+                  maxlength="200"
+                  placeholder="使用场景，说明这条指令做什么"
                   class="w-full text-xs border-gray-300 rounded focus:ring-primary focus:border-primary"
                 />
               </div>
@@ -5387,6 +5458,12 @@ onUnmounted(() => {
                 />
               </div>
             </div>
+            <input
+              v-model="editingCommand.command"
+              type="text"
+              placeholder="执行内容"
+              class="mb-3 w-full text-xs border-gray-300 rounded focus:ring-primary focus:border-primary"
+            />
             <div class="flex justify-end space-x-2">
               <button
                 v-if="isEditingCmd"

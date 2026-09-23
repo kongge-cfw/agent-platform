@@ -183,10 +183,19 @@ def test_embed_apps_binds_role_instead_of_agent_whitelist():
     assert "isolate_datasets_by_tenant" not in view
     assert "常用提示词" in view
     assert "openPromptModal" in view
+    assert "示例库" in view
+    assert "openExampleModal" in view
     assert "savePrompts" in view
     assert "shortcut_prompts" in view
     assert "shortcut_prompts" in source
     assert "form.shortcut_prompts" not in view
-    assert 'h-[70vh]' in view
-    assert "发给 AI 的内容，可换行" in view
-    assert 'title="删除这条提示词"' in view
+    assert 'aria-label="示例库"' in view
+    assert "onExampleFileDrop" in view
+    assert "输入要发送给 AI 的文字，输入 / 选择技能" in view
+    assert "显示名称" in view
+    assert "使用场景" in view
+    assert "指令内容" in view
+    assert "openPromptEditor" in view
+    assert "packShortcutSkill" in view
+    assert "splitShortcutSkill" in view
+    assert 'title="删除这条指令"' in view

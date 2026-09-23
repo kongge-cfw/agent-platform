@@ -11,6 +11,8 @@
       :has-more="historyHasMore"
       :history-list="groupedHistoryList"
       :active-conversation-id="conversationId"
+      :processing-conversation-ids="historyProcessingIds"
+      :settled-conversation-ids="settledRunIds"
       @fetch-history="fetchHistory()"
       @load-more="fetchHistory(true)"
       @load-chat="handleHistoryClick"
@@ -400,6 +402,7 @@
         :personal-resources="welcomePersonalResources"
         :personal-resources-refreshing="workbenchHomeRefreshing"
         @quick-question="handleQuickQuestion"
+        @apply-shortcut="applyWelcomeShortcut"
         @open-data-portal="openPortalDrawer"
         @open-personal-resources="openPersonalResources"
         @refresh-personal-resources="refreshWelcomePersonalResources"
@@ -1169,11 +1172,12 @@
         ref="chatInputRef"
         v-model="userInput"
         :is-processing="isProcessing || remoteRunActive"
-        :is-submitting="sendLocked"
+        :is-submitting="submittingIds.includes(conversationId)"
         :show-shortcuts="!isMobile"
         :pin-shortcut-bar="true"
         :omit-pinned-system-commands="isEmbeddedInIframe()"
         :slash-commands="effectiveSlashCommands"
+        :examples="embedExamples"
         :allowed-agents="allowedAgents"
         :delegation-host-id="defaultEntryAgentId"
         :strict-delegation-host="isEmbedDelegationSession"
@@ -1223,7 +1227,7 @@
         @manual-context-compaction="manualCompactEmbedContext"
         @stop="stopGeneration"
         @toggle-shortcuts="toggleShortcuts"
-        @open-command-manager="showAddModal = true"
+        @open-command-manager="openCreateShortcut"
         @upload-image="handleImageUpload"
         @edit-command="editCommand"
         @delete-command="confirmDeleteCommand"
@@ -1260,12 +1264,11 @@
             <ChatTodoCard :timeline="activeTodoTimeline" />
           </div>
           <div
-            v-if="sandboxDegradedMessage || showBashBanner"
+            v-if="sandboxDegradedMessage"
             class="mx-3 mt-2"
           >
             <Transition name="bash-banner-fade">
               <div
-                v-if="sandboxDegradedMessage"
                 role="status"
                 class="mb-2 flex items-start justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-100"
               >
@@ -1282,14 +1285,6 @@
                   ×
                 </button>
               </div>
-            </Transition>
-            <Transition name="bash-banner-fade">
-              <BashEnvBanner
-                v-if="showBashBanner"
-                :env="bashBannerEnv!"
-                @dismiss="bashBannerDismissed = true"
-                @ignore="handleIgnoreBashBanner"
-              />
             </Transition>
           </div>
         </template>
@@ -2007,29 +2002,34 @@
         </div>
       </div>
     </div>
-    <!-- Modal: Add Command -->
+    <!-- Modal: Add Command。挂到 body，避免被嵌入布局的层叠上下文压在指令库抽屉下面 -->
+    <Teleport to="body">
     <div
       v-if="showAddModal"
-      class="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm p-4"
+      class="fixed inset-0 z-[1500] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4"
       @click.self="showAddModal = false"
     >
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm overflow-visible animate-fade-in-up border border-gray-200 dark:border-gray-700">
-        <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50">
-          <h3 class="text-sm font-bold text-gray-800 dark:text-gray-200">新建快捷指令</h3>
+      <div class="flex h-[min(30rem,64vh)] w-full max-w-[48rem] flex-col overflow-visible animate-fade-in-up rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800">
+        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50 rounded-t-xl">
+          <h3 class="text-base font-bold text-gray-800 dark:text-gray-200">{{ editingCommandId || editingAppPromptIndex !== null ? '编辑快捷指令' : '新建快捷指令' }}</h3>
           <button @click="showAddModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
-        <div class="p-4 space-y-4">
+        <div class="flex min-h-0 flex-1 flex-col space-y-4 p-6">
           <div>
             <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">显示名称</label>
-            <input v-model="newCommand.label" type="text" placeholder="如：🏢 查机房" class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100" />
+            <input v-model="newCommand.label" type="text" placeholder="如：🏢 查机房" class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-3 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100" />
           </div>
           <div>
+            <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">使用场景</label>
+            <input v-model="newCommand.scenario" type="text" maxlength="200" placeholder="说明这条指令做什么，例如：把附件里的问题整理成企业整改任务" class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-3 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100" />
+          </div>
+          <div class="flex min-h-0 flex-1 flex-col">
             <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">指令内容</label>
-            <div class="relative">
+            <div class="relative flex min-h-0 flex-1 flex-col">
               <div
                 v-if="shortcutSkillQuery !== null && !shortcutSkillMenuDismissed"
                 class="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800"
@@ -2071,7 +2071,7 @@
                   </button>
                 </div>
               </div>
-              <div class="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 focus-within:ring-1 focus-within:ring-primary dark:border-gray-700 dark:bg-gray-900">
+              <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 focus-within:ring-1 focus-within:ring-primary dark:border-gray-700 dark:bg-gray-900">
                 <div v-if="shortcutSkill" ref="shortcutSkillRowRef" class="absolute left-3 top-3 z-20 flex h-5 items-center" :style="{ transform: `translateY(-${shortcutSkillScrollTop}px)` }">
                 <span
                   class="group/skill inline-flex h-5 max-w-full items-center rounded-full bg-gray-100 px-2 text-sm leading-none text-gray-700 dark:bg-gray-700 dark:text-gray-100"
@@ -2093,16 +2093,17 @@
                   <span class="truncate">{{ shortcutSkill.name }}</span>
                 </span>
                 </div>
-                <textarea ref="shortcutCommandRef" v-model="newCommand.command" rows="2" placeholder="输入要发送给 AI 的文字，输入 / 选择技能" class="w-full resize-none bg-transparent py-1 text-sm leading-5 text-gray-900 outline-none dark:text-gray-100" :style="shortcutSkillIndent ? { textIndent: `${shortcutSkillIndent}px` } : undefined" @scroll="syncShortcutSkillScroll" @keydown="handleShortcutCommandKeydown"></textarea>
+                <textarea ref="shortcutCommandRef" v-model="newCommand.command" placeholder="输入要发送给 AI 的文字，输入 / 选择技能" class="min-h-0 w-full flex-1 resize-none bg-transparent py-1 text-sm leading-6 text-gray-900 outline-none dark:text-gray-100" :style="shortcutSkillIndent ? { textIndent: `${shortcutSkillIndent}px` } : undefined" @scroll="syncShortcutSkillScroll" @keydown="handleShortcutCommandKeydown"></textarea>
               </div>
             </div>
           </div>
-          <button @click="addCommand" :disabled="!newCommand.label || (!newCommand.command.trim() && !shortcutSkill)" class="w-full py-2.5 bg-primary text-white text-sm font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-primary/20" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
-            添加指令
+          <button @click="addCommand" :disabled="!newCommand.label || (!newCommand.command.trim() && !shortcutSkill)" class="w-full shrink-0 py-3 bg-primary text-white text-sm font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-primary/20" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
+            {{ editingCommandId || editingAppPromptIndex !== null ? '保存修改' : '添加指令' }}
           </button>
         </div>
       </div>
     </div>
+    </Teleport>
 
     <ChatModelCallStatsModal
       :visible="showStatsModal"
@@ -2182,11 +2183,12 @@ import { ref, reactive, onMounted, onUnmounted, nextTick, watch, computed, trigg
 import { BoltIcon, CommandLineIcon, PuzzlePieceIcon } from "@heroicons/vue/24/outline";
 import { useRouter } from "vue-router";
 import axios from "@/utils/axios";
+import { embedAppApi } from "@/api/embedApp";
 import { isEmbedLocation } from "@/utils/appBase";
 import { finalizeConversation } from "@/utils/conversationFinalize";
 import { cancelConversationRun } from "@/utils/cancelConversationRun";
 import { createConversationId } from "@/utils/conversationId";
-import { packShortcutSkill, type ShortcutSkillRef } from "@/utils/shortcutSkill";
+import { packShortcutSkill, splitShortcutSkill, type ShortcutSkillRef } from "@/utils/shortcutSkill";
 import { useToast } from "../composables/useToast";
 import { useTokenQuota } from "../composables/useTokenQuota";
 import { useContextUsage } from "@/composables/useContextUsage";
@@ -2282,7 +2284,6 @@ import ChatExecutionTimeline from "@/components/chat/ChatExecutionTimeline.vue";
 import ChatMessageRow from "@/components/chat/ChatMessageRow.vue";
 import UserMessageAttachments from "@/components/chat/UserMessageAttachments.vue";
 import ChatTodoCard from "@/components/chat/ChatTodoCard.vue";
-import BashEnvBanner from "@/components/chat/BashEnvBanner.vue";
 import DockerTerminalModal from "@/components/chat/DockerTerminalModal.vue";
 import K8sTerminalModal from "@/components/chat/K8sTerminalModal.vue";
 import ChatInput from "@/components/embed/ChatInput.vue";
@@ -2328,6 +2329,7 @@ import { createSseLineParser } from "@/utils/sseLineParser";
 import type { ChatMessageBase } from "@/types/chat";
 import { modelApi, type AIModel, type ReasoningEffort } from "@/api/model";
 import { fetchChatRuntimePrefs, saveChatRuntimePrefs } from "@/utils/chatRuntimePrefs";
+import { readHistorySidebarOpen, writeHistorySidebarOpen } from "@/utils/chatHistorySidebarPref";
 import {
   type TurnType,
 } from "@/utils/turnLogDisplay";
@@ -2366,7 +2368,7 @@ import {
   splitUserMessageContent,
   useChatAttachments,
 } from "@/composables/chat/useChatAttachments";
-import { groupChatHistoryByDate } from "@/composables/chat/useChatHistoryGroups";
+import { groupChatHistoryByDate, historyCardTitle, mergePendingHistoryCards, upsertPendingHistoryCard } from "@/composables/chat/useChatHistoryGroups";
 import { chatMessageRenderKey } from "@/utils/chatMessageRenderKey";
 import {
   applyResumeRunStatusEvent,
@@ -2398,6 +2400,7 @@ import {
   needsGeneratingPlaceholder,
   patchInflightConversation,
   peekInflightConversation,
+  processingConversationIds,
   shouldSkipHistoryReplace,
   stashInflightConversation,
 } from "@/utils/inflightConversation";
@@ -3025,34 +3028,46 @@ const openEmbedTrace = (traceId: string) => {
   showEmbedTrace.value = true;
 };
 const isProcessing = ref(false);
-const { locked: sendLocked, runExclusive: runSendExclusive } = createChatSendGate();
-const bashBannerEnv = ref<"host" | "docker" | "e2b" | "ssh" | "k8s" | null>(null);
-const bashBannerDismissed = ref(false);
-const showBashBanner = computed(
-  () => bashBannerEnv.value !== null && !bashBannerDismissed.value && config.showBashBanner
-);
+const { locked: sendLocked, submittingIds, runForConversation: runSendForConversation } = createChatSendGate();
+const isCurrentConversationSendBlocked = () =>
+  isProcessing.value
+  || remoteRunActive.value
+  || submittingIds.value.includes(conversationId.value);
 /** 会话级沙箱降级提示：沙箱不可用、本轮降级为本地执行（Bash 不可用）。 */
 const sandboxDegradedMessage = ref("");
 const dismissSandboxDegraded = () => {
   sandboxDegradedMessage.value = "";
 };
+const BASH_ENV_TOAST: Record<
+  "host" | "docker" | "e2b" | "ssh" | "k8s",
+  { message: string; type: "success" | "warning" | "info" }
+> = {
+  docker: {
+    message: "Bash 运行在 Docker 沙箱，命令在隔离容器内执行",
+    type: "success",
+  },
+  k8s: {
+    message: "Bash 运行在 Kubernetes 沙箱，命令在隔离 Pod 内执行",
+    type: "success",
+  },
+  host: {
+    message: "Bash 运行在宿主机上，命令直接在后端环境执行，请注意风险",
+    type: "warning",
+  },
+  e2b: {
+    message: "Bash 运行在 E2B 沙箱，命令在云沙箱中执行",
+    type: "info",
+  },
+  ssh: {
+    message: "Bash 运行在远端 SSH 主机，命令经 SSH 执行",
+    type: "info",
+  },
+};
 const handleBashEnvEvent = (env: "host" | "docker" | "e2b" | "ssh" | "k8s") => {
-  bashBannerEnv.value = env;
-  bashBannerDismissed.value = false;
-};
-/** 统一开关 Bash 横幅提示：写入 config 并持久化到 localStorage（1=关，0=开） */
-const setBashBannerVisible = (visible: boolean) => {
-  config.showBashBanner = visible;
-  localStorage.setItem("bash_env_banner_ignored", visible ? "0" : "1");
-  bashBannerEnv.value = null;
-  bashBannerDismissed.value = false;
-  showToast(
-    visible ? "Bash 运行环境横幅提示已开启" : "Bash 运行环境横幅提示已关闭",
-    visible ? "success" : "info",
-  );
-};
-const handleIgnoreBashBanner = () => {
-  setBashBannerVisible(false);
+  if (!config.showBashBanner) return;
+  const notice = BASH_ENV_TOAST[env];
+  if (!notice) return;
+  showToast(notice.message, notice.type, 4000);
 };
 const activeTodoTimeline = computed(() =>
   activeTodoTimelineFromMessages(messages.value),
@@ -3087,7 +3102,7 @@ const config = reactive({
   expandThoughts: true, // 思考过程默认展示开关
   markdownTheme: "default" as "default" | "minimal" | "academic" | "apple" | "warm" | "compact" | "bauhaus" | "editorial" | "zen",
   hideMessageBorder: true,
-  /** Bash 运行环境横幅提示开关（可在设置面板中切换，localStorage 持久化） */
+  /** Bash 运行环境提醒开关（可在设置面板中切换，localStorage 持久化） */
   showBashBanner: localStorage.getItem("bash_env_banner_ignored") !== "1",
 });
 type BrowserApprovalMode = "guarded" | "autopilot";
@@ -4307,11 +4322,11 @@ watch(remoteRunActive, (active, wasActive) => {
 });
 
 const focusChatInputWhenReady = () => {
-  if (isMobile.value || isProcessing.value || remoteRunActive.value || sendLocked.value) return;
+  if (isMobile.value || isCurrentConversationSendBlocked()) return;
   nextTick(() => chatInputRef.value?.focus());
 };
 
-watch([isProcessing, remoteRunActive, sendLocked], focusChatInputWhenReady);
+watch([isProcessing, remoteRunActive, sendLocked, submittingIds], focusChatInputWhenReady);
 
 watch(conversationId, () => {
   void refreshCurrentRunStatus();
@@ -4432,6 +4447,8 @@ const generateNewConversation = (opts?: { stash?: boolean }) => {
   persistConversationId(conversationId.value);
   updateActiveConversationOnServer(conversationId.value);
   loadResourceScope();
+  // 新会话没有在跑的任务，输入锁只留给仍在执行的那一条。
+  isProcessing.value = false;
 };
 // Mention State (Moved to ChatInput)
 // const showMentionList = ref(false); // Removed
@@ -4865,6 +4882,7 @@ afterConversationActivated = (cid: string) => {
       nextTick(() => scrollToBottom(true));
       return;
     }
+    settleHistoryRun(cid);
     void hydrateCompletedConversationRun();
   });
 };
@@ -4970,6 +4988,12 @@ const showCommandMenu = ref(false);
 const isKnowledgeEnabled = ref(true);
 const slashCommands = ref<any[]>([...SYSTEM_SLASH_COMMANDS]);
 const embedAppShortcutPrompts = ref<any[]>([]);
+const embedExamples = ref<Array<{
+  label: string;
+  command: string;
+  scenario: string;
+  attachments: Array<{ url: string; filename: string; size?: number; ext?: string }>;
+}>>([]);
 const userSlashCommands = ref<any[]>([]);
 
 const toAppShortcutCommands = (raw: unknown) => {
@@ -4979,6 +5003,7 @@ const toAppShortcutCommands = (raw: unknown) => {
       id: `app_prompt_${index}`,
       label: String(item?.label || "").trim(),
       command: String(item?.command || "").trim(),
+      scenario: String(item?.scenario || "").trim(),
       sort_order: 10 + index,
     }))
     .filter((item) => item.label && item.command);
@@ -5003,6 +5028,27 @@ const isPersonalSlashCommand = (cmd: any) => {
 const applyEmbedShortcutPrompts = (raw: unknown) => {
   embedAppShortcutPrompts.value = toAppShortcutCommands(raw);
   mergeVisibleSlashCommands();
+};
+
+const applyEmbedExamples = (raw: unknown) => {
+  const list = Array.isArray(raw) ? raw : [];
+  embedExamples.value = list
+    .map((item: any) => ({
+      label: String(item?.label || "").trim(),
+      command: String(item?.command || "").trim(),
+      scenario: String(item?.scenario || "").trim(),
+      attachments: Array.isArray(item?.attachments)
+        ? item.attachments
+          .map((file: any) => ({
+            url: String(file?.url || "").trim(),
+            filename: String(file?.filename || "").trim(),
+            size: Number(file?.size || 0),
+            ext: String(file?.ext || "").trim(),
+          }))
+          .filter((file: { url: string; filename: string }) => file.url && file.filename)
+        : [],
+    }))
+    .filter((item) => item.label && (item.command || item.attachments.length));
 };
 
 const sharedEmbedChatSettings = ref<Record<string, unknown> | null>(null);
@@ -5065,14 +5111,53 @@ const mergeVisibleSlashCommands = () => {
     },
   );
 };
-// History Sidebar State
-const showHistorySidebar = ref(false);
+// History Sidebar State：默认展开，收起或展开后记在浏览器里。
+const showHistorySidebar = ref(readHistorySidebarOpen());
 const historyList = ref<any[]>([]);
 const historyPage = ref(1);
 const historyHasMore = ref(true);
 const loadingHistory = ref(false);
 const loadingMoreHistory = ref(false);
 const historyKeyword = ref("");
+const pendingHistoryCards = ref<Record<string, any>>({});
+const settledRunIds = ref<string[]>([]);
+const historyProcessingIds = computed(() => {
+  const ids = new Set(processingConversationIds.value);
+  if ((isProcessing.value || remoteRunActive.value) && conversationId.value) {
+    ids.add(conversationId.value);
+  }
+  return [...ids];
+});
+const settleHistoryRun = (cid: string) => {
+  if (!cid) return;
+  if (!settledRunIds.value.includes(cid)) {
+    settledRunIds.value = [...settledRunIds.value, cid];
+  }
+  const item = historyList.value.find((row) => row.conversation_id === cid);
+  if (item?.status === "running") item.status = "success";
+};
+watch(historyProcessingIds, (ids, prev = []) => {
+  const live = new Set(ids);
+  settledRunIds.value = settledRunIds.value.filter((cid) => !live.has(cid));
+  prev.forEach((cid) => {
+    if (!live.has(cid)) settleHistoryRun(cid);
+  });
+});
+
+const rememberSentHistoryCard = (cid: string, query: string) => {
+  const title = historyCardTitle(query);
+  if (!cid || !title) return;
+  const card = {
+    conversation_id: cid,
+    query: title,
+    summary: "",
+    status: "running",
+    turn_count: 1,
+    created_at: new Date().toISOString(),
+  };
+  pendingHistoryCards.value = { ...pendingHistoryCards.value, [cid]: card };
+  historyList.value = upsertPendingHistoryCard(historyList.value, card);
+};
 
 // --- Aggregated History Logic ---
 const aggregatedHistoryList = computed(() => {
@@ -5139,7 +5224,14 @@ const fetchHistory = async (isLoadMore = false) => {
         if (isLoadMore) {
             historyList.value = [...historyList.value, ...newItems];
         } else {
-            historyList.value = newItems;
+            const merged = mergePendingHistoryCards(newItems, pendingHistoryCards.value);
+            historyList.value = merged.items;
+            pendingHistoryCards.value = merged.pending;
+            historyList.value.forEach((item) => {
+              if (item?.status === "running" && settledRunIds.value.includes(item.conversation_id)) {
+                item.status = "success";
+              }
+            });
         }
 
         historyHasMore.value = newItems.length >= 20;
@@ -5188,6 +5280,7 @@ const handleHistoryClick = (item: any) => {
     messages.value = [];
     historyOffset.value = 0;
     hasMoreHistory.value = true;
+    isProcessing.value = false;
 
     // Load the full history for this conversation
     fetchConversationHistory(false).then(() => {
@@ -5627,7 +5720,19 @@ const handleImageUpload = () => {
   alert("多模态图片上传功能开发中...");
 };
 const editCommand = (cmd: any) => {
-    alert(`编辑指令 [${cmd.label}] 功能开发中...`);
+  const parsed = splitShortcutSkill(String(cmd?.command || ""));
+  const id = String(cmd?.id || "");
+  const appPromptIndex = id.startsWith("app_prompt_") ? Number(id.slice("app_prompt_".length)) : null;
+  editingAppPromptIndex.value = Number.isInteger(appPromptIndex) ? appPromptIndex : null;
+  editingCommandId.value = editingAppPromptIndex.value === null ? (cmd?.id ?? null) : null;
+  newCommand.label = String(cmd?.label || "");
+  newCommand.command = parsed.text;
+  newCommand.scenario = String(cmd?.scenario || "");
+  newCommand.sort_order = Number(cmd?.sort_order ?? 10);
+  shortcutSkill.value = parsed.skill;
+  shortcutSkillMenuDismissed.value = false;
+  shortcutSkillActiveIndex.value = 0;
+  showAddModal.value = true;
 };
 // Command Deletion State
 const showDeleteCommandModal = ref(false);
@@ -5638,18 +5743,30 @@ const confirmDeleteCommand = (cmd: any) => {
 };
 const executeDeleteCommand = async () => {
   if (!commandToDelete.value) return;
+  const id = String(commandToDelete.value.id || "");
   try {
-    await axios.delete(`/api/portal/slash-commands/${commandToDelete.value.id}`);
-    await fetchSlashCommands();
+    if (id.startsWith("app_prompt_")) {
+      const index = Number(id.slice("app_prompt_".length));
+      const prompts = currentAppPromptPayload();
+      if (!Number.isInteger(index) || index < 0 || index >= prompts.length) return;
+      prompts.splice(index, 1);
+      const saved = await persistEmbedShortcutPrompts(prompts);
+      if (!saved) return;
+    } else {
+      await axios.delete(`/api/portal/slash-commands/${commandToDelete.value.id}`);
+      await fetchSlashCommands();
+    }
     showDeleteCommandModal.value = false;
     commandToDelete.value = null;
   } catch (e) {
     console.error("Failed to delete command", e);
+    showToast("删除指令失败", "error");
   }
 };
 
 watch(showHistorySidebar, (val) => {
-    if (val && historyList.value.length === 0) {
+    writeHistorySidebarOpen(val);
+    if (val) {
         fetchHistory();
     }
 });
@@ -6260,9 +6377,12 @@ const updateWidth = () => {
   };
 };
 const showAddModal = ref(false);
+const editingCommandId = ref<number | string | null>(null);
+const editingAppPromptIndex = ref<number | null>(null);
 const newCommand = reactive({
   label: "",
   command: "",
+  scenario: "",
   sort_order: 10,
 });
 const shortcutSkill = ref<ShortcutSkillRef | null>(null);
@@ -6363,36 +6483,84 @@ const handleShortcutCommandKeydown = (event: KeyboardEvent) => {
     shortcutSkill.value = null;
   }
 };
-watch(showAddModal, (open) => {
-  if (!open) return;
+const resetShortcutForm = () => {
+  editingCommandId.value = null;
+  editingAppPromptIndex.value = null;
   newCommand.label = "";
   newCommand.command = "";
+  newCommand.scenario = "";
   newCommand.sort_order = 10;
   shortcutSkill.value = null;
   shortcutSkillMenuDismissed.value = false;
   shortcutSkillActiveIndex.value = 0;
   shortcutSkillScrollTop.value = 0;
   shortcutSkillIndent.value = 0;
+};
+const currentAppPromptPayload = () =>
+  embedAppShortcutPrompts.value.map((item) => ({
+      label: String(item.label || ""),
+      command: String(item.command || ""),
+      scenario: String(item.scenario || ""),
+  }));
+const persistEmbedShortcutPrompts = async (prompts: Array<{ label: string; command: string; scenario: string }>) => {
+  const appKey = resolveCurrentEmbedAppKey();
+  if (!appKey) {
+    showToast("系统提示词需要在嵌入应用里修改", "warning");
+    return false;
+  }
+  const res = await embedAppApi.list();
+  const apps = Array.isArray(res.data) ? res.data : ((res.data as any)?.data || []);
+  const app = apps.find((item: { app_key?: string }) => String(item.app_key || "") === appKey);
+  if (!app?.id) {
+    showToast("系统提示词需要在嵌入应用里修改", "warning");
+    return false;
+  }
+  await embedAppApi.update(app.id, { shortcut_prompts: prompts });
+  applyEmbedShortcutPrompts(prompts);
+  return true;
+};
+const openCreateShortcut = () => {
+  resetShortcutForm();
+  showAddModal.value = true;
+};
+watch(showAddModal, (open) => {
+  if (!open) return;
   void loadShortcutSkills();
 });
 const addCommand = async () => {
   const commandText = newCommand.command.trim();
   if (!newCommand.label || (!commandText && !shortcutSkill.value)) return;
+  const payload = {
+    label: newCommand.label,
+    command: packShortcutSkill(commandText, shortcutSkill.value),
+    scenario: newCommand.scenario.trim().slice(0, 200),
+    sort_order: newCommand.sort_order,
+  };
   try {
-    const username = currentUser.value?.user_name || "unknown";
-    await axios.post("/api/portal/slash-commands/", {
-      label: newCommand.label,
-      command: packShortcutSkill(commandText, shortcutSkill.value),
-      sort_order: newCommand.sort_order,
-      created_by: username
-    });
-    await fetchSlashCommands();
+    if (editingAppPromptIndex.value !== null) {
+      const prompts = currentAppPromptPayload();
+      prompts[editingAppPromptIndex.value] = {
+        label: payload.label,
+        command: payload.command,
+        scenario: payload.scenario,
+      };
+      const saved = await persistEmbedShortcutPrompts(prompts);
+      if (!saved) return;
+    } else if (editingCommandId.value) {
+      await axios.put(`/api/portal/slash-commands/${editingCommandId.value}`, payload);
+      await fetchSlashCommands();
+    } else {
+      await axios.post("/api/portal/slash-commands/", {
+        ...payload,
+        created_by: currentUser.value?.user_name || "unknown",
+      });
+      await fetchSlashCommands();
+    }
     showAddModal.value = false;
-    newCommand.label = "";
-    newCommand.command = "";
-    shortcutSkill.value = null;
+    resetShortcutForm();
   } catch (e) {
-    console.error("Failed to add command", e);
+    console.error("Failed to save command", e);
+    showToast("保存指令失败", "error");
   }
 };
 // --- PostMessage Protocol ---
@@ -6508,6 +6676,11 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
         sessionData.shortcut_prompts
         ?? sessionData.user_info?.shortcut_prompts
         ?? currentUser.value?.shortcut_prompts,
+      );
+      applyEmbedExamples(
+        sessionData.examples
+        ?? sessionData.user_info?.examples
+        ?? currentUser.value?.examples,
       );
       applyEmbedChatSettings(
         sessionData.chat_settings
@@ -6799,6 +6972,7 @@ const validateToken = async (options?: { strict?: boolean }): Promise<boolean> =
     accountInfo.value = data as typeof accountInfo.value;
     currentUser.value = data as typeof currentUser.value;
     applyEmbedShortcutPrompts(data.shortcut_prompts);
+    applyEmbedExamples(data.examples);
     applyEmbedChatSettings(data.chat_settings);
     applyDefaultEntryAgentId(data);
   };
@@ -6907,6 +7081,9 @@ const initChat = async (options?: { skipAuth?: boolean }) => {
     }
     if (initGeneration !== conversationInitializationGeneration) return;
     hasPermission.value = true;
+    if (showHistorySidebar.value) {
+      void fetchHistory();
+    }
     // 登录完成后先不收起骨架。欢迎页只在确认没有可恢复历史后再出现，
     // 避免刷新时先闪出新会话页，再跳进最近一段会话。
     // 3. Set default welcome message if not provided
@@ -7691,6 +7868,12 @@ const quickContextForMessage = (msg: Message): QuickQuestionContext | undefined 
   };
 };
 
+const applyWelcomeShortcut = (command: string) => {
+  const text = String(command || "");
+  if (!text.trim()) return;
+  chatInputRef.value?.applyUserShortcut?.(text);
+};
+
 const handleQuickQuestion = async (
   content: string | QuickQuestionPayload,
   action: "send" | "fill" = "send",
@@ -7701,7 +7884,7 @@ const handleQuickQuestion = async (
     ? content.quick_context
     : undefined;
   if (!question) return;
-  if (action === "send" && (isProcessing.value || remoteRunActive.value || sendLocked.value)) return;
+  if (action === "send" && isCurrentConversationSendBlocked()) return;
   const selectedSource = sourceContent?.trim();
   const nextContent = selectedSource
     ? `${question}${USER_MESSAGE_CONTEXT_DIVIDER}【被点击的 AI 回复】\n${selectedSource}`
@@ -7717,7 +7900,7 @@ const handleGroundingAction = async (
   payload: GroundingBlockedPayload | undefined,
   action: GroundingBlockedAction,
 ) => {
-  if (!payload || isProcessing.value || remoteRunActive.value || sendLocked.value) return;
+  if (!payload || isCurrentConversationSendBlocked()) return;
   if (action.kind === "grounding_retry") {
     const groundingAction = {
       ...(action.payload || {}),
@@ -8520,19 +8703,20 @@ const captureSendSnapshot = (overrides: ChatSendOverrides = {}): ChatSendSnapsho
 
 const sendPreparedMessage = async (
   prepare: () => Promise<ChatSendSnapshot | null>,
-) => runSendExclusive(async () => {
+) => runSendForConversation(conversationId.value, async () => {
   if (isProcessing.value || remoteRunActive.value) return;
   const snapshot = await prepare();
   if (!snapshot) return;
   return sendMessageInternal(snapshot);
 });
 
-const sendMessage = async (overrides: ChatSendOverrides = {}) => runSendExclusive(async () => {
+const sendMessage = async (overrides: ChatSendOverrides = {}) => runSendForConversation(conversationId.value, async () => {
   if (isProcessing.value || remoteRunActive.value) return;
   return sendMessageInternal(captureSendSnapshot(overrides));
 });
 
 const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
+  const ownerConversationId = conversationId.value;
   const { content, files } = snapshot;
   if ((!content && files.length === 0) || isProcessing.value || remoteRunActive.value) return;
 
@@ -8560,6 +8744,7 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     showToast(quotaBlock, "error");
     return;
   }
+  if (ownerConversationId && conversationId.value !== ownerConversationId) return;
 
   if (files.length === 0 && tryLocalChartOptionPatch(content)) {
     userInput.value = "";
@@ -8581,6 +8766,8 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
     showCommandMenu.value = false;
     return;
   }
+  if (ownerConversationId && conversationId.value !== ownerConversationId) return;
+  rememberSentHistoryCard(streamConversationId, content);
   userInput.value = "";
   showCommandMenu.value = false;
 
@@ -8628,9 +8815,11 @@ const sendMessageInternal = async (snapshot: ChatSendSnapshot) => {
   // Start thought timer
   startThoughtTimer(agentMsg.value);
   // 3. API Call
-  // SSE 可能因切后台/网络变化提前结束；在状态接口确认释放前继续阻止新一轮发送。
-  remoteRunActive.value = true;
-  runStatusHydrateCid = streamConversationId;
+  // SSE 可能因切后台/网络变化提前结束；只锁住这条会话，切走后新会话可以继续输入。
+  if (isViewingStream()) {
+    remoteRunActive.value = true;
+    runStatusHydrateCid = streamConversationId;
+  }
   abortController = new AbortController();
   // 首片正文立即显示，后续正文按帧合并更新。
   let pendingContentBuffer = "";
@@ -9068,6 +9257,7 @@ const fetchUserInfo = async () => {
     if (res.data?.data) {
        currentUser.value = res.data.data;
        applyEmbedShortcutPrompts((res.data.data as any).shortcut_prompts);
+       applyEmbedExamples((res.data.data as any).examples);
        applyEmbedChatSettings((res.data.data as any).chat_settings);
        applyDefaultEntryAgentId(res.data.data);
     }

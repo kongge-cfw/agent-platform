@@ -59,7 +59,7 @@ def test_parse_shortcut_prompts_caps_and_requires_label_command():
             "bad",
         ]
     )
-    assert parsed == [{"label": "对账", "command": "帮我对账"}]
+    assert parsed == [{"label": "对账", "command": "帮我对账", "scenario": ""}]
     too_many = [{"label": f"n{i}", "command": f"c{i}"} for i in range(30)]
     assert len(parse_shortcut_prompts(too_many)) == 20
     assert parse_shortcut_prompts("not-json") == []
@@ -633,9 +633,9 @@ async def test_embed_app_policy_whitelist_lock_and_api_isolation(client: AsyncCl
     assert session.get("lock_entry_agent") is False
     assert session.get("default_entry_agent_id") == agent.id
     assert session.get("user_info", {}).get("default_entry_agent_id") == agent.id
-    assert session.get("shortcut_prompts") == [{"label": "对账", "command": "帮我核对本月账单"}]
+    assert session.get("shortcut_prompts") == [{"label": "对账", "command": "帮我核对本月账单", "scenario": ""}]
     assert session.get("user_info", {}).get("shortcut_prompts") == [
-        {"label": "对账", "command": "帮我核对本月账单"}
+        {"label": "对账", "command": "帮我核对本月账单", "scenario": ""}
     ]
     session_token = session["session_token"]
 

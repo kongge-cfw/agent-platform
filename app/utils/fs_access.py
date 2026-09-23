@@ -130,6 +130,28 @@ def get_user_private_workspace_root(user_info: dict[str, Any] | None) -> str | N
     return os.path.normpath(os.path.join(default_workspace_root(), user_key))
 
 
+def get_embed_example_dir(app_id: str) -> str:
+    """嵌入应用示例附件目录：data/embed_examples/{app_id}，不进入用户私有工作区。"""
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(app_id or "").strip())
+    if not safe:
+        raise HTTPException(status_code=400, detail="嵌入应用标识无效")
+    return os.path.normpath(os.path.join(get_data_base_dir(), "embed_examples", safe))
+
+
+def resolve_embed_example_file(app_id: str, url: str) -> str:
+    """确认路径是该嵌入应用示例目录里的真实文件。"""
+    root = os.path.realpath(get_embed_example_dir(app_id))
+    raw = str(url or "").strip()
+    if not raw or ".." in raw.replace("\\", "/"):
+        raise HTTPException(status_code=403, detail="示例附件路径无效")
+    normalized = os.path.realpath(os.path.abspath(raw))
+    if not (normalized == root or normalized.startswith(root + os.sep)):
+        raise HTTPException(status_code=403, detail="示例附件不在当前嵌入应用范围内")
+    if not os.path.isfile(normalized):
+        raise HTTPException(status_code=404, detail="示例附件不存在")
+    return normalized
+
+
 def get_user_uploads_dir(user_info: dict[str, Any] | None) -> str | None:
     """用户会话附件目录：agent_workspaces/{user_key}/uploads（仅本人可访问）。"""
     private_root = get_user_private_workspace_root(user_info)

@@ -40,7 +40,7 @@
 
 - 字段恰好 6 个，顺序固定为：任务名称、任务类型、完成时限、企业提交后需行业审核、可下发企业数、可下发企业清单。禁止增加共性任务要求或任何第七字段。`taskType` 必须是中文下拉：`value_type=enum`，`options` 固定为 `["通知", "工作部署", "问题处置", "材料报送"]`，`value` 只能是其中一项。确认后 `dispatch_task_create.taskType` 必须等于卡上中文原值。任务级 `requirement` 用 SKILL.md 固定句，不进确认卡。
 - 禁止增加 `itemPreview`、`skippedCount`、`skipped`、“各企业明细”“当前账号无法下发”“无法下发企业”或同类字段。企业问题已冻结在 `pending_write/create.json` 的 `items[].problems`。纳入核对写在出卡前旁白，不进确认卡字段。
-- `enterprises` 只读且 `value_type=string`，必须用**可下发**企业全称数组 `join('、')` 生成，值中禁止 `\n`、编号和项目符号。无法匹配、停用、重名禁止写入。`enterpriseCount` 的 N 必须等于该名单家数。缺这两字段、N=0、名单为空或家数对不上：禁止出卡。
+- `enterprises` 只读且 `value_type=string`，必须原样粘贴 `check` 输出的 `可下发企业清单=` 等号后整段，值中禁止 `\n`、编号和项目符号。无法匹配、停用、重名禁止写入。`enterpriseCount` 只能是 `可下发企业数=` 的整数加「家」，`summary` 的 N 用同一个整数。禁止按 resolve 结果或顿号重数。缺这两字段、N=0、名单为空或三处数字不一致：禁止出卡。
 - 无法匹配家数只写入 `risk_note`，必须是准确数字，禁止写「若干」「部分」。有无法匹配时用「另有M家企业当前无法匹配，本次不会下发。」；为0时不要提。不要在确认卡列无法匹配企业名单，不要把名单做成用户可下载文件或承诺下载。写入 `pending_write/` 的待提交正文除外。
 - 文档解析/点名全称：能否下发只看本次 `enterprise_resolve` 的 `found` / `enabled` / `matchCount`。条件圈选：看 `enterprise_list` 的 `enabled`（不要 keyword）；`truncated=true` 先补全再出卡。口语检索：`enterprise_list(keyword)` 仅对话使用，唯一启用命中后按点名处理。文档里的名称禁止走 keyword。用户主动要求看名单时，再按用户原始顺序每批最多展示 10 家。
 - `deadlineDate` 的 `value_type` 必须始终为 `date`。无时限 `value` 为空字符串，禁止把「不限期」写入字段值。用户可在日期选择器中填写或修改；写入前有日期则规范为 `yyyy-MM-dd`，仍为空则不传 `deadlineDate`。
@@ -63,7 +63,7 @@
 - 标题、按钮、风险提示和 summary 必须匹配立即下发固定模板
 - label 不得使用企业名称，不得包含企业 ID
 - `enterprises` 不得包含换行
-- `enterpriseCount`、`enterprises` 必须存在且只含可下发企业；家数必须与名单家数一致
+- `enterpriseCount`、`enterprises` 必须存在，且只能来自 `check` 的 `可下发企业数=`、`可下发企业清单=`；禁止重数
 - 不满足时重建参数，禁止调用确认工具
 
 ## 提问卡（少用）

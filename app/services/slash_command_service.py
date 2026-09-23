@@ -1,6 +1,6 @@
 from typing import Any, List, Mapping, Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.orm import Base
@@ -13,6 +13,7 @@ class SlashCommand(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     label = Column(String(50), nullable=False)
     command = Column(Text, nullable=False)
+    scenario = Column(String(200), nullable=False, default="")
     sort_order = Column(Integer, default=0)
     created_by = Column(String(64), default="system")
     embed_app_key = Column(String(64), nullable=True)
@@ -23,7 +24,13 @@ class SlashCommand(Base):
 class SlashCommandBase(BaseModel):
     label: str
     command: str
+    scenario: str = ""
     sort_order: int = 0
+
+    @field_validator("scenario", mode="before")
+    @classmethod
+    def _normalize_scenario(cls, value: Any) -> str:
+        return str(value or "").strip()[:200]
 
 
 class SlashCommandCreate(SlashCommandBase):

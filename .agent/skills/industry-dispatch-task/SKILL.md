@@ -12,7 +12,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 ## 规程裁定
 
 1. **准优先于快。** 准备写入 `problems` 的原文出卡前必须读全；确认后禁止再读附件、禁止改写 facts，只允许脚本把 `problems` 渲成 `requirement`。
-2. **只维护 `pending_write/create.json` 与 `allowed_ids.json`。** 这两个文件和 `submit.json` 一律用 **Write 整文件覆盖**，禁止 `Edit`（Edit 未先 Read 会直接失败）。带「汇总、合计、小计、总计」的加总行由 `check` 删除，不要为此重写。文件中的企业级事项保留。其他校验失败才 Write 完整 create.json，不要打补丁。禁止为了通过校验而删除企业、`enterpriseId` 或分车/分人行。禁止 `dispatch_items.json`、`issues`、`fatigue`/`speed`/`track_issue` 合计文件。
+2. **只维护 `pending_write/create.json` 与 `allowed_ids.json`。** 这两个文件和 `submit.json` 一律用 **Write 整文件覆盖**，禁止 `Edit`（Edit 未先 Read 会直接失败）。带「汇总、合计、小计、总计」的加总行由 `check` 删除，不要为此重写。没有 `problems` 的企业也由 `check` 从 `items` 和 `enterpriseNames` 去掉，不要为此再 Write，也不要写进确认卡。文件中仍有车辆、驾驶员或企业事项的企业保留。其他校验失败才 Write 完整 create.json，不要打补丁。禁止为了通过校验而删除仍有问题明细的企业、`enterpriseId` 或分车/分人行。禁止 `dispatch_items.json`、`issues`、`fatigue`/`speed`/`track_issue` 合计文件。
 3. **JSON 冻结明细，脚本校验并拼表。** 问题处置只写 `items[].problems`。出卡前 `check` 必须退出码 0；确认后 `render` 生成 `pending_write/submit.json`，再 `check-submit`，禁止手写 `requirement` 表格。车辆/人员表头固定为截图四列。
 4. **一对象一行。** `problems` 每条必须是一个车辆、一个驾驶员，或一条企业事项。禁止概况、列表、建议句。带「汇总、合计、小计、总计」的加总行不写入；文件里没有车牌、没有姓名的事项写成 `ENTERPRISE`，不要因为同一家已有分车/分人就整段不写。禁止把各车各人次数加总后新造一条企业问题。误写入的加总行由 `check` 删除，不要删掉该企业或其他企业问题。不打算写入的内容不要读。
 5. **每个附件只采集一轮。** 每个附件最多一次 inspect（只看表名、表头、行数）。该附件要进 `problems` 时，接着 `read_range` / `filter`（PDF/Word 按截断续读），直到工具不再截断。禁止再 inspect、禁止 `profile`、禁止读完再读一遍。`profile` 的 `top_values` 不能当全集或企业名单。不写死列名。企业名只从即将写入 `problems` 的原文抽取；禁止为凑名单或核对再打开不打算写入的材料。
@@ -52,7 +52,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
    - 口语简称：`enterprise_list(keyword=用户原词)`；唯一启用命中后再 resolve。
    - 可下发为 0：禁止出卡、禁止 create。
    - 立刻 Write `pending_write/allowed_ids.json`，值为可下发 `enterpriseId` 字符串数组，例如 `["1987654321098765432"]`。禁止把表格行号写成 ID。
-3. **只为可下发企业 Write 一次 `pending_write/create.json`。** 禁止先写入未匹配企业再整文件重写。顶层只能是下列字段；无时限时省略 `deadlineDate`。`enterpriseNames` 与 `unmatchedCount` 只供确认卡使用。问题处置每个 item 只放 `enterpriseId` + `problems` 数组，不要写 `requirement`。
+3. **只为可下发企业 Write 一次 `pending_write/create.json`。** 禁止先写入未匹配企业再整文件重写。顶层只能是下列字段；无时限时省略 `deadlineDate`。`enterpriseNames` 只和 `items` 一起写入，供 `check` 使用，禁止拿它或 resolve 命中名单填确认卡。`unmatchedCount` 只供确认卡 `risk_note`。问题处置每个 item 只放 `enterpriseId` + `problems` 数组，不要写 `requirement`。
 
 ```json
 {
@@ -90,7 +90,7 @@ description: "行业监管账号向备案企业下发交通运输安全任务并
 - `occurredAt` 无则填 `—`；`problemType`、`fact` 必填，事实保留原文次数、已处理、里程、完整率。
 - 同一车牌或同一人的多种问题分成多条。禁止「超速17次」「疲劳驾驶1次（未处理）」这种无对象合计。
 
-4. **脚本校验 `create.json`，禁止凭记忆检查。** 出卡前必须 Bash 跑 `check`，退出码必须为 0。不要为了核对再 Read `create.json`（脚本自己读盘）。禁止 Read `scripts/validate_create_json.py`。会话里脚本常在 `skills/.seed/`，按顺序试，找到即停：
+4. **脚本校验 `create.json`，禁止凭记忆检查。** 出卡前必须 Bash 跑 `check`，退出码必须为 0。通过时标准输出有两行：`可下发企业数=`、`可下发企业清单=`。这两行是确认卡家数和名单的唯一来源。`check` 可能已经删掉没有问题明细的企业并写回文件；禁止再 Read `create.json`，也禁止用写入前记住的 `enterpriseNames`、resolve 命中数、或按 `、` 重新计数。禁止 Read `scripts/validate_create_json.py`。会话里脚本常在 `skills/.seed/`，按顺序试，找到即停：
 
 ```text
 python3 skills/.seed/industry-dispatch-task/validate.py check pending_write/create.json --allowed-ids pending_write/allowed_ids.json
@@ -98,7 +98,7 @@ python3 skills/industry-dispatch-task/validate.py check pending_write/create.jso
 ```
 
 都失败则 `find skills /workspace/skills . -name 'validate.py' -o -name 'render.py' | head -5`。仍没有：`read_skill_instruction(skill_id="industry-dispatch-task", file="render.py")`，Write 到 `pending_write/render.py`。退出码非 0：错误里出现「企业合计」时，再跑一次同一条 check，不要 Write。其他错误才 Write 完整 `create.json` 后重跑，重写时企业数、`enterpriseId`、分车/分人一条不许少。禁止 Edit，禁止出卡。
-5. **出确认卡。** `enterpriseCount=items.length`，`enterprises=enterpriseNames.join('、')`，无法匹配数来自 `unmatchedCount`。确认卡不展示企业明细。
+5. **出确认卡。** `enterpriseCount` 只能是 `可下发企业数=` 后面的整数加上「家」，例如输出 `可下发企业数=11` 就填 `11家`。`enterprises` 只能原样粘贴 `可下发企业清单=` 等号后面的整段，不增删企业、不重排。`summary` 里的 N 必须是同一个整数。三者有一处对不上就禁止出卡。禁止把 `check` 删掉的企业补回。`enterpriseNames` 比 `items` 长时 `check` 失败，禁止出卡。无法匹配数来自 `unmatchedCount`。确认卡不展示企业明细。
 6. **用户已确定。** 禁止 Read `create.json`，禁止 Write `create.json`，禁止改 `problems`。一次 `render`，把卡上 `name`、`taskType`、`needAudit`、`deadlineDate` 传给脚本；脚本只覆盖这四项。`render` 退出码必须为 0（内部已含 `check` 与 `check-submit`），不要再单独跑 `check-submit`。有时限传 `yyyy-MM-dd`；无时限传空字符串。
 
 ```text
@@ -173,11 +173,11 @@ ENTERPRISE →
 }
 ```
 
-- `summary` 只能是 `将向N家企业立即下发，完成时限D。` 这里的 N 必须等于 `enterpriseCount` 的可下发家数。
+- `summary` 只能是 `将向N家企业立即下发，完成时限D。` 这里的 N 必须是 `可下发企业数=` 后面的整数，并与 `enterpriseCount` 的数字相同。禁止另数名单。
 - 有无法匹配：`立即下发后不可修改、不可删除。另有M家企业当前无法匹配，本次不会下发。`；无则去掉后半句。M 不计入 `enterpriseCount`，也不出现在 `enterprises`。
 - `N家`/`M家` 无空格。有时限时 `D` 为 `yyyy-MM-dd`；无时限时 `D` 为 `不限期`。`deadlineDate` 的 `value_type` 必须始终为 `date`，禁止改成 `string`，以便确认卡用日期选择器且用户可改。无时限时 `value` 为空字符串，禁止填「不限期」。确认后：值为 `yyyy-MM-dd` 则传入 `deadlineDate`；仍为空则不传。
-- `enterpriseCount`、`enterprises` 只读。`enterprises` 仅为可下发全称 `join('、')`。`needAudit` 为 JSON 布尔。
-- 禁止第七字段，禁止 `requirement` 进确认卡，禁止企业 ID 出现在 key/label。可下发名单按用户原始顺序去重。
+- `enterpriseCount`、`enterprises` 只读。`enterpriseCount` 由 `可下发企业数=` 的整数加「家」得到；`enterprises` 原样粘贴 `可下发企业清单=` 等号后的整段。禁止按 resolve 结果、用户原始顺序或顿号重数。`needAudit` 为 JSON 布尔。
+- 禁止第七字段，禁止 `requirement` 进确认卡，禁止企业 ID 出现在 key/label。
 - 确认后无 `taskType`、无 `enterpriseCount`、无 `enterprises` 禁止调用 create。
 
 ## 下发回执

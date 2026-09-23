@@ -145,6 +145,62 @@ def strip_redundant_enterprise_summaries(payload: Any) -> int:
     return removed
 
 
+def _has_problem_rows(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    problems = item.get("problems")
+    if not isinstance(problems, list):
+        return False
+    return any(isinstance(row, dict) and row for row in problems)
+
+
+def drop_enterprises_without_problems(payload: Any) -> list[str]:
+    """问题处置：去掉没有问题明细的企业，并同步 enterpriseNames。
+
+    只删 problems 为空的 item，以及名单里多出来、没有对应 item 的企业名。
+    仍有车辆、驾驶员或企业事项的企业不删。
+    """
+    if not isinstance(payload, dict):
+        return []
+    if _as_text(payload.get("taskType")) != "问题处置":
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    names = payload.get("enterpriseNames")
+    names_list = names if isinstance(names, list) else []
+    kept_items: list[Any] = []
+    kept_names: list[Any] = []
+    dropped: list[str] = []
+    for index, item in enumerate(items):
+        name = _as_text(names_list[index]) if index < len(names_list) else ""
+        if _has_problem_rows(item):
+            kept_items.append(item)
+            if index < len(names_list):
+                kept_names.append(names_list[index])
+            continue
+        dropped.append(name or "第{0}家".format(index + 1))
+    if len(names_list) > len(items):
+        kept_names.extend(names_list[len(items):])
+    changed = len(kept_items) != len(items) or (
+        isinstance(names, list) and kept_names != names_list
+    )
+    if changed:
+        payload["items"] = kept_items
+        if isinstance(names, list):
+            payload["enterpriseNames"] = kept_names
+    return [name for name in dropped if name]
+
+
+def card_roster_lines(payload: Any) -> str:
+    names = []
+    if isinstance(payload, dict):
+        raw_names = payload.get("enterpriseNames")
+        if isinstance(raw_names, list):
+            names = [_as_text(name) for name in raw_names if _as_text(name)]
+    return "可下发企业数={0}\n可下发企业清单={1}".format(len(names), "、".join(names))
+
+
 def _dump_json(path: str, payload: Any) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
@@ -555,7 +611,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.cmd == "check":
             payload = _load_json(args.path)
             removed = strip_redundant_enterprise_summaries(payload)
-            if removed:
+            dropped = drop_enterprises_without_problems(payload)
+            if removed or dropped:
                 _dump_json(args.path, payload)
             errors = check_create(payload, allowed_ids=allowed_ids)
             if errors:
@@ -563,13 +620,23 @@ def main(argv: Iterable[str] | None = None) -> int:
             message = "create.json 校验通过"
             if removed:
                 message += "，已删除 {0} 条加总行，企业问题和分车分人保留".format(removed)
+            if dropped:
+                message += "，已去掉没有问题明细的企业：{0}".format("、".join(dropped))
+            message += "\n" + card_roster_lines(payload)
+            message += (
+                "\n确认卡的 enterpriseCount、summary 里的 N、enterprises 只能来自上面两行。"
+                "enterpriseCount 写成「可下发企业数」等号后的整数加「家」。"
+                "enterprises 原样粘贴「可下发企业清单」等号后的整段。"
+                "禁止按 resolve 结果或顿号重数，禁止把已删除的企业补回。"
+            )
             return _print_ok(message)
         if args.cmd == "render":
             payload = _load_json(args.src)
             if not isinstance(payload, dict):
                 return _fail(["create.json 必须是 JSON 对象"])
             removed = strip_redundant_enterprise_summaries(payload)
-            if removed:
+            dropped = drop_enterprises_without_problems(payload)
+            if removed or dropped:
                 _dump_json(args.src, payload)
             overlay_errors = apply_card_fields(
                 payload,
@@ -591,6 +658,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             message = "已写入 {0}".format(args.dst)
             if removed:
                 message += "，已删除 {0} 条加总行，企业问题和分车分人保留".format(removed)
+            if dropped:
+                message += "，已去掉没有问题明细的企业：{0}".format("、".join(dropped))
+            message += "\n" + card_roster_lines(payload)
             return _print_ok(message)
         payload = _load_json(args.path)
         errors = check_submit(payload)

@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from "vue";
+import {
+  readHistoryCollapsedGroups,
+  writeHistoryCollapsedGroups,
+} from "@/utils/chatHistorySidebarPref";
 
 const props = withDefaults(
   defineProps<{
@@ -10,6 +14,8 @@ const props = withDefaults(
     historyList: any[];
     activeTraceId?: string;
     activeConversationId?: string;
+    processingConversationIds?: string[];
+    settledConversationIds?: string[];
     modelValue: string; // keyword
   }>(),
   {
@@ -17,6 +23,8 @@ const props = withDefaults(
     hasMore: false,
     activeTraceId: "",
     activeConversationId: "",
+    processingConversationIds: () => [],
+    settledConversationIds: () => [],
   }
 );
 
@@ -122,13 +130,23 @@ const isItemActive = (item: any) => {
   return false;
 };
 
-// Group Accordion State
-const collapsedGroups = ref<Record<string, boolean>>({
-  older: true, // 默认将更早的分组折叠，减少首屏垂直滚动负担
-});
+const isItemRunning = (item: any) => {
+  const cid = String(item?.conversation_id || "");
+  if (cid && props.processingConversationIds.includes(cid)) return true;
+  if (item?.status !== "running") return false;
+  if (cid && props.settledConversationIds.includes(cid)) return false;
+  return true;
+};
+
+// 日期分组默认全部展开；用户收起后再写入本地，刷新后保持。
+const collapsedGroups = ref<Record<string, boolean>>(readHistoryCollapsedGroups());
 
 const toggleGroupCollapse = (groupId: string) => {
-  collapsedGroups.value[groupId] = !collapsedGroups.value[groupId];
+  const next = { ...collapsedGroups.value };
+  if (next[groupId]) delete next[groupId];
+  else next[groupId] = true;
+  collapsedGroups.value = next;
+  writeHistoryCollapsedGroups(next);
 };
 
 // Single Delete Inline Confirmation State
@@ -445,10 +463,18 @@ const confirmDelete = (item: any) => {
                 <!-- Footer: Turn Count & Active Tag -->
                 <div class="mt-2 flex items-center justify-between text-[10px] text-gray-400">
                   <div class="flex items-center gap-1.5">
+                    <span v-if="isItemRunning(item)" class="relative flex h-1.5 w-1.5 shrink-0">
+                      <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
+                      <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                    </span>
                     <span
+                      v-else
                       class="w-1.5 h-1.5 rounded-full"
-                      :class="item.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'"
+                      :class="item.status === 'failed' || item.status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'"
                     ></span>
+                    <span v-if="isItemRunning(item)" class="font-bold text-amber-600 dark:text-amber-400">
+                      进行中
+                    </span>
                     <span v-if="item.turn_count !== undefined">
                       {{ item.turn_count }} 轮交互
                     </span>
