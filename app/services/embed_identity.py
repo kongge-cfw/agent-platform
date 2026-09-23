@@ -36,6 +36,13 @@ _FORBIDDEN_CLAIM_KEYS = AUTHENTICATED_IDENTITY_KEYS | frozenset(
 )
 
 
+def embed_catalog_app_id(user_info: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """嵌入会话返回应用 ID。空串表示嵌入但没有应用，数据集范围为空。非嵌入返回 None。"""
+    if not is_embed_session(user_info):
+        return None
+    return str((user_info or {}).get("embed_app_id") or "").strip()
+
+
 def is_embed_session(user_info: Optional[Mapping[str, Any]]) -> bool:
     if not isinstance(user_info, Mapping):
         return False

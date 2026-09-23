@@ -20,6 +20,20 @@ _STANDARD_CLAIM_KEYS = (
 _MAX_SHORTCUT_PROMPTS = 20
 _SHORTCUT_LABEL_MAX = 50
 _SHORTCUT_COMMAND_MAX = 500
+_GROUNDING_BLOCK_MODES = frozenset({"strict_buffer", "stream_with_retraction"})
+_CHAT_THEMES = frozenset({"light", "dark"})
+_MARKDOWN_THEMES = frozenset({
+    "default",
+    "minimal",
+    "academic",
+    "apple",
+    "warm",
+    "compact",
+    "bauhaus",
+    "editorial",
+    "zen",
+})
+_PRIMARY_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def parse_json_list(value: Any) -> list[Any]:
@@ -77,6 +91,74 @@ def dump_shortcut_prompts(value: Any) -> str:
     return json.dumps(parse_shortcut_prompts(value), ensure_ascii=False)
 
 
+def default_chat_settings() -> dict[str, Any]:
+    return {
+        "enable_multi_agent": True,
+        "enable_sql_plan": False,
+        "expand_thoughts": True,
+        "enable_grounding": False,
+        "grounding_block_mode": "strict_buffer",
+        "theme": "light",
+        "primary_color": "#1677ff",
+        "markdown_theme": "default",
+        "hide_message_border": True,
+        "show_bash_banner": True,
+    }
+
+
+def _as_bool(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return fallback
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_chat_settings(value: Any) -> dict[str, Any]:
+    """嵌入应用共享对话设置。缺省字段回落到平台默认，同一应用内所有人共用。"""
+    settings = default_chat_settings()
+    raw: Any = value
+    if value is None or value == "":
+        return settings
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return settings
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return settings
+    if not isinstance(raw, dict):
+        return settings
+    for key in (
+        "enable_multi_agent",
+        "enable_sql_plan",
+        "expand_thoughts",
+        "enable_grounding",
+        "hide_message_border",
+        "show_bash_banner",
+    ):
+        if key in raw:
+            settings[key] = _as_bool(raw.get(key), bool(settings[key]))
+    mode = str(raw.get("grounding_block_mode") or "").strip()
+    if mode in _GROUNDING_BLOCK_MODES:
+        settings["grounding_block_mode"] = mode
+    theme = str(raw.get("theme") or "").strip()
+    if theme in _CHAT_THEMES:
+        settings["theme"] = theme
+    color = str(raw.get("primary_color") or "").strip()
+    if _PRIMARY_COLOR_RE.match(color):
+        settings["primary_color"] = color.lower()
+    markdown_theme = str(raw.get("markdown_theme") or "").strip()
+    if markdown_theme in _MARKDOWN_THEMES:
+        settings["markdown_theme"] = markdown_theme
+    return settings
+
+
+def dump_chat_settings(value: Any) -> str:
+    return json.dumps(parse_chat_settings(value), ensure_ascii=False)
+
+
 def parse_optional_role_id(value: Any) -> Optional[int]:
     if value in (None, "", 0, "0"):
         return None
@@ -116,6 +198,7 @@ class SysEmbedAppBase(BaseModel):
     claim_keys: list[str] = Field(default_factory=list)
     data_permission_mode: str = "nanzi_sql_rewrite"
     shortcut_prompts: list[dict[str, str]] = Field(default_factory=list)
+    chat_settings: dict[str, Any] = Field(default_factory=default_chat_settings)
     is_active: bool = True
 
     @field_validator("name")
@@ -171,6 +254,11 @@ class SysEmbedAppBase(BaseModel):
     def _shortcut_prompts(cls, value: Any) -> list[dict[str, str]]:
         return parse_shortcut_prompts(value)
 
+    @field_validator("chat_settings", mode="before")
+    @classmethod
+    def _chat_settings(cls, value: Any) -> dict[str, Any]:
+        return parse_chat_settings(value)
+
 
 class SysEmbedAppCreate(SysEmbedAppBase):
     role_id: int
@@ -206,6 +294,7 @@ class SysEmbedAppUpdate(BaseModel):
     claim_keys: Optional[list[str]] = None
     data_permission_mode: Optional[str] = None
     shortcut_prompts: Optional[list[dict[str, str]]] = None
+    chat_settings: Optional[dict[str, Any]] = None
     is_active: Optional[bool] = None
 
     @field_validator("name")
@@ -248,6 +337,13 @@ class SysEmbedAppUpdate(BaseModel):
         if value is None:
             return value
         return parse_shortcut_prompts(value)
+
+    @field_validator("chat_settings", mode="before")
+    @classmethod
+    def _update_chat_settings(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        return parse_chat_settings(value)
 
     @field_validator("allowed_origins", "claim_keys", mode="before")
     @classmethod

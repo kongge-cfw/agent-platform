@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -281,6 +281,85 @@ class MetadataDriftService:
         return alert
 
     @staticmethod
+    async def close_false_table_missing_alerts(
+        db: AsyncSession,
+        *,
+        dataset_id: int,
+        table_name: str,
+    ) -> int:
+        """巡检确认物理表仍在时，关闭此前因表名未对齐产生的整表缺失告警。"""
+        stmt = select(MetaSchemaDriftAlert).where(
+            MetaSchemaDriftAlert.dataset_id == dataset_id,
+            func.lower(MetaSchemaDriftAlert.table_name) == table_name.lower().strip(),
+            MetaSchemaDriftAlert.column_name == "*",
+            MetaSchemaDriftAlert.drift_type == "table_missing_in_db",
+            MetaSchemaDriftAlert.status == 0,
+        )
+        alerts = (await db.execute(stmt)).scalars().all()
+        now = datetime.now()
+        for alert in alerts:
+            alert.status = 1
+            alert.updated_at = now
+            note = "巡检已确认物理表存在，关闭表名未对齐产生的误报。"
+            previous = str(alert.error_sample or "").strip()
+            alert.error_sample = f"{previous} {note}".strip()[:1000]
+        return len(alerts)
+
+    @staticmethod
+    async def retain_latest_inspection_alerts(
+        db: AsyncSession,
+        *,
+        dataset_id: int,
+        keep_keys: set[tuple[str, str, str]],
+        unverified_tables: set[str],
+    ) -> int:
+        """一次巡检结束后，该数据集只留下这次扫到的待处理差异。
+
+        物理列读失败的表不改动原告警。键为 (表名, 字段名, 漂移类型)，均已小写。
+        """
+        loaded = (
+            await db.execute(
+                select(MetaSchemaDriftAlert).where(MetaSchemaDriftAlert.dataset_id == dataset_id)
+            )
+        ).scalars().all()
+        alerts = list(loaded) if isinstance(loaded, (list, tuple)) else []
+        removed = 0
+        for alert in alerts:
+            table = str(alert.table_name or "").lower().strip()
+            if table in unverified_tables:
+                continue
+            key = (
+                table,
+                str(alert.column_name or "").lower().strip(),
+                str(alert.drift_type or ""),
+            )
+            if alert.status == 0 and key in keep_keys:
+                continue
+            await db.delete(alert)
+            removed += 1
+        if removed:
+            logger.info(
+                "[MetadataDrift] 数据集 %s 仅保留本次巡检差异，移除 %s 条旧告警",
+                dataset_id,
+                removed,
+            )
+        return removed
+
+    @staticmethod
+    async def delete_alerts_without_dataset(db: AsyncSession) -> int:
+        """清掉数据集已删除、巡检不会再扫到的告警。"""
+        result = await db.execute(
+            delete(MetaSchemaDriftAlert).where(
+                ~MetaSchemaDriftAlert.dataset_id.in_(select(MetaDataset.id))
+            )
+        )
+        raw_count = getattr(result, "rowcount", 0)
+        removed = raw_count if isinstance(raw_count, int) and raw_count > 0 else 0
+        if removed:
+            logger.info("[MetadataDrift] 已清除 %s 条所属数据集已不存在的告警", removed)
+        return removed
+
+    @staticmethod
     async def get_dataset_drift_alerts(
         db: AsyncSession,
         dataset_id: int,
@@ -305,11 +384,13 @@ class MetadataDriftService:
     @staticmethod
     async def get_drift_summary(db: AsyncSession) -> Tuple[int, Dict[int, int]]:
         """获取全局待处理漂移告警总数及各数据集的待处理计数。"""
+        await MetadataDriftService.delete_alerts_without_dataset(db)
         stmt = (
             select(
                 MetaSchemaDriftAlert.dataset_id,
                 func.count(MetaSchemaDriftAlert.id).label("cnt"),
             )
+            .join(MetaDataset, MetaDataset.id == MetaSchemaDriftAlert.dataset_id)
             .where(MetaSchemaDriftAlert.status == 0)
             .group_by(MetaSchemaDriftAlert.dataset_id)
         )

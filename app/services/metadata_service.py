@@ -1,6 +1,6 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update, or_, cast, String, Integer, func
+from sqlalchemy import select, delete, update, or_, cast, String, Integer, func, false
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -84,6 +84,7 @@ class MetadataService:
         status: int = 1,
         tenant_id: Optional[str] = None,
         isolate_by_tenant: bool = False,
+        embed_app_id: Optional[str] = None,
     ) -> List[MetaDataset]:
         """轻量可访问数据集列表：仅主表字段，按用户 metadata 权限过滤，不做表/指标/关系统计。"""
         stmt = select(MetaDataset).where(MetaDataset.status == status)
@@ -100,7 +101,9 @@ class MetadataService:
                 )
             )
 
-        if not is_admin:
+        if embed_app_id is not None:
+            stmt = MetadataService._restrict_datasets_to_embed_app(stmt, embed_app_id)
+        elif not is_admin:
             if user_id is None:
                 return []
             try:
@@ -125,6 +128,39 @@ class MetadataService:
         stmt = stmt.order_by(MetaDataset.id.asc())
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    def _restrict_datasets_to_embed_app(stmt, embed_app_id: str):
+        app_id = str(embed_app_id or "").strip()
+        if not app_id:
+            return stmt.where(false())
+        from app.models.permission import ResourcePermission
+
+        permitted_ids_stmt = select(cast(ResourcePermission.resource_id, Integer)).where(
+            ResourcePermission.resource_type == "metadata",
+            ResourcePermission.enabled == True,
+            ResourcePermission.embed_app_id == app_id,
+        )
+        return stmt.where(MetaDataset.id.in_(permitted_ids_stmt))
+
+    @staticmethod
+    async def embed_app_can_access_dataset(
+        db: AsyncSession,
+        embed_app_id: str,
+        dataset_id: int,
+    ) -> bool:
+        app_id = str(embed_app_id or "").strip()
+        if not app_id:
+            return False
+        from app.models.permission import ResourcePermission
+
+        stmt = select(ResourcePermission.id).where(
+            ResourcePermission.resource_type == "metadata",
+            ResourcePermission.resource_id == str(dataset_id),
+            ResourcePermission.embed_app_id == app_id,
+            ResourcePermission.enabled == True,
+        )
+        return (await db.execute(stmt)).scalar_one_or_none() is not None
 
     @staticmethod
     async def get_dataset_by_id(
@@ -186,15 +222,18 @@ class MetadataService:
         query: Optional[str] = None,
         status: int = 1,
         user_id: Optional[int] = None,
-        is_admin: bool = False
+        is_admin: bool = False,
+        embed_app_id: Optional[str] = None,
     ) -> List[MetaDataset]:
         """
         Search for datasets based on name/display_name and permissions.
         """
         stmt = select(MetaDataset).where(MetaDataset.status == status)
-        
-        # 1. Permission Filtering (if not admin)
-        if not is_admin and user_id is not None:
+
+        # 嵌入应用授权优先于用户/管理员身份，避免签发人是管理员时放开全部数据集。
+        if embed_app_id is not None:
+            stmt = MetadataService._restrict_datasets_to_embed_app(stmt, embed_app_id)
+        elif not is_admin and user_id is not None:
             try:
                 parsed_user_id = int(user_id)
             except (TypeError, ValueError):
@@ -409,7 +448,11 @@ class MetadataService:
         result = await db.execute(select(MetaDataset.rag_dataset_id).where(MetaDataset.id == dataset_id))
         rag_kb_id = result.scalar_one_or_none()
 
-        # 3. Delete Local
+        # 3. Delete Local（告警表没有级联外键，先删该数据集的巡检结果）
+        from app.models.metadata import MetaSchemaDriftAlert
+        await db.execute(
+            delete(MetaSchemaDriftAlert).where(MetaSchemaDriftAlert.dataset_id == dataset_id)
+        )
         query = delete(MetaDataset).where(MetaDataset.id == dataset_id)
         await db.execute(query)
         

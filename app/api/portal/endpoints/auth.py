@@ -312,7 +312,8 @@ async def get_current_user_info(
             days_until_next_change = password_expire_days - days_since_last_change
             is_expired = days_until_next_change <= 0
 
-    from app.schemas.embed_app import parse_shortcut_prompts
+    from app.schemas.embed_app import parse_chat_settings, parse_shortcut_prompts
+    embed_app_key = user.get("embed_app_key") or user.get("app_key") or None
 
     return {
         "status": "success",
@@ -322,8 +323,9 @@ async def get_current_user_info(
             "user_name": user.get("user_name"),
             "real_name": user.get("real_name") or user.get("user_name"),
             "role": user.get("role"),
-            "app_key": user.get("embed_app_key") or user.get("app_key") or None,
+            "app_key": embed_app_key,
             "shortcut_prompts": parse_shortcut_prompts(user.get("shortcut_prompts")),
+            "chat_settings": parse_chat_settings(user.get("chat_settings")) if embed_app_key and user.get("chat_settings") not in (None, "") else None,
             "default_entry_agent_id": str(user.get("default_entry_agent_id") or "").strip() or None,
             "dept_code": user.get("dept_code"),
             "org_path": user.get("org_path"),
@@ -500,7 +502,7 @@ async def validate_user_apikey(
     通过 Authorization 头传递 Key。
     如果有效，返回 200 和基础用户信息。
     """
-    from app.schemas.embed_app import parse_shortcut_prompts
+    from app.schemas.embed_app import parse_chat_settings, parse_shortcut_prompts
     from app.services.config_service import ConfigService
     watermark_enabled = await ConfigService.get("embedchat_watermark_enabled") == "true"
     watermark_style = await ConfigService.get("embedchat_watermark_style") or "user_time"
@@ -516,6 +518,7 @@ async def validate_user_apikey(
             "role": user.get("role"),
             "app_key": user.get("embed_app_key") or user.get("app_key") or None,
             "shortcut_prompts": parse_shortcut_prompts(user.get("shortcut_prompts")),
+            "chat_settings": parse_chat_settings(user.get("chat_settings")) if (user.get("embed_app_key") or user.get("app_key")) and user.get("chat_settings") not in (None, "") else None,
             "default_entry_agent_id": str(user.get("default_entry_agent_id") or "").strip() or None,
             "watermark": {
                 "enabled": watermark_enabled,

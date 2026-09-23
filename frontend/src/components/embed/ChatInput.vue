@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, nextTick, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from "vue";
+import { ref, reactive, nextTick, computed, watch, onMounted, onUnmounted, useSlots, type ComponentPublicInstance } from "vue";
 import MentionList from "@/components/agent/MentionList.vue";
 import UserMessageAttachments from "@/components/chat/UserMessageAttachments.vue";
 import SkillCascadeMenu from "@/components/embed/SkillCascadeMenu.vue";
@@ -20,6 +20,7 @@ import {
 } from "@/utils/chatFileIntake";
 import { catalogHasDelegationHost } from "@/utils/delegationHost";
 import { DATASET_PORTAL_SYSTEM_COMMAND_ID } from "@/constants/datasetPortalCommand";
+import { shortcutCommandPreview, splitShortcutSkill } from "@/utils/shortcutSkill";
 import { getTemperatureGuidance } from "@/utils/temperatureGuidance";
 import {
   ArchiveBoxIcon,
@@ -140,6 +141,8 @@ const props = defineProps<{
   allowManageShortcuts?: boolean;
   /** 快捷指令条固定在输入框上方：不提供上移/折叠，系统胶囊仅保留新会话与历史 */
   pinShortcutBar?: boolean;
+  /** 顶栏已有新会话/历史时，快捷指令条不再重复这两项 */
+  omitPinnedSystemCommands?: boolean;
   /** 沙箱工作区运行状态 */
   sandboxWorkspaceStatus?: "idle" | "starting" | "stopping" | "running" | "error";
   /** 当前用户分配的沙箱实例标识（Docker 容器 ID / K8s Pod 名） */
@@ -592,6 +595,7 @@ const selectNewConversationType = (command: string) => {
   emit('system-command', command);
 };
 
+const slots = useSlots();
 const pinShortcutBar = computed(() => props.pinShortcutBar === true);
 const showShortcutBar = computed(
   () => (pinShortcutBar.value || props.showShortcuts) && props.windowWidth >= 640,
@@ -619,7 +623,7 @@ const queryMatchedCommands = computed(() => {
   if (!props.modelValue.startsWith('/')) return props.slashCommands;
   const query = props.modelValue.slice(1).toLowerCase();
   if (!query) return props.slashCommands;
-  return props.slashCommands.filter(cmd => (cmd.command?.toLowerCase().includes(query)) || (cmd.label?.toLowerCase().includes(query)));
+  return props.slashCommands.filter(cmd => (shortcutCommandPreview(cmd.command).toLowerCase().includes(query)) || (cmd.label?.toLowerCase().includes(query)));
 });
 
 const slashPaletteSkills = ref<SkillItem[]>([]);
@@ -834,6 +838,20 @@ const handleKeydown = (e: KeyboardEvent) => {
       return;
     }
   }
+  if (
+    e.key === "Backspace"
+    && !props.modelValue
+    && composerSkillChips.value.length
+    && !e.shiftKey
+    && !e.metaKey
+    && !e.ctrlKey
+    && !e.altKey
+  ) {
+    e.preventDefault();
+    const lastSkill = composerSkillChips.value[composerSkillChips.value.length - 1];
+    if (lastSkill) removeComposerFile(lastSkill);
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     if (!canSend.value) return;
     e.preventDefault();
@@ -856,10 +874,22 @@ const selectCommand = (cmd: any) => {
     emit('update:modelValue', '');
     showCommandMenu.value = false;
   } else {
-    emit('update:modelValue', cmd.command);
+    applyUserShortcut(cmd.command);
     showCommandMenu.value = false;
-    emit('send');
   }
+};
+
+const applyUserShortcut = (command: string) => {
+  const parsed = splitShortcutSkill(command);
+  if (parsed.skill) {
+    mountSkillFromCascade({
+      id: parsed.skill.id,
+      name: parsed.skill.name,
+      scope: "global",
+    });
+  }
+  emit("update:modelValue", parsed.text);
+  nextTick(() => inputRef.value?.focus());
 };
 
 /** 清除输入中的 @关键字片段，并可选触发专家切换 */
@@ -897,8 +927,7 @@ const handleShortcutClick = (cmd: any) => {
         emit('system-command', cmd.command);
         emit('update:modelValue', '');
     } else {
-        emit('update:modelValue', cmd.command);
-        emit('send');
+        applyUserShortcut(cmd.command);
     }
 };
 
@@ -920,13 +949,29 @@ const isKnowledgePortalDisabled = computed(() => {
   return !!props.slashCommands?.find(c => c.id === 'sys_knowledge_portal')?.disabled;
 });
 
+const composerSkillChips = computed(() =>
+  uploadedFiles.value.filter((file) => file.type === "skill"),
+);
+const composerSkillRowRef = ref<HTMLElement | null>(null);
+const composerSkillIndent = ref(0);
+const syncComposerSkillIndent = () => {
+  const width = composerSkillRowRef.value?.offsetWidth || 0;
+  composerSkillIndent.value = width ? width + 6 : 0;
+};
+watch(composerSkillChips, () => nextTick(syncComposerSkillIndent), { deep: true });
+
 const composerAttachments = computed(() =>
-  uploadedFiles.value.filter((file) => file.type !== "knowledge_settings"),
+  uploadedFiles.value.filter((file) => file.type !== "knowledge_settings" && file.type !== "skill"),
 );
 
 const canSend = computed(
-  () => !!props.modelValue.trim() || composerAttachments.value.length > 0,
+  () => !!props.modelValue.trim() || composerAttachments.value.length > 0 || composerSkillChips.value.length > 0,
 );
+
+const skillChipLabel = (file: { filename?: string; url?: string; skillMeta?: { name?: string } }) => {
+  const raw = String(file.skillMeta?.name || file.url || file.filename || "").replace(/\s*\(技能\)\s*$/, "").trim();
+  return raw || "技能";
+};
 
 const modelLabel = computed(() => {
   if (!props.selectedModel) return "默认模型";
@@ -941,7 +986,7 @@ const selectedModelConfig = computed(() => {
 
 const thinkingEnabledForSession = computed(() => {
   if (!selectedModelConfig.value?.thinking_enable) return false;
-  return props.thinkingEnableOverride ?? Boolean(selectedModelConfig.value.thinking_enable);
+  return props.thinkingEnableOverride ?? false;
 });
 
 const canToggleThinking = computed(() => Boolean(
@@ -1012,28 +1057,23 @@ const backFromThinkingPanel = () => {
   showThinkingPanel.value = false;
 };
 
-/** 模型默认温度（未配置则为 0.7） */
-const defaultModelTemperature = computed(() => {
-  const t = selectedModelConfig.value?.temperature;
-  return typeof t === "number" && Number.isFinite(t) ? t : 0.7;
-});
+const SESSION_DEFAULT_TEMPERATURE = 0.2;
 
-/** 实际生效温度 */
+/** 实际生效温度。未单独设置时使用会话默认 0.2。 */
 const effectiveTemperature = computed(() => {
   if (props.temperatureOverride !== null && props.temperatureOverride !== undefined) {
     return props.temperatureOverride;
   }
-  return defaultModelTemperature.value;
+  return SESSION_DEFAULT_TEMPERATURE;
 });
 
-/** 是否跟随模型默认温度 */
+/** 是否仍是会话默认温度 0.2 */
 const isFollowingDefaultTemperature = computed(() => {
-  return props.temperatureOverride === null || props.temperatureOverride === undefined;
+  return Math.abs(effectiveTemperature.value - SESSION_DEFAULT_TEMPERATURE) < 0.001;
 });
 
-/** 触发器按钮上的温度徽章：仅在手动调整过温度时显示 */
+/** 触发器按钮上的温度徽章 */
 const temperatureSummaryLabel = computed(() => {
-  if (isFollowingDefaultTemperature.value) return "";
   const val = Number(effectiveTemperature.value.toFixed(2));
   return `T:${val}`;
 });
@@ -1064,7 +1104,7 @@ const setCustomTemperature = (val: number) => {
 };
 
 const resetTemperatureToDefault = () => {
-  emit("update:temperature-override", null);
+  emit("update:temperature-override", SESSION_DEFAULT_TEMPERATURE);
 };
 
 /** 点模型行：移动端进思考/参数二级；桌面端选中即关菜单 */
@@ -1311,6 +1351,7 @@ const desktopCommandDrawerRef = ref<HTMLElement | null>(null);
 /** 行内展示全部指令（超出横向滚动）；「更多」打开完整指令库 */
 const visibleRowSystemCommands = computed(() => {
   const list = filteredSystemCommands.value.filter((cmd) => cmd.id !== "sys_project");
+  if (props.omitPinnedSystemCommands) return [];
   if (!pinShortcutBar.value) return list;
   return list.filter((cmd) => ROW_SYSTEM_COMMAND_IDS.has(String(cmd.id)));
 });
@@ -1328,7 +1369,7 @@ const hasShortcutChips = computed(() => {
 });
 const showShortcutDivider = computed(
   () =>
-    visibleRowSystemCommands.value.length > 0
+    (visibleRowSystemCommands.value.length > 0 || Boolean(slots["after-system-shortcuts"]))
     && visibleRowUserCommands.value.length > 0,
 );
 
@@ -1808,7 +1849,9 @@ const removeComposerFile = (file: { type?: string; filename?: string; url?: stri
 };
 
 const clearComposerAttachments = () => {
-  uploadedFiles.value = uploadedFiles.value.filter((file) => file.type === "knowledge_settings");
+  uploadedFiles.value = uploadedFiles.value.filter(
+    (file) => file.type === "knowledge_settings" || file.type === "skill",
+  );
 };
 
 const fileNoticeVisible = ref(false);
@@ -1964,6 +2007,7 @@ defineExpose({
                                         </div>
                                         <button v-else :disabled="cmd.disabled" @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-gray-100/80 dark:bg-gray-800 text-gray-500 rounded-full whitespace-nowrap hover:bg-gray-200 transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"><component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{{ cmd.label }}</button>
                                     </template>
+                                    <slot name="after-system-shortcuts" />
                                     <div v-if="showShortcutDivider" class="w-px h-3 bg-gray-200 dark:bg-gray-700 flex-shrink-0"></div>
                                     <template v-for="cmd in visibleRowPersonalCommands" :key="'row-personal-'+cmd.id">
                                         <button @click="handleShortcutClick(cmd)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-100/70 dark:border-emerald-800 rounded-full whitespace-nowrap hover:bg-emerald-100 transition-colors flex-shrink-0">{{ cmd.label }}</button>
@@ -2120,17 +2164,48 @@ defineExpose({
                       <span v-else class="shrink-0 rounded border border-emerald-100 bg-emerald-50 px-1 py-0.5 text-[8px] font-bold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">个人</span>
                     </div>
                     <div class="truncate font-mono text-[10px] leading-4 text-gray-400 opacity-70">
-                      {{ cmd.command }}
+                      {{ shortcutCommandPreview(cmd.command) }}
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <textarea ref="inputRef" :value="modelValue" :disabled="isInteractionLocked" @input="handleInput" @focus="handleFocus" @keydown="handleKeydown" @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" @paste="handlePaste" rows="1" class="w-full bg-transparent border-none outline-none focus:ring-0 text-base sm:text-sm placeholder:text-sm px-0 py-1 resize-none max-h-32 text-gray-900 dark:text-gray-100 placeholder-gray-400 peer z-10 relative disabled:cursor-not-allowed" :class="[
-              isInteractionLocked ? 'min-h-[46px] opacity-0 pointer-events-none' : 'min-h-[46px] opacity-100',
-              textareaPaddingRightClass,
-            ]" :placeholder="inputPlaceholder"></textarea>
+            <div class="relative">
+              <div
+                v-if="composerSkillChips.length"
+                ref="composerSkillRowRef"
+                class="absolute left-0 top-1 z-10 flex h-5 items-center gap-1.5"
+              >
+              <span
+                v-for="file in composerSkillChips"
+                :key="`skill-chip-${file.url}`"
+                class="group/skill inline-flex h-5 max-w-[16rem] shrink-0 items-center rounded-full bg-gray-100 px-2 text-[13px] leading-none text-gray-700 dark:bg-gray-700 dark:text-gray-100"
+              >
+                <span class="relative mr-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-gray-500">
+                  <BoltIcon class="h-3.5 w-3.5 group-hover/skill:opacity-0" aria-hidden="true" />
+                  <button
+                    type="button"
+                    class="absolute inset-0 hidden items-center justify-center rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-800 group-hover/skill:flex dark:hover:bg-gray-600 dark:hover:text-gray-100"
+                    aria-label="移除技能"
+                    title="移除技能"
+                    :disabled="isInteractionLocked"
+                    @mousedown.prevent
+                    @click="removeComposerFile(file)"
+                  >
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+                <span class="truncate">{{ skillChipLabel(file) }}</span>
+              </span>
+              </div>
+              <textarea ref="inputRef" :value="modelValue" :disabled="isInteractionLocked" @input="handleInput" @focus="handleFocus" @keydown="handleKeydown" @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" @paste="handlePaste" rows="1" class="w-full bg-transparent border-none outline-none focus:ring-0 text-base sm:text-sm placeholder:text-sm px-0 py-1 resize-none max-h-32 text-gray-900 dark:text-gray-100 placeholder-gray-400 peer z-10 relative disabled:cursor-not-allowed" :style="composerSkillIndent ? { textIndent: `${composerSkillIndent}px` } : undefined" :class="[
+                isInteractionLocked ? 'min-h-[46px] opacity-0 pointer-events-none' : 'min-h-[46px] opacity-100',
+                textareaPaddingRightClass,
+              ]" :placeholder="inputPlaceholder"></textarea>
+            </div>
 
             <!-- 输入框内部右上角状态浮标组 (反幻觉浮标 + 上下文用量胶囊，完全对齐且低饱和淡雅配色) -->
             <div class="absolute right-2 top-2 z-30 flex items-center gap-1.5 pointer-events-auto">
@@ -3477,7 +3552,7 @@ defineExpose({
                                         v-if="!isFollowingDefaultTemperature"
                                         type="button"
                                         class="text-[10px] text-gray-400 hover:text-primary transition-colors underline decoration-dotted"
-                                        title="恢复跟随模型默认值"
+                                        title="恢复为默认温度 0.2"
                                         @click="resetTemperatureToDefault"
                                       >
                                         恢复默认
@@ -3512,7 +3587,7 @@ defineExpose({
                                       :key="preset.value"
                                       type="button"
                                       class="rounded-md border py-1 text-center text-[10px] transition-colors"
-                                      :class="!isFollowingDefaultTemperature && Math.abs(effectiveTemperature - preset.value) < 0.01
+                                      :class="Math.abs(effectiveTemperature - preset.value) < 0.01
                                         ? 'border-primary bg-primary/10 font-semibold text-primary'
                                         : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600'"
                                       :title="preset.desc"
@@ -3603,7 +3678,7 @@ defineExpose({
                       @click="handleShortcutClick(cmd); closeCommandDrawer();"
                     >
                       <div class="truncate pr-5 text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
-                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ shortcutCommandPreview(cmd.command) }}</div>
                     </button>
                     <button
                       v-if="canDeleteCommand(cmd)"
@@ -3632,7 +3707,7 @@ defineExpose({
                     @click="handleShortcutClick(cmd); closeCommandDrawer();"
                   >
                     <div class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
-                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ shortcutCommandPreview(cmd.command) }}</div>
                   </button>
                 </div>
               </div>
@@ -3644,7 +3719,7 @@ defineExpose({
                 <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <button :disabled="cmd.disabled" v-for="cmd in filteredSystemCommands" :key="'grid-sys-'+cmd.id" @click="handleShortcutClick(cmd); closeCommandDrawer();" class="w-full text-left p-3.5 rounded-2xl bg-gray-50/50 dark:bg-gray-900/30 border border-transparent hover:bg-gray-100 dark:hover:bg-gray-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-50/50">
                     <div class="flex items-center gap-1.5 text-xs font-bold text-gray-600 dark:text-gray-400 mb-1 truncate"><component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-4 w-4 shrink-0" aria-hidden="true" />{{ cmd.label }}</div>
-                    <div class="text-[9px] text-gray-400/60 truncate font-mono">{{ cmd.command }}</div>
+                    <div class="text-[9px] text-gray-400/60 truncate font-mono">{{ shortcutCommandPreview(cmd.command) }}</div>
                   </button>
                 </div>
               </div>
@@ -3718,7 +3793,7 @@ defineExpose({
                   >
                     <button type="button" class="command-drawer-card" @click="handleShortcutClick(cmd); closeCommandDrawer();">
                       <div class="truncate pr-5 text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
-                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                      <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ shortcutCommandPreview(cmd.command) }}</div>
                     </button>
                     <button
                       v-if="canDeleteCommand(cmd)"
@@ -3747,7 +3822,7 @@ defineExpose({
                     @click="handleShortcutClick(cmd); closeCommandDrawer();"
                   >
                     <div class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ cmd.label }}</div>
-                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ cmd.command }}</div>
+                    <div class="mt-0.5 truncate text-[10px] leading-4 text-gray-400">{{ shortcutCommandPreview(cmd.command) }}</div>
                   </button>
                 </div>
               </div>
@@ -3759,7 +3834,7 @@ defineExpose({
                 <div class="grid grid-cols-2 gap-3">
                   <button :disabled="cmd.disabled" v-for="cmd in filteredSystemCommands" :key="'mobile-sys-'+cmd.id" @click="cmd.disabled ? null : (handleShortcutClick(cmd), closeCommandDrawer());" class="w-full text-left p-3.5 rounded-2xl bg-gray-50/50 dark:bg-gray-900/30 border border-transparent hover:bg-gray-100 dark:hover:bg-gray-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-50/50">
                     <div class="flex items-center gap-1.5 text-xs font-bold text-gray-600 dark:text-gray-400 mb-1 truncate"><component v-if="getSystemCommandIcon(cmd)" :is="getSystemCommandIcon(cmd)" class="h-4 w-4 shrink-0" aria-hidden="true" />{{ cmd.label }}</div>
-                    <div class="text-[9px] text-gray-400/60 truncate font-mono">{{ cmd.command }}</div>
+                    <div class="text-[9px] text-gray-400/60 truncate font-mono">{{ shortcutCommandPreview(cmd.command) }}</div>
                   </button>
                 </div>
               </div>

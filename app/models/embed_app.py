@@ -22,6 +22,7 @@ class SysEmbedApp(Base):
     claim_keys = Column(Text, nullable=False, default="[]")
     data_permission_mode = Column(String(32), nullable=False, default="nanzi_sql_rewrite")
     shortcut_prompts = Column(Text, nullable=False, default="[]")
+    chat_settings = Column(Text, nullable=False, default="{}")
     is_active = Column(Boolean, nullable=False, default=True)
     created_by = Column(String(64), nullable=True)
     updated_by = Column(String(64), nullable=True)

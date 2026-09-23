@@ -195,15 +195,16 @@ const activeTab = ref('tables')
 const editingTable = ref<Table | null>(null)
 const deleteTableId = ref<string | null>(null)
 
-const datasetPermissions = ref<{ users: any[], roles: any[] }>({ users: [], roles: [] })
+const datasetPermissions = ref<{ users: any[], roles: any[], embed_apps: any[] }>({ users: [], roles: [], embed_apps: [] })
 const loadingPermissions = ref(false)
 
 const fetchDatasetPermissions = async () => {
   loadingPermissions.value = true
-  datasetPermissions.value = { users: [], roles: [] }
+  datasetPermissions.value = { users: [], roles: [], embed_apps: [] }
   try {
     const res = await axios.get(`/api/portal/metadata/datasets/${datasetId}/permissions`)
-    datasetPermissions.value = res.data?.data || { users: [], roles: [] }
+    datasetPermissions.value = res.data?.data || { users: [], roles: [], embed_apps: [] }
+    datasetPermissions.value.embed_apps = datasetPermissions.value.embed_apps || []
   } catch (err) {
     console.error('获取数据集授权权限失败:', err)
   } finally {
@@ -213,9 +214,9 @@ const fetchDatasetPermissions = async () => {
 
 // 权限管理交互逻辑
 const showAddPermissionModal = ref(false)
-const assignType = ref<'role' | 'user'>('role')
-const selectedCandidateIds = ref<number[]>([])
-const candidates = ref<{ roles: any[], users: any[] }>({ roles: [], users: [] })
+const assignType = ref<'role' | 'user' | 'embed_app'>('role')
+const selectedCandidateIds = ref<Array<number | string>>([])
+const candidates = ref<{ roles: any[], users: any[], embed_apps: any[] }>({ roles: [], users: [], embed_apps: [] })
 const savingPerms = ref(false)
 
 const hasEditPermission = computed(() => _isAdmin.value || hasPermission('element:metadata:edit'))
@@ -248,12 +249,26 @@ const availableUsers = computed(() => {
   return filtered
 })
 
+const availableEmbedApps = computed(() => {
+  const grantedIds = (datasetPermissions.value.embed_apps || []).map(app => app.id)
+  let filtered = (candidates.value.embed_apps || []).filter(app => !grantedIds.includes(app.id))
+  if (candidateSearchQuery.value) {
+    const q = candidateSearchQuery.value.toLowerCase()
+    filtered = filtered.filter(app =>
+      (app.name && app.name.toLowerCase().includes(q)) ||
+      (app.app_key && app.app_key.toLowerCase().includes(q))
+    )
+  }
+  return filtered
+})
+
 const openAddPermissionModal = async () => {
   selectedCandidateIds.value = []
   showAddPermissionModal.value = true
   try {
     const res = await axios.get('/api/portal/metadata/candidates')
-    candidates.value = res.data?.data || { roles: [], users: [] }
+    candidates.value = res.data?.data || { roles: [], users: [], embed_apps: [] }
+    candidates.value.embed_apps = candidates.value.embed_apps || []
   } catch (err) {
     console.error('获取候选列表失败:', err)
   }
@@ -265,7 +280,7 @@ const closeAddPermissionModal = () => {
   candidateSearchQuery.value = ''
 }
 
-const toggleCandidateSelection = (id: number) => {
+const toggleCandidateSelection = (id: number | string) => {
   const idx = selectedCandidateIds.value.indexOf(id)
   if (idx > -1) {
     selectedCandidateIds.value.splice(idx, 1)
@@ -292,7 +307,7 @@ const submitPermissions = async () => {
   }
 }
 
-const removePermission = async (type: string, id: number) => {
+const removePermission = async (type: string, id: number | string) => {
   try {
     await axios.delete(`/api/portal/metadata/datasets/${datasetId}/permissions`, {
       data: {
@@ -895,7 +910,7 @@ defineExpose({ fetchMetrics })
             </div>
 
             <!-- Permissions Info -->
-            <div v-if="datasetPermissions?.users?.length || datasetPermissions?.roles?.length" class="mt-2.5 pt-2 border-t border-gray-100 flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
+            <div v-if="datasetPermissions?.users?.length || datasetPermissions?.roles?.length || datasetPermissions?.embed_apps?.length" class="mt-2.5 pt-2 border-t border-gray-100 flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
               <div v-if="datasetPermissions.roles.length" class="flex items-center gap-1.5">
                 <span class="text-gray-400 font-medium select-none">授权角色:</span>
                 <div class="flex flex-wrap gap-1">
@@ -918,6 +933,19 @@ defineExpose({ fetchMetrics })
                     class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100/50 flex items-center gap-1 select-none"
                   >
                     {{ u.real_name || u.user_name }}
+                  </span>
+                </div>
+              </div>
+
+              <div v-if="datasetPermissions.embed_apps?.length" class="flex items-center gap-1.5">
+                <span class="text-gray-400 font-medium select-none">授权嵌入应用:</span>
+                <div class="flex flex-wrap gap-1">
+                  <span
+                    v-for="app in datasetPermissions.embed_apps"
+                    :key="app.id"
+                    class="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-semibold border border-sky-100/50 flex items-center gap-1 select-none"
+                  >
+                    {{ app.name }}
                   </span>
                 </div>
               </div>
@@ -1017,7 +1045,7 @@ defineExpose({ fetchMetrics })
           权限管理
           <span 
              :class="[activeTab === 'permissions' ? 'bg-emerald-100 text-emerald-600' : 'bg-gray-100 text-gray-400', 'ml-1 py-0.5 px-2 rounded-full text-[10px] font-bold transition-colors']"
-          >{{ datasetPermissions.users.length + datasetPermissions.roles.length }}</span>
+          >{{ datasetPermissions.users.length + datasetPermissions.roles.length + (datasetPermissions.embed_apps?.length || 0) }}</span>
         </button>
       </nav>
     </div>
@@ -1245,7 +1273,7 @@ defineExpose({ fetchMetrics })
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <!-- 角色列表 -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
@@ -1325,6 +1353,44 @@ defineExpose({ fetchMetrics })
             暂无用户授权。
           </div>
         </div>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1 select-none">
+              已授权嵌入应用 ({{ datasetPermissions.embed_apps?.length || 0 }})
+            </h3>
+          </div>
+          <div v-if="datasetPermissions.embed_apps?.length" class="border border-gray-150 rounded-xl overflow-hidden divide-y divide-gray-100 bg-gray-50/20">
+            <div
+              v-for="app in datasetPermissions.embed_apps"
+              :key="app.id"
+              class="flex items-center justify-between p-3.5 hover:bg-white transition-all group"
+            >
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center text-sky-600 font-bold text-xs select-none">
+                  E
+                </div>
+                <div>
+                  <div class="text-sm font-semibold text-gray-800">{{ app.name }}</div>
+                  <div class="text-[10px] text-gray-400 font-mono mt-0.5 select-all">{{ app.app_key }}</div>
+                </div>
+              </div>
+              <button
+                v-if="hasEditPermission"
+                @click="removePermission('embed_app', app.id)"
+                class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 text-gray-400 hover:text-red-600 rounded-lg transition-all"
+                title="取消此嵌入应用授权"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div v-else class="text-xs text-gray-400 italic py-6 text-center border border-dashed border-gray-200 rounded-xl bg-gray-50/30 select-none">
+            暂无嵌入应用授权。
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1344,14 +1410,14 @@ defineExpose({ fetchMetrics })
           <!-- 切换类型 -->
           <div>
             <label class="block text-xs font-semibold text-gray-400 mb-1.5 select-none">成员授权类型</label>
-            <div class="grid grid-cols-2 gap-2 bg-gray-50 p-1 rounded-xl border border-gray-150">
+            <div class="grid grid-cols-3 gap-2 bg-gray-50 p-1 rounded-xl border border-gray-150">
               <button 
                 type="button"
                 @click="assignType = 'role'; selectedCandidateIds = []"
                 class="py-2 text-xs font-semibold rounded-lg transition-all"
                 :class="assignType === 'role' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-800'"
               >
-                按角色授权 (Role)
+                角色
               </button>
               <button 
                 type="button"
@@ -1359,7 +1425,15 @@ defineExpose({ fetchMetrics })
                 class="py-2 text-xs font-semibold rounded-lg transition-all"
                 :class="assignType === 'user' ? 'bg-white shadow text-emerald-600' : 'text-gray-500 hover:text-gray-800'"
               >
-                按平台成员授权 (User)
+                用户
+              </button>
+              <button
+                type="button"
+                @click="assignType = 'embed_app'; selectedCandidateIds = []"
+                class="py-2 text-xs font-semibold rounded-lg transition-all"
+                :class="assignType === 'embed_app' ? 'bg-white shadow text-sky-600' : 'text-gray-500 hover:text-gray-800'"
+              >
+                嵌入应用
               </button>
             </div>
           </div>
@@ -1375,14 +1449,14 @@ defineExpose({ fetchMetrics })
               v-model="candidateSearchQuery"
               type="search"
               class="block w-full pl-9 pr-3 py-2 border border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary sm:text-xs transition-all focus:bg-white"
-              :placeholder="assignType === 'role' ? '搜索角色名称或代码...' : '搜索用户姓名或账号...'"
+              :placeholder="assignType === 'role' ? '搜索角色名称或代码...' : (assignType === 'embed_app' ? '搜索嵌入应用名称或 app_key...' : '搜索用户姓名或账号...')"
             />
           </div>
 
           <!-- 候选人列表勾选 -->
           <div class="space-y-2">
             <label class="block text-xs font-semibold text-gray-400 select-none">
-              选择要添加的{{ assignType === 'role' ? '角色' : '用户' }} (可多选)
+              选择要添加的{{ assignType === 'role' ? '角色' : (assignType === 'embed_app' ? '嵌入应用' : '用户') }} (可多选)
             </label>
             <div class="border border-gray-150 rounded-xl max-h-[30vh] overflow-y-auto divide-y divide-gray-100">
               <!-- 候选角色 -->
@@ -1432,6 +1506,29 @@ defineExpose({ fetchMetrics })
                   所有活跃用户已完成分配授权。
                 </div>
               </template>
+
+              <template v-if="assignType === 'embed_app'">
+                <div
+                  v-for="app in availableEmbedApps"
+                  :key="app.id"
+                  class="flex items-center gap-3 p-3 hover:bg-gray-50 transition-all select-none cursor-pointer"
+                  @click="toggleCandidateSelection(app.id)"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="selectedCandidateIds.includes(app.id)"
+                    class="rounded text-sky-600 border-gray-300 focus:ring-sky-500"
+                    @click.stop="toggleCandidateSelection(app.id)"
+                  />
+                  <div class="flex flex-col">
+                    <span class="text-sm font-semibold text-gray-800">{{ app.name }}</span>
+                    <span class="text-[10px] text-gray-400 font-mono mt-0.5">{{ app.app_key }}</span>
+                  </div>
+                </div>
+                <div v-if="!availableEmbedApps.length" class="text-xs text-gray-400 text-center py-8 select-none">
+                  没有可分配的嵌入应用。
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -1448,7 +1545,7 @@ defineExpose({ fetchMetrics })
           <button 
             type="button" 
             class="px-4 py-2 rounded-xl text-xs font-semibold text-white transition-all shadow-md disabled:opacity-50"
-            :class="assignType === 'role' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/10' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/10'"
+            :class="assignType === 'role' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/10' : (assignType === 'embed_app' ? 'bg-sky-600 hover:bg-sky-700 shadow-sky-500/10' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/10')"
             :disabled="!selectedCandidateIds.length || savingPerms"
             @click="submitPermissions"
           >

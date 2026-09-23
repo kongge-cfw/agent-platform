@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import get_redis
 from app.models.user import User
-from app.schemas.embed_app import parse_shortcut_prompts
+from app.schemas.embed_app import parse_chat_settings, parse_shortcut_prompts
 from app.services.embed_app_service import (
     dump_policy_session_fields,
     operator_has_embed_role,
@@ -538,6 +538,7 @@ class EmbedService:
             "lock_entry_agent": ticket_data.get("lock_entry_agent", ""),
             "default_entry_agent_id": ticket_data.get("default_entry_agent_id", ""),
             "shortcut_prompts": ticket_data.get("shortcut_prompts") or "[]",
+            "chat_settings": ticket_data.get("chat_settings") or "{}",
         }
         await redis.hset(cache_key, mapping=user_session_data)
         await redis.expire(cache_key, SESSION_TOKEN_TTL_SECONDS)
@@ -563,6 +564,7 @@ class EmbedService:
             "session_owner": ticket_data.get("session_owner") or None,
             "app_key": ticket_data.get("embed_app_key") or None,
             "shortcut_prompts": parse_shortcut_prompts(ticket_data.get("shortcut_prompts")),
+            "chat_settings": parse_chat_settings(ticket_data.get("chat_settings")) if ticket_data.get("embed_app_key") else None,
             "default_entry_agent_id": str(ticket_data.get("default_entry_agent_id") or "").strip() or None,
             "watermark": {
                 "enabled": await ConfigService.get("embedchat_watermark_enabled") == "true",

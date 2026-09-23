@@ -14,7 +14,8 @@ import type { WorkbenchPersonalResource } from '@/types/workbench';
 import { isEmbeddedInIframe } from '@/utils/embedHost';
 
 const { branding } = useBranding();
-const hidePersonalResources = isEmbeddedInIframe();
+const embeddedInIframe = isEmbeddedInIframe();
+const hidePersonalResources = embeddedInIframe;
 
 const props = defineProps<{
   welcomeMessage: string;
@@ -160,7 +161,7 @@ const recommendedPrompts = computed(() => {
     </div>
 
     <!-- Version-configured cards replace fixed capabilities only when enabled. -->
-    <Transition name="welcome-card-set" mode="out-in">
+    <Transition v-if="!embeddedInIframe" name="welcome-card-set" mode="out-in">
       <div :key="welcomeCardSetKey" class="w-full max-w-3xl mb-12">
         <div class="mb-3 px-1">
           <p class="text-[10px] font-black text-gray-300 uppercase tracking-widest">快捷入口</p>

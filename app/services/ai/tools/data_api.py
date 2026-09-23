@@ -14,6 +14,24 @@ MAX_LOCAL_RESULT_BYTES = 2 * 1024 * 1024
 # 明细导出专用行数上限：远大于 AI 分析抽样上限，但仍设硬顶防全表爆炸。
 MAX_EXPORT_SQL_ROWS = 100000
 
+
+async def _postgresql_partition_scope_error(data_source: str, sql: str) -> Optional[str]:
+    """分区父表没有分区字段条件时拒绝执行，避免一次打开全部分区。"""
+    try:
+        from app.services.data_adapter.factory import get_adapter
+        from app.services.data_adapter.postgresql import PostgreSQLAdapter
+
+        adapter = await get_adapter(data_source)
+        if not isinstance(adapter, PostgreSQLAdapter):
+            return None
+        message = await adapter.partition_scope_error(sql)
+    except Exception as exc:
+        logger.warning("[Agent SQL] 分区范围检查跳过: %s", exc)
+        return None
+    if not message:
+        return None
+    return f"[TOOL_ERROR] {message}\n\n[Executed SQL]:\n{sql}"
+
 import sqlglot
 from sqlglot.errors import ParseError
 from sqlglot import exp
@@ -201,6 +219,9 @@ async def call_external_sql_api(
         sql = normalize_postgresql_sql(sql)
         if sql != original_sql:
             logger.info("[Agent SQL] 已在统一执行入口转换 PostgreSQL 指标 SQL 方言")
+        partition_error = await _postgresql_partition_scope_error(data_source, sql)
+        if partition_error:
+            return partition_error
 
     # 1. 分流执行判定
     # 优先检测系统环境变量 SQL_EXECUTION_MODE (强制控制)
@@ -580,6 +601,11 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
         user_id = ctx.user_id if ctx else None
         is_admin = ctx.is_admin if ctx else False
         api_key = ctx.api_key if ctx else None
+        from app.services.embed_identity import embed_catalog_app_id
+
+        embed_app_id = embed_catalog_app_id((ctx.user_dimensions if ctx else None) or None)
+        if embed_app_id is not None:
+            is_admin = False
         authorized_dataset_ids = _normalize_metadata_dataset_ids(metadata_dataset_ids)
 
         trace_buffer = ctx.trace_buffer if ctx else None
@@ -600,6 +626,7 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
                         is_admin=is_admin,
                         api_key=api_key,
                         authorized_dataset_ids=authorized_dataset_ids,
+                        embed_app_id=embed_app_id,
                     )
                     span.set_output(res)
                     return res
@@ -612,6 +639,7 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
                     is_admin=is_admin,
                     api_key=api_key,
                     authorized_dataset_ids=authorized_dataset_ids,
+                    embed_app_id=embed_app_id,
                 )
 
     except Exception as e:
@@ -622,6 +650,8 @@ async def get_dataset_schema(keywords: Optional[str] = None, metadata_dataset_id
 async def execute_sql_query(sql: str, data_source: str, dataset_name: str) -> str:
     """
     针对指定的数据源执行只读的 SQL SELECT 查询，并在指定的数据集权限范围内进行校验。
+    PostgreSQL 按日、按月分区的表必须在 WHERE 中传入闭合起止时间。
+    按日最多跨 31 个分区，按月最多跨 3 个分区，否则会拒绝执行。
 
     Args:
         sql: 要执行的 SQL SELECT 查询语句。

@@ -1,3 +1,5 @@
+import asyncio
+import copy
 import logging
 import json
 import re
@@ -13,7 +15,6 @@ from app.core.orm import AsyncSessionLocal
 from app.models.db_connection import MetaDbConnectionConfig, DbProfileTask, DbTableProfile
 from app.services.db_connection_service import DbConnectionService
 from app.services.db_import_service import DBImportService, DbDdlSession
-from app.services.ai.config import AgentConfigProvider
 from app.services.ai.runtime.agentscope.compat import SystemMessage, HumanMessage
 from app.schemas.db_connection import (
     DbTableProfileSummaryResponse,
@@ -35,6 +36,7 @@ TASK_STATUS_CANCELLED = 4
 STALE_TASK_MINUTES = 10
 MAX_DDL_CHARS = 60000
 MAX_SAMPLE_FIELD_CHARS = 150
+PROFILE_CONCURRENCY = 4
 DEFAULT_PROFILE_PAGE_SIZE = 200
 MAX_PROFILE_PAGE_SIZE = 200
 
@@ -636,7 +638,7 @@ class DbProfileService:
 
     @staticmethod
     async def run_profiling_loop(config_id: int):
-        """后台串行分析摸排主循环 (以单线程逐表异步执行)"""
+        """后台摸排主循环。相同列定义只问一次模型，最多 4 张表同时进行。"""
         logger.info("[DbProfiling] Starting background profiling task for connection_id: %s", config_id)
         processed_count = 0
         total_tables = 0
@@ -686,115 +688,138 @@ class DbProfileService:
             }
             db_type = config.db_type.strip().lower()
 
+            from app.core.llm.client import get_llm_async
             from app.services.data_adapter.factory import get_adapter
 
             adapter = await get_adapter(config.name)
+            llm = await get_llm_async(
+                streaming=False,
+                temperature=0,
+                thinking_enable=False,
+                ignore_session_reasoning_overrides=True,
+            )
+            if llm is None:
+                raise RuntimeError("摸排模型初始化失败")
 
-            async with DbDdlSession(db_type, db_config) as ddl_session:
-                for idx, table in enumerate(pending_tables):
-                    if await DbProfileService._should_stop_profiling(config_id):
-                        logger.info(
-                            "[DbProfiling] Stop signal received at table %s/%s",
-                            idx + 1,
-                            len(pending_tables),
+            ddl_lock = asyncio.Lock()
+            cache_lock = asyncio.Lock()
+            progress_lock = asyncio.Lock()
+            schema_cache: Dict[str, Dict[str, Any]] = {}
+            schema_inflight: Dict[str, asyncio.Future] = {}
+            progress = {"finished": processed_count, "stop": False}
+            semaphore = asyncio.Semaphore(PROFILE_CONCURRENCY)
+            is_postgresql = db_type in DBImportService._postgresql_type_aliases()
+
+            async def _profile_one(table: Dict[str, Any]) -> None:
+                if progress["stop"] or await DbProfileService._should_stop_profiling(config_id):
+                    progress["stop"] = True
+                    return
+
+                table_name = table["table_name"]
+                table_type = table.get("table_type", "table")
+                logger.info("[DbProfiling] Profiling table: %s", table_name)
+                await DbProfileService._mark_table_running(config_id, table_name, None)
+
+                try:
+                    async with ddl_lock:
+                        ddl = await ddl_session.get_table_ddl(table_name, table_type)
+                    ddl = DbProfileService._truncate_ddl(ddl)
+                    sample_data_json = await DbProfileService._fetch_sample_data(
+                        adapter, db_type, table_name
+                    )
+                    signature, compact_schema = DbProfileService._column_signature(ddl)
+                    cache_key = signature or f"table:{table_name}"
+                    ai_res = await DbProfileService._llm_result_for_schema(
+                        llm,
+                        cache_key,
+                        compact_schema or ddl,
+                        sample_data_json,
+                        schema_cache,
+                        schema_inflight,
+                        cache_lock,
+                    )
+                    ai_res = copy.deepcopy(ai_res)
+                    if is_postgresql:
+                        await DbProfileService._annotate_postgresql_partition(
+                            adapter, table_name, ai_res
                         )
-                        break
 
-                    table_name = table["table_name"]
-                    table_type = table.get("table_type", "table")
-                    current_processed = processed_count + idx
+                    llm_score, llm_temp, llm_reason, is_ignored = (
+                        DbProfileService._post_process_scores(
+                            ai_res, sample_data_json, table_name
+                        )
+                    )
+                    async with progress_lock:
+                        progress["finished"] += 1
+                        finished = progress["finished"]
+
+                    async with AsyncSessionLocal() as db:
+                        await db.execute(
+                            update(DbTableProfile)
+                            .where(
+                                DbTableProfile.connection_id == config_id,
+                                DbTableProfile.table_name == table_name,
+                            )
+                            .values(
+                                ddl=ddl,
+                                sample_data=sample_data_json,
+                                ai_term=ai_res.get("ai_term"),
+                                ai_description=ai_res.get("ai_description"),
+                                ai_tags=ai_res.get("ai_tags"),
+                                columns_profile=ai_res.get("columns"),
+                                confidence_score=llm_score,
+                                is_temporary=llm_temp,
+                                is_ignored=is_ignored,
+                                confidence_reason=llm_reason.strip("; "),
+                                status=2,
+                                error_message=None,
+                            )
+                        )
+                        await db.execute(
+                            update(DbProfileTask)
+                            .where(DbProfileTask.connection_id == config_id)
+                            .values(
+                                processed_tables=finished,
+                                current_table=table_name,
+                            )
+                        )
+                        await db.commit()
                     logger.info(
-                        "[DbProfiling] [%s/%s] Profiling table: %s",
-                        current_processed + 1,
+                        "[DbProfiling] [%s/%s] Finished table: %s",
+                        finished,
                         total_tables,
                         table_name,
                     )
-
-                    await DbProfileService._mark_table_running(
-                        config_id, table_name, current_processed
-                    )
-
-                    if await DbProfileService._should_stop_profiling(config_id):
-                        await DbProfileService._reset_table_to_pending(config_id, table_name)
-                        break
-
-                    try:
-                        ddl = await ddl_session.get_table_ddl(table_name, table_type)
-                        ddl = DbProfileService._truncate_ddl(ddl)
-                        sample_data_json = await DbProfileService._fetch_sample_data(
-                            adapter, db_type, table_name
+                except Exception as ex_item:
+                    logger.exception("[DbProfiling] Table %s profiling failed", table_name)
+                    async with progress_lock:
+                        progress["finished"] += 1
+                        finished = progress["finished"]
+                    async with AsyncSessionLocal() as db:
+                        await db.execute(
+                            update(DbTableProfile)
+                            .where(
+                                DbTableProfile.connection_id == config_id,
+                                DbTableProfile.table_name == table_name,
+                            )
+                            .values(status=3, error_message=str(ex_item))
                         )
-
-                        if await DbProfileService._should_stop_profiling(config_id):
-                            await DbProfileService._reset_table_to_pending(config_id, table_name)
-                            break
-
-                        ai_res = await DbProfileService._analyze_table_with_llm(
-                            ddl, sample_data_json
-                        )
-
-                        if await DbProfileService._should_stop_profiling(config_id):
-                            await DbProfileService._reset_table_to_pending(config_id, table_name)
-                            break
-
-                        llm_score, llm_temp, llm_reason, is_ignored = (
-                            DbProfileService._post_process_scores(
-                                ai_res, sample_data_json, table_name
+                        await db.execute(
+                            update(DbProfileTask)
+                            .where(DbProfileTask.connection_id == config_id)
+                            .values(
+                                processed_tables=finished,
+                                current_table=table_name,
                             )
                         )
+                        await db.commit()
 
-                        async with AsyncSessionLocal() as db:
-                            await db.execute(
-                                update(DbTableProfile)
-                                .where(
-                                    DbTableProfile.connection_id == config_id,
-                                    DbTableProfile.table_name == table_name,
-                                )
-                                .values(
-                                    ddl=ddl,
-                                    sample_data=sample_data_json,
-                                    ai_term=ai_res.get("ai_term"),
-                                    ai_description=ai_res.get("ai_description"),
-                                    ai_tags=ai_res.get("ai_tags"),
-                                    columns_profile=ai_res.get("columns"),
-                                    confidence_score=llm_score,
-                                    is_temporary=llm_temp,
-                                    is_ignored=is_ignored,
-                                    confidence_reason=llm_reason.strip("; "),
-                                    status=2,
-                                    error_message=None,
-                                )
-                            )
-                            await db.execute(
-                                update(DbProfileTask)
-                                .where(DbProfileTask.connection_id == config_id)
-                                .values(
-                                    processed_tables=current_processed + 1,
-                                    current_table=table_name,
-                                )
-                            )
-                            await db.commit()
+            async def _profile_limited(table: Dict[str, Any]) -> None:
+                async with semaphore:
+                    await _profile_one(table)
 
-                    except Exception as ex_item:
-                        logger.exception("[DbProfiling] Table %s profiling failed", table_name)
-                        async with AsyncSessionLocal() as db:
-                            await db.execute(
-                                update(DbTableProfile)
-                                .where(
-                                    DbTableProfile.connection_id == config_id,
-                                    DbTableProfile.table_name == table_name,
-                                )
-                                .values(status=3, error_message=str(ex_item))
-                            )
-                            await db.execute(
-                                update(DbProfileTask)
-                                .where(DbProfileTask.connection_id == config_id)
-                                .values(
-                                    processed_tables=current_processed + 1,
-                                    current_table=table_name,
-                                )
-                            )
-                            await db.commit()
+            async with DbDdlSession(db_type, db_config) as ddl_session:
+                await asyncio.gather(*[_profile_limited(table) for table in pending_tables])
 
             async with AsyncSessionLocal() as db:
                 task = await DbProfileService.get_task_status(db, config_id)
@@ -857,12 +882,19 @@ class DbProfileService:
             return not task or task.status != TASK_STATUS_RUNNING
 
     @staticmethod
-    async def _mark_table_running(config_id: int, table_name: str, processed_tables: int):
+    async def _mark_table_running(
+        config_id: int,
+        table_name: str,
+        processed_tables: Optional[int],
+    ):
+        task_values: Dict[str, Any] = {"current_table": table_name}
+        if processed_tables is not None:
+            task_values["processed_tables"] = processed_tables
         async with AsyncSessionLocal() as db:
             await db.execute(
                 update(DbProfileTask)
                 .where(DbProfileTask.connection_id == config_id)
-                .values(processed_tables=processed_tables, current_table=table_name)
+                .values(**task_values)
             )
             await db.execute(
                 update(DbTableProfile)
@@ -871,19 +903,6 @@ class DbProfileService:
                     DbTableProfile.table_name == table_name,
                 )
                 .values(status=1)
-            )
-            await db.commit()
-
-    @staticmethod
-    async def _reset_table_to_pending(config_id: int, table_name: str):
-        async with AsyncSessionLocal() as db:
-            await db.execute(
-                update(DbTableProfile)
-                .where(
-                    DbTableProfile.connection_id == config_id,
-                    DbTableProfile.table_name == table_name,
-                )
-                .values(status=0, error_message=None)
             )
             await db.commit()
 
@@ -923,6 +942,38 @@ class DbProfileService:
         return text
 
     @staticmethod
+    def _quote_postgresql_name(table_name: str) -> str:
+        parts = [p.strip().strip('"').strip("`") for p in table_name.split(".")]
+        return ".".join(f'"{p.replace(chr(34), chr(34) * 2)}"' for p in parts if p)
+
+    @staticmethod
+    async def _postgresql_sample_sql(adapter, table_name: str) -> str:
+        """分区表只抽样一个叶子分区，避免 LIMIT 仍去打开全部分区。"""
+        from app.services.data_adapter.postgresql import POSTGRESQL_LEAF_PARTITION_SQL
+
+        qualified = DbProfileService._quote_postgresql_name(table_name)
+        parts = [p.strip().strip('"').strip("`") for p in table_name.split(".") if p.strip()]
+        if len(parts) >= 2:
+            schema_name, physical_name = parts[-2], parts[-1]
+        else:
+            schema_name, physical_name = "public", parts[0] if parts else ""
+        if not physical_name:
+            return f"SELECT * FROM {qualified} LIMIT 3"
+        try:
+            sample_res = await adapter.execute_sql(
+                POSTGRESQL_LEAF_PARTITION_SQL,
+                (schema_name, physical_name),
+            )
+            rows = DbProfileService._extract_result_rows(sample_res)
+            if rows and rows[0] and rows[0][0] and rows[0][1]:
+                leaf = DbProfileService._quote_postgresql_name(f"{rows[0][0]}.{rows[0][1]}")
+                logger.info("[DbProfiling] Sample partitioned table %s from leaf %s", table_name, leaf)
+                return f"SELECT * FROM {leaf} LIMIT 3"
+        except Exception as exc:
+            logger.warning("[DbProfiling] 定位分区叶子失败 %s: %s", table_name, exc)
+        return f"SELECT * FROM {qualified} LIMIT 3"
+
+    @staticmethod
     async def _fetch_sample_data(adapter, db_type: str, table_name: str) -> str:
         quote = "`" if db_type in ("mysql", "clickhouse") else '"'
         if db_type == "oracle":
@@ -930,9 +981,7 @@ class DbProfileService:
         elif db_type in ("sqlserver", "mssql") or db_type in DBImportService._sqlserver_type_aliases():
             query_sql = f"SELECT TOP 3 * FROM {quote}{table_name}{quote}"
         elif db_type in DBImportService._postgresql_type_aliases():
-            parts = [p.strip().strip('"').strip("`") for p in table_name.split(".")]
-            qualified = ".".join(f'"{p.replace(chr(34), chr(34) * 2)}"' for p in parts if p)
-            query_sql = f"SELECT * FROM {qualified} LIMIT 3"
+            query_sql = await DbProfileService._postgresql_sample_sql(adapter, table_name)
         else:
             query_sql = f"SELECT * FROM {quote}{table_name}{quote} LIMIT 3"
 
@@ -958,6 +1007,61 @@ class DbProfileService:
         if not ddl or len(ddl) <= MAX_DDL_CHARS:
             return ddl or ""
         return ddl[:MAX_DDL_CHARS] + "\n-- ... DDL truncated ..."
+
+    @staticmethod
+    def _column_signature(ddl: str) -> Tuple[str, str]:
+        """列名加类型完全一致时返回同一签名。解析失败时签名为空，避免误复用。"""
+        types = DbProfileService._parse_column_types_from_ddl(ddl)
+        if not types:
+            return "", ""
+        lines = [f"{name} {typ}" for name, typ in types.items()]
+        compact = "\n".join(lines)
+        return compact, compact
+
+    @staticmethod
+    async def _llm_result_for_schema(
+        llm: Any,
+        cache_key: str,
+        schema_text: str,
+        sample_data_json: str,
+        schema_cache: Dict[str, Dict[str, Any]],
+        schema_inflight: Dict[str, asyncio.Future],
+        cache_lock: asyncio.Lock,
+    ) -> Dict[str, Any]:
+        """同一套字段只发起一次模型调用，其余表等待并复用结果。"""
+        owner = False
+        future: Optional[asyncio.Future] = None
+        async with cache_lock:
+            cached = schema_cache.get(cache_key)
+            if cached is not None:
+                logger.info("[DbProfiling] Reuse schema profile: %s", cache_key.split("\n", 1)[0])
+                return cached
+            future = schema_inflight.get(cache_key)
+            if future is None:
+                future = asyncio.get_running_loop().create_future()
+                schema_inflight[cache_key] = future
+                owner = True
+        if not owner:
+            return await future
+
+        try:
+            ai_res = await DbProfileService._analyze_table_with_llm(
+                llm, schema_text, sample_data_json
+            )
+            stored = copy.deepcopy(ai_res)
+            async with cache_lock:
+                schema_cache[cache_key] = stored
+                schema_inflight.pop(cache_key, None)
+            if not future.done():
+                future.set_result(stored)
+            return stored
+        except Exception as exc:
+            async with cache_lock:
+                schema_inflight.pop(cache_key, None)
+            if future is not None and not future.done():
+                future.set_exception(exc)
+                future.exception()
+            raise
 
     @staticmethod
     def _post_process_scores(
@@ -998,21 +1102,24 @@ class DbProfileService:
         return llm_score, llm_temp, llm_reason, is_ignored
 
     @staticmethod
-    async def _analyze_table_with_llm(ddl: str, sample_data_json: str) -> Dict[str, Any]:
-        """直接调用底层大模型解析元数据"""
-        llm = await AgentConfigProvider.get_configured_llm(streaming=False)
-
+    async def _analyze_table_with_llm(
+        llm: Any,
+        schema_text: str,
+        sample_data_json: str,
+    ) -> Dict[str, Any]:
+        """用已经创建好的模型解析一张表的列定义。"""
         system_prompt = (
-            "你是一个精通数据资产治理的数据库专家，擅长从建表语句和样例数据中提炼业务元数据含义。\n"
-            "请根据提供的【建表 DDL】和【真实样例数据】，推测该表的中文业务术语（备注名）、表的一句话用途描述、表的分类标签，以及每个字段的中文术语和字段业务描述。\n"
-            "同时，你需要深度评估该表对于业务分析的“置信度（即数据分析价值与可信度得分）”，以及它是否属于临时/低价值/中间关联表。\n\n"
+            "你是一个精通数据资产治理的数据库专家，擅长从列定义和样例数据中提炼业务元数据含义。\n"
+            "请根据【列名和类型】和【真实样例数据】，推测该表的中文业务术语、一句话用途、分类标签，以及每个字段的中文术语和一行业务描述。\n"
+            "同时评估该表对于业务分析的置信度，以及它是否属于临时/低价值/中间关联表。\n\n"
             "【置信度与临时表评估标准】\n"
-            "1. 若建表语句和样例数据表明该表主要为关联ID中间映射（例如只有各种id字段而无具体业务度量或名称维度）、临时缓存/计算中间表、系统备份表（如表名中含有 tmp, temp, bak, test 等），或样例内容缺乏真实语义关联，应标记 is_temporary 为 true，置信度评分 confidence_score 应低于 60 分。\n"
-            "2. 若表结构包含有意义的业务属性、主数据维度或事实度量，有实际分析价值，应标记 is_temporary 为 false，置信度评分应为 80-100 分。\n"
-            "3. 需给出客观、具体的扣分或评分理由（confidence_reason）。\n\n"
+            "1. 若列定义和样例数据表明该表主要为关联ID中间映射、临时缓存、系统备份，或样例缺乏真实语义，应标记 is_temporary 为 true，置信度评分低于 60 分。\n"
+            "2. 若包含有意义的业务属性、主数据维度或事实度量，应标记 is_temporary 为 false，置信度评分应为 80-100 分。\n"
+            "3. 需给出客观、具体的评分理由（confidence_reason）。\n\n"
             "【重要约束】\n"
             "1. 必须只返回一个 JSON 对象，不要 Markdown，不要多余解释。\n"
-            "2. 返回的 JSON 必须符合以下 Schema 结构：\n"
+            "2. ai_description 不超过 120 字，每个字段 desc 不超过 40 字。\n"
+            "3. 返回的 JSON 必须符合以下 Schema 结构：\n"
             "{\n"
             '  "ai_term": "表的中文业务备注名，不超过100字，如: 机房能耗天报表",\n'
             '  "ai_description": "该表真实的业务用途与功能描述，不超过500字",\n'
@@ -1030,7 +1137,7 @@ class DbProfileService:
             "}\n"
         )
 
-        user_prompt = f"【建表 DDL】:\n{ddl}\n\n【样例数据】:\n{sample_data_json}"
+        user_prompt = f"【列名和类型】:\n{schema_text}\n\n【样例数据】:\n{sample_data_json}"
 
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
@@ -1039,6 +1146,61 @@ class DbProfileService:
 
         raw_text = getattr(response, "content", "") or str(response)
         return DbProfileService._extract_json(raw_text)
+
+    @staticmethod
+    async def _annotate_postgresql_partition(adapter, table_name: str, ai_res: Dict[str, Any]) -> None:
+        """把分区键写进表画像，后续问数能看到必须按该字段限定范围。"""
+        if not isinstance(ai_res, dict):
+            return
+        parts = [p.strip().strip('"').strip("`") for p in str(table_name or "").split(".") if p.strip()]
+        if len(parts) >= 2:
+            physical_name = parts[-1]
+        elif parts:
+            physical_name = parts[0]
+        else:
+            return
+        try:
+            partition_keys = await adapter.lookup_partition_keys([physical_name])
+        except Exception as exc:
+            logger.warning("[DbProfiling] 读取分区键失败 %s: %s", table_name, exc)
+            return
+        columns = None
+        if len(parts) >= 2:
+            columns = partition_keys.get((parts[-2].lower(), physical_name.lower()))
+        if not columns:
+            columns = partition_keys.get(("public", physical_name.lower()))
+        if not columns:
+            matched = [
+                cols for (schema_name, name), cols in partition_keys.items()
+                if name == physical_name.lower()
+            ]
+            columns = matched[0] if matched else []
+        if not columns:
+            return
+        shown = "、".join(columns)
+        note = (
+            f"该表按 {shown} 分区。查询必须在 WHERE 中传入闭合时间范围。"
+            "按日分区最多跨 31 个分区，按月分区最多跨 3 个分区，避免扫描全部分区。"
+        )
+        description = str(ai_res.get("ai_description") or "").strip()
+        if "分区" not in description:
+            ai_res["ai_description"] = f"{description} {note}".strip()
+        key_names = {name.lower() for name in columns}
+        profile_columns = ai_res.get("columns")
+        if not isinstance(profile_columns, list):
+            return
+        for column in profile_columns:
+            if not isinstance(column, dict):
+                continue
+            if str(column.get("name") or "").strip().lower() not in key_names:
+                continue
+            column_desc = str(column.get("desc") or "").strip()
+            if "分区键" in column_desc:
+                continue
+            column["desc"] = (
+                f"{column_desc} 分区键。按日或按月分区时必须传入闭合起止时间："
+                "按日最多跨 31 个分区，按月最多跨 3 个分区，不要套函数。"
+            ).strip()
 
     @staticmethod
     def _extract_json(raw: str) -> Dict[str, Any]:

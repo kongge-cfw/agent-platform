@@ -489,6 +489,13 @@ async def execute_sql_query_core(
         if column_err:
             return column_err
 
+        if embed_session:
+            app_id = str(ud.get("embed_app_id") or "").strip()
+            if ds is None:
+                return "[Permission Denied] 嵌入会话必须指定已授权的数据集。"
+            if not await MetadataService.embed_app_can_access_dataset(session, app_id, int(ds.id)):
+                return "[Permission Denied] 当前嵌入应用没有该数据集的访问权限。"
+
         if ds and refs:
             scope_err = await enforce_dataset_table_scope(
                 session,
@@ -500,17 +507,18 @@ async def execute_sql_query_core(
             if scope_err:
                 return scope_err
 
-        perm_err = await enforce_physical_table_permissions(
-            session,
-            refs=refs,
-            dialect=dialect,
-            user_id_eff=table_acl_user_id,
-            is_admin_eff=is_admin_eff,
-            user_identity_label=user_identity_label,
-            binding=binding,
-        )
-        if perm_err:
-            return perm_err
+        if not embed_session:
+            perm_err = await enforce_physical_table_permissions(
+                session,
+                refs=refs,
+                dialect=dialect,
+                user_id_eff=table_acl_user_id,
+                is_admin_eff=is_admin_eff,
+                user_identity_label=user_identity_label,
+                binding=binding,
+            )
+            if perm_err:
+                return perm_err
     elif binding is not None:
         column_err = validate_sql_columns_with_binding(sql, binding)
         if column_err:

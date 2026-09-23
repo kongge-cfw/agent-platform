@@ -19,6 +19,7 @@ from app.schemas.embed_app import (
     SysEmbedAppResponse,
     SysEmbedAppUpdate,
     dump_json_list,
+    dump_chat_settings,
     dump_shortcut_prompts,
 )
 from app.services.embed_app_service import (
@@ -38,6 +39,8 @@ def _dump_lists(data: dict[str, Any]) -> dict[str, Any]:
             payload[key] = dump_json_list(payload[key])
     if "shortcut_prompts" in payload and payload["shortcut_prompts"] is not None:
         payload["shortcut_prompts"] = dump_shortcut_prompts(payload["shortcut_prompts"])
+    if "chat_settings" in payload and payload["chat_settings"] is not None:
+        payload["chat_settings"] = dump_chat_settings(payload["chat_settings"])
     return payload
 
 

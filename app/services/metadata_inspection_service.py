@@ -45,6 +45,51 @@ _BIN_PREFIXES = ("blob", "binary", "bytea", "varbinary")
 _BIN_EXACT = {"image", "raw", "tinyblob", "mediumblob", "longblob"}
 
 
+def _split_registered_table_name(name: str) -> tuple[str, str]:
+    """把表名拆成 schema 与表名。不带点号时 schema 为空。"""
+    text = str(name or "").lower().strip().strip('"').strip("`")
+    if not text or "." not in text:
+        return "", text
+    schema, table = text.split(".", 1)
+    return schema.strip(), table.strip()
+
+
+def _index_physical_tables(physical_names: Set[str]) -> Dict[str, Set[str]]:
+    """表名 → 出现过的 schema。物理清单不带 schema 时，schema 记为空串。"""
+    index: Dict[str, Set[str]] = {}
+    for name in physical_names:
+        schema, table = _split_registered_table_name(name)
+        if table:
+            index.setdefault(table, set()).add(schema)
+    return index
+
+
+def _registered_table_exists(registered: str, physical_names: Set[str]) -> bool:
+    """登记名与物理清单是否指同一张表。
+
+    不带 schema 的登记名匹配物理清单的表名部分。多个 schema 都有同名表时认 public；
+    只有一张同名表时也算存在。两边都带 schema 时必须 schema 相同。
+    """
+    registered_name = str(registered or "").lower().strip()
+    if not registered_name:
+        return False
+    if registered_name in physical_names:
+        return True
+    schema, table = _split_registered_table_name(registered_name)
+    if not table:
+        return False
+    schemas = _index_physical_tables(physical_names).get(table) or set()
+    if not schemas:
+        return False
+    if schema:
+        if schema in schemas:
+            return True
+        return schema == "public" and "" in schemas
+    if "public" in schemas or "" in schemas:
+        return True
+    return len(schemas) == 1
+
+
 def _normalize_col_type(t: str) -> str:
     """提取列类型大类，剔除 (长度)、unsigned、Nullable 等修饰符，实现跨方言鲁棒比对。
 
@@ -121,6 +166,12 @@ class MetadataInspectionService:
                 message=f"{prefix}数据集【{dataset.name}】下暂无纳管的表，跳过扫描。",
                 progress=progress_base + progress_range,
             )
+            await MetadataDriftService.retain_latest_inspection_alerts(
+                db,
+                dataset_id=dataset.id,
+                keep_keys=set(),
+                unverified_tables=set(),
+            )
             return {
                 "tables_scanned": 0,
                 "columns_scanned": 0,
@@ -139,6 +190,32 @@ class MetadataInspectionService:
         total_missing_comments = 0
         unreadable_tables_count = 0
         diff_summary: List[Dict[str, Any]] = []
+        keep_keys: set[tuple[str, str, str]] = set()
+        unverified_tables: set[str] = set()
+
+        async def _record_finding(
+            *,
+            table_name: str,
+            column_name: str,
+            drift_type: str,
+            table_id: Optional[int] = None,
+            error_sample: str,
+        ) -> None:
+            keep_keys.add((
+                str(table_name).lower().strip(),
+                str(column_name).lower().strip(),
+                drift_type,
+            ))
+            await MetadataDriftService.record_drift_alert_core(
+                db,
+                dataset_id=dataset.id,
+                table_id=table_id,
+                table_name=table_name,
+                column_name=column_name,
+                drift_type=drift_type,
+                source="manual_inspection",
+                error_sample=error_sample,
+            )
 
         # 优先批量获取物理库现存表集合，实现表级缺失快速探测
         phys_tables_set: Optional[Set[str]] = None
@@ -162,21 +239,19 @@ class MetadataInspectionService:
             pct = progress_base + int((idx / total_tables) * progress_range)
 
             # 1. 检查物理表是否在物理库中已不存在（整表缺失）
-            if phys_tables_set is not None and phys_name.lower().strip() not in phys_tables_set:
+            # 登记名经常不带 schema，物理清单是 public.表名，按表名部分对齐。
+            if phys_tables_set is not None and not _registered_table_exists(phys_name, phys_tables_set):
                 total_missing_tables += 1
                 await emit(
                     progress=pct,
                     stage="scanning",
                     message=f"{prefix}[表 {idx}/{total_tables}] ⚠️ 发现物理表已不存在: {phys_name}（物理数据库中已删除此表）",
                 )
-                await MetadataDriftService.record_drift_alert_core(
-                    db,
-                    dataset_id=dataset.id,
+                await _record_finding(
                     table_id=table.id,
                     table_name=phys_name,
                     column_name="*",
                     drift_type="table_missing_in_db",
-                    source="manual_inspection",
                     error_sample=f"巡检发现：物理数据库中已无此数据表 {phys_name}（整表缺失）",
                 )
                 diff_summary.append({
@@ -187,6 +262,12 @@ class MetadataInspectionService:
                     "type_mismatches": [],
                 })
                 continue
+
+            await MetadataDriftService.close_false_table_missing_alerts(
+                db,
+                dataset_id=dataset.id,
+                table_name=phys_name,
+            )
 
             await emit(
                 progress=pct,
@@ -206,14 +287,11 @@ class MetadataInspectionService:
                         stage="scanning",
                         message=f"{prefix}[表 {idx}/{total_tables}] ⚠️ 发现物理表已不存在: {phys_name}（物理数据库中已删除此表）",
                     )
-                    await MetadataDriftService.record_drift_alert_core(
-                        db,
-                        dataset_id=dataset.id,
+                    await _record_finding(
                         table_id=table.id,
                         table_name=phys_name,
                         column_name="*",
                         drift_type="table_missing_in_db",
-                        source="manual_inspection",
                         error_sample=f"巡检发现：读取物理列报错，表不存在: {str(ex)[:150]}",
                     )
                     diff_summary.append({
@@ -227,6 +305,7 @@ class MetadataInspectionService:
 
                 # 物理列读取失败：该表无法参与比对，必须计数以免被当成「结构一致」而给出满分
                 unreadable_tables_count += 1
+                unverified_tables.add(str(phys_name).lower().strip())
                 logger.warning(f"[Schema Inspection] 表 {phys_name} 读取物理列失败: {ex}")
                 await emit(
                     progress=pct,
@@ -286,13 +365,10 @@ class MetadataInspectionService:
                             stage="scanning",
                             message=f"{prefix}[表 {idx}/{total_tables}] ⚠️ 发现物理缺失字段: {phys_name}.{col}（物理库已删除）",
                         )
-                        await MetadataDriftService.record_drift_alert_core(
-                            db,
-                            dataset_id=dataset.id,
+                        await _record_finding(
                             table_name=phys_name,
                             column_name=col,
                             drift_type="missing_in_db",
-                            source="manual_inspection",
                             error_sample=f"巡检发现：物理表 {phys_name} 中已无此字段",
                         )
 
@@ -306,13 +382,10 @@ class MetadataInspectionService:
                             stage="scanning",
                             message=f"{prefix}[表 {idx}/{total_tables}] ℹ️ 发现物理新增字段: {phys_name}.{col} (类型: {col_type})",
                         )
-                        await MetadataDriftService.record_drift_alert_core(
-                            db,
-                            dataset_id=dataset.id,
+                        await _record_finding(
                             table_name=phys_name,
                             column_name=col,
                             drift_type="new_in_db",
-                            source="manual_inspection",
                             error_sample=f"巡检发现：物理表新增列，类型 {col_type}",
                         )
 
@@ -328,13 +401,10 @@ class MetadataInspectionService:
                             stage="scanning",
                             message=f"{prefix}[表 {idx}/{total_tables}] ⚠️ 发现字段类型不一致: {phys_name}.{col}（元数据: {meta_t} vs 物理库: {phys_t}）",
                         )
-                        await MetadataDriftService.record_drift_alert_core(
-                            db,
-                            dataset_id=dataset.id,
+                        await _record_finding(
                             table_name=phys_name,
                             column_name=col,
                             drift_type="type_mismatch",
-                            source="manual_inspection",
                             error_sample=f"巡检发现类型不匹配：元数据声明为 {meta_t}，物理库实际为 {phys_t}",
                         )
 
@@ -346,16 +416,20 @@ class MetadataInspectionService:
                             stage="scanning",
                             message=f"{prefix}[表 {idx}/{total_tables}] ⚠️ 发现字段备注缺失: {phys_name}.{col}（元数据字段备注未填写）",
                         )
-                        await MetadataDriftService.record_drift_alert_core(
-                            db,
-                            dataset_id=dataset.id,
+                        await _record_finding(
                             table_id=table.id,
                             table_name=phys_name,
                             column_name=col,
                             drift_type="missing_comment",
-                            source="manual_inspection",
                             error_sample=f"巡检发现：字段 {phys_name}.{col} 的元数据备注为空或未认真填写（备注等于字段名），需要补充业务描述",
                         )
+
+        await MetadataDriftService.retain_latest_inspection_alerts(
+            db,
+            dataset_id=dataset.id,
+            keep_keys=keep_keys,
+            unverified_tables=unverified_tables,
+        )
 
         return {
             "tables_scanned": total_tables,
@@ -467,6 +541,13 @@ class MetadataInspectionService:
                 dataset,
                 {"tables_scanned": 0, "columns_scanned": 0, "unreadable_tables_count": 0},
             )
+            await MetadataDriftService.retain_latest_inspection_alerts(
+                db,
+                dataset_id=dataset.id,
+                keep_keys=set(),
+                unverified_tables=set(),
+            )
+            await MetadataDriftService.delete_alerts_without_dataset(db)
             await db.commit()
             return {
                 "success": True,
@@ -489,7 +570,8 @@ class MetadataInspectionService:
         # 4. 结算数据资产质量治理分（供列表展示与治理优先级排序）
         quality = cls._apply_quality_score(dataset, scan_res)
 
-        # 5. 提交告警变更与质量分
+        # 5. 提交告警变更与质量分。已删除数据集的残留告警不参与待办。
+        await MetadataDriftService.delete_alerts_without_dataset(db)
         await db.commit()
 
         # 5. 巡检完成报告
@@ -714,7 +796,8 @@ class MetadataInspectionService:
                     message=f"{ds_prefix}✓ 巡检完毕: {t_scanned} 张表结构均与物理库一致",
                 )
 
-        # 提交所有沉淀的告警记录
+        # 本次扫过的数据集只留最新差异；数据集已删除的告警一并清掉。
+        await MetadataDriftService.delete_alerts_without_dataset(db)
         await db.commit()
 
         logger.info(

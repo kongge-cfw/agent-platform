@@ -30,6 +30,7 @@ class ResourcePermission(Base):
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     user_id = Column(BigInteger, index=True, nullable=True) # Intentionally no FK constraint in ORM for loose coupling, or add ForeignKey if strict
     role_id = Column(BigInteger, index=True, nullable=True)
+    embed_app_id = Column(String(36), index=True, nullable=True)
     resource_type = Column(String(20), nullable=False) # agent, dataset, api
     resource_id = Column(String(100), nullable=False)
     enabled = Column(Boolean, default=True)

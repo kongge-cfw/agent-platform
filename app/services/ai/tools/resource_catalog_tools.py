@@ -65,14 +65,18 @@ async def list_accessible_datasets() -> str:
         async with AsyncSessionLocal() as db:
             from app.services.embed_identity import resolve_catalog_acl_from_context
 
+            from app.services.embed_identity import embed_catalog_app_id
+
             acl = resolve_catalog_acl_from_context(ctx)
+            embed_app_id = embed_catalog_app_id(ctx.user_dimensions or None)
             rows = await MetadataService.list_accessible_dataset_options(
                 db,
                 user_id=acl.get("user_id"),
-                is_admin=bool(acl.get("is_admin")),
+                is_admin=bool(acl.get("is_admin")) and embed_app_id is None,
                 status=1,
                 tenant_id=acl.get("tenant_id") or "",
                 isolate_by_tenant=bool(acl.get("isolate_by_tenant")),
+                embed_app_id=embed_app_id,
             )
             items = [_dataset_item(row) for row in rows]
             return json.dumps({"items": items, "count": len(items)}, ensure_ascii=False)

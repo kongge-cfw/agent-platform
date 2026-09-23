@@ -7,6 +7,7 @@ import os
 import psycopg
 from typing import List, Dict, Any, Optional
 from app.services.data_adapter.postgresql import (
+    POSTGRESQL_LIST_TABLES_SQL,
     POSTGRESQL_TYPES,
     build_postgresql_conninfo,
     quote_postgresql_identifier,
@@ -46,20 +47,7 @@ class DBImportService:
         try:
             conn = await DBImportService._postgresql_connect(config)
             async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    SELECT table_schema, table_name,
-                           COALESCE(obj_description(
-                               (quote_ident(table_schema) || '.' || quote_ident(table_name))::regclass,
-                               'pg_class'
-                           ), ''),
-                           table_type
-                    FROM information_schema.tables
-                    WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-                      AND table_type IN ('BASE TABLE', 'VIEW')
-                    ORDER BY table_schema, table_name
-                    """
-                )
+                await cur.execute(POSTGRESQL_LIST_TABLES_SQL)
                 rows = await cur.fetchall()
             return [
                 {
@@ -150,8 +138,38 @@ class DBImportService:
                     column_defs.append(
                         f"    {quote_postgresql_identifier(column[0])} {column_type}{nullable}{default}"
                     )
-                ddls.append(f"CREATE TABLE {qualified} (\n" + ",\n".join(column_defs) + "\n);")
+                partition_note = await DBImportService._postgresql_partition_note(
+                    cur, schema_name, physical_name
+                )
+                ddls.append(
+                    f"CREATE TABLE {qualified} (\n" + ",\n".join(column_defs) + "\n);"
+                    + partition_note
+                )
         return "\n\n".join(ddls)
+
+    @staticmethod
+    async def _postgresql_partition_note(cur, schema_name: str, physical_name: str) -> str:
+        """分区表只附父表定义和分区数量，不展开每个子分区的 DDL。"""
+        try:
+            await cur.execute(
+                """
+                SELECT c.relkind = 'p',
+                       (SELECT count(*) FROM pg_inherits i WHERE i.inhparent = c.oid),
+                       pg_get_partkeydef(c.oid)
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = %s AND c.relname = %s
+                """,
+                (schema_name, physical_name),
+            )
+            row = await cur.fetchone()
+        except Exception as exc:
+            logger.warning("读取 PostgreSQL 分区信息失败 %s.%s: %s", schema_name, physical_name, exc)
+            return ""
+        if not row or not row[0]:
+            return ""
+        partkey = str(row[2] or "").strip() or "未标明"
+        return f"\n-- partitioned table, key={partkey}, partitions={int(row[1] or 0)}; child partitions omitted"
 
     @staticmethod
     async def get_postgresql_ddl(config: Dict[str, Any], table_names: List[str]) -> str:

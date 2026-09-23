@@ -124,6 +124,12 @@ class BaseExecutor(ABC):
             "created_by_role",
             "platform_user_id",
             "platform_user_name",
+            "embed_app_id",
+            "embed_app_key",
+            "external_subject",
+            "session_owner",
+            "data_permission_mode",
+            "tenant_id",
         ):
             if key in self.user_info:
                 user_dims[key] = self.user_info.get(key)

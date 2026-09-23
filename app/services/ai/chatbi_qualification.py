@@ -152,7 +152,14 @@ async def resolve_authorized_dataset_candidates(
         return []
     # ``search_datasets`` historically returns all datasets when user_id is
     # omitted.  Never use that permissive behavior for a non-admin route.
-    if not is_admin and user_id is None:
+    from app.core.context import get_current_agent_context
+    from app.services.embed_identity import embed_catalog_app_id
+
+    ctx = get_current_agent_context()
+    embed_app_id = embed_catalog_app_id((ctx.user_dimensions if ctx else None) or None)
+    if embed_app_id is not None:
+        is_admin = False
+    if not is_admin and user_id is None and embed_app_id is None:
         return []
 
     try:
@@ -167,6 +174,7 @@ async def resolve_authorized_dataset_candidates(
                 query=None,
                 user_id=user_id,
                 is_admin=is_admin,
+                embed_app_id=embed_app_id,
                 status=1,
             )
 

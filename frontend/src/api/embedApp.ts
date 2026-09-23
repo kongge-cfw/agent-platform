@@ -6,6 +6,67 @@ export interface EmbedRoleOption {
   name: string
 }
 
+export type EmbedMarkdownTheme =
+  | 'default'
+  | 'minimal'
+  | 'academic'
+  | 'apple'
+  | 'warm'
+  | 'compact'
+  | 'bauhaus'
+  | 'editorial'
+  | 'zen'
+
+export const EMBED_MARKDOWN_THEMES: Array<{ id: EmbedMarkdownTheme; label: string }> = [
+  { id: 'default', label: '现代' },
+  { id: 'minimal', label: '极简' },
+  { id: 'academic', label: '学术' },
+  { id: 'apple', label: '苹果' },
+  { id: 'warm', label: '护眼' },
+  { id: 'compact', label: '紧凑' },
+  { id: 'bauhaus', label: '包豪斯' },
+  { id: 'editorial', label: '日报' },
+  { id: 'zen', label: '禅意' },
+]
+
+export const EMBED_THEME_COLORS = [
+  '#1677ff',
+  '#f97316',
+  '#10b981',
+  '#8b5cf6',
+  '#ec4899',
+  '#06b6d4',
+  '#eab308',
+  '#ef4444',
+  '#64748b',
+]
+
+export interface EmbedChatSettings {
+  enable_multi_agent: boolean
+  enable_sql_plan: boolean
+  expand_thoughts: boolean
+  enable_grounding: boolean
+  grounding_block_mode: 'strict_buffer' | 'stream_with_retraction'
+  theme: 'light' | 'dark'
+  primary_color: string
+  markdown_theme: EmbedMarkdownTheme
+  hide_message_border: boolean
+  show_bash_banner: boolean
+}
+
+export const defaultEmbedChatSettings = (): EmbedChatSettings => ({
+  enable_multi_agent: true,
+  enable_sql_plan: false,
+  expand_thoughts: true,
+  enable_grounding: false,
+  grounding_block_mode: 'strict_buffer',
+  theme: 'light',
+  primary_color: '#1677ff',
+  markdown_theme: 'default',
+  hide_message_border: true,
+  show_bash_banner: true,
+})
+
 export interface SysEmbedApp {
   id: string
   app_key: string
@@ -21,6 +82,7 @@ export interface SysEmbedApp {
   claim_keys: string[]
   data_permission_mode: 'nanzi_sql_rewrite' | 'mcp_only'
   shortcut_prompts: Array<{ label: string; command: string }>
+  chat_settings?: EmbedChatSettings | null
   is_active: boolean
   created_by?: string | null
   updated_by?: string | null
@@ -40,6 +102,7 @@ export interface SysEmbedAppPayload {
   claim_keys?: string[]
   data_permission_mode?: 'nanzi_sql_rewrite' | 'mcp_only'
   shortcut_prompts?: Array<{ label: string; command: string }>
+  chat_settings?: EmbedChatSettings
   is_active?: boolean
 }
 

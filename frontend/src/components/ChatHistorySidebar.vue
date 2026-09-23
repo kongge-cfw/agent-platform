@@ -171,48 +171,63 @@ const confirmDelete = (item: any) => {
       <div
         class="h-12 px-3.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white/80 dark:bg-gray-900/80 backdrop-blur-md flex-shrink-0"
       >
-        <div class="flex items-center gap-2">
-          <button
-            @click="emit('update:visible', false)"
-            class="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-            title="收起侧边栏"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="3" y="3" width="18" height="18" rx="3" stroke-width="1.8" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 3v18" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 9l-3 3 3 3" />
-            </svg>
-          </button>
-          <div class="flex items-center gap-1.5">
-            <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <h3 class="font-bold text-gray-800 dark:text-gray-100 text-xs tracking-wider uppercase">
-              会话历史
-            </h3>
-          </div>
+        <div class="flex min-w-0 items-center gap-1.5">
+          <svg class="w-4 h-4 shrink-0 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <h3 class="truncate font-bold text-gray-800 dark:text-gray-100 text-xs tracking-wider uppercase">
+            会话历史
+          </h3>
         </div>
 
-        <button
-          @click="emit('fetch-history')"
-          class="p-1.5 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-          title="刷新会话历史"
-        >
-          <svg
-            class="w-3.5 h-3.5"
-            :class="{ 'animate-spin text-primary': loading }"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div class="flex items-center gap-0.5">
+          <button
+            @click="emit('fetch-history')"
+            class="inline-flex h-7 shrink-0 items-center gap-0.5 rounded-lg px-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-primary dark:text-gray-200 dark:hover:bg-gray-800"
+            title="刷新会话历史"
           >
-            <path
+            <svg
+              class="h-4 w-4 shrink-0"
+              :class="{ 'animate-spin text-primary': loading }"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
               stroke-linecap="round"
               stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-        </button>
+              viewBox="0 0 24 24"
+            >
+              <path d="M20 12a8 8 0 0 1-13.7 5.6L4 16" />
+              <path d="M4 20v-4h4" />
+              <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8" />
+              <path d="M20 4v4h-4" />
+            </svg>
+            刷新
+          </button>
+          <button
+            type="button"
+            @click="emit('new-chat')"
+            class="inline-flex h-7 shrink-0 items-center gap-0.5 rounded-lg px-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-primary dark:text-gray-200 dark:hover:bg-gray-800"
+            title="新会话"
+          >
+            <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+              <path d="M5.2 16.8 3.5 20l2.6-1.2A8.2 8.2 0 1 0 8 19.2" />
+              <path d="M12 9v6M9 12h6" />
+            </svg>
+            新会话
+          </button>
+          <button
+            @click="emit('update:visible', false)"
+            class="inline-flex h-7 shrink-0 items-center gap-0.5 rounded-lg px-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-200 dark:hover:bg-gray-800 dark:hover:text-white"
+            title="收起侧边栏"
+          >
+            <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+              <rect x="4" y="4" width="16" height="16" rx="2.5" />
+              <path d="M9.5 4v16" />
+              <path d="M14.6 9.2 11.8 12l2.8 2.8" />
+            </svg>
+            收起
+          </button>
+        </div>
       </div>
 
       <!-- Search Bar with Debounce & Clear -->

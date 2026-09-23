@@ -4,7 +4,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import AsyncGenerator, Awaitable, Callable, List, Any, Dict, Optional
+from typing import AsyncGenerator, Awaitable, Callable, List, Any, Dict, Optional, Union
 from pydantic import BaseModel
 import logging
 
@@ -347,9 +347,11 @@ async def get_metadata_dataset_permissions(
 
     user_ids = [p.user_id for p in perms if p.user_id is not None]
     role_ids = [p.role_id for p in perms if p.role_id is not None]
+    embed_app_ids = [p.embed_app_id for p in perms if p.embed_app_id]
 
     granted_users = []
     granted_roles = []
+    granted_embed_apps = []
 
     if user_ids:
         user_stmt = select(User.id, User.user_name, User.real_name).where(User.id.in_(user_ids), User.status == 1)
@@ -361,22 +363,34 @@ async def get_metadata_dataset_permissions(
         role_res = await conn.execute(role_stmt)
         granted_roles = [{"id": r.id, "code": r.code, "name": r.name} for r in role_res.all()]
 
+    if embed_app_ids:
+        from app.models.embed_app import SysEmbedApp
+
+        app_stmt = select(SysEmbedApp.id, SysEmbedApp.app_key, SysEmbedApp.name).where(
+            SysEmbedApp.id.in_(embed_app_ids)
+        )
+        app_res = await conn.execute(app_stmt)
+        granted_embed_apps = [
+            {"id": row.id, "app_key": row.app_key, "name": row.name} for row in app_res.all()
+        ]
+
     return {
         "code": 0,
         "data": {
             "users": granted_users,
-            "roles": granted_roles
+            "roles": granted_roles,
+            "embed_apps": granted_embed_apps,
         }
     }
 
 
 class AddPermissionsRequest(BaseModel):
-    target_type: str  # "user" 或 "role"
-    target_ids: List[int]
+    target_type: str  # "user"、"role" 或 "embed_app"
+    target_ids: List[Union[int, str]]
 
 class DeletePermissionRequest(BaseModel):
-    target_type: str  # "user" 或 "role"
-    target_id: int
+    target_type: str  # "user"、"role" 或 "embed_app"
+    target_id: Union[int, str]
 
 
 @router.get("/candidates")
@@ -397,11 +411,22 @@ async def get_metadata_auth_candidates(
     user_res = await conn.execute(user_stmt)
     users = [{"id": u.id, "user_name": u.user_name, "real_name": u.real_name} for u in user_res.all()]
 
+    from app.models.embed_app import SysEmbedApp
+
+    app_stmt = select(SysEmbedApp.id, SysEmbedApp.app_key, SysEmbedApp.name).where(
+        SysEmbedApp.is_active == True
+    ).order_by(SysEmbedApp.name.asc())
+    app_res = await conn.execute(app_stmt)
+    embed_apps = [
+        {"id": row.id, "app_key": row.app_key, "name": row.name} for row in app_res.all()
+    ]
+
     return {
         "code": 0,
         "data": {
             "roles": roles,
-            "users": users
+            "users": users,
+            "embed_apps": embed_apps,
         }
     }
 
@@ -420,16 +445,28 @@ async def add_metadata_dataset_permissions(
     perm_service = PermissionService(conn)
     affected_user_ids = set()
 
-    for tid in payload.target_ids:
+    for raw_tid in payload.target_ids:
         # 查询是否已经有对应记录了
         stmt = select(ResourcePermission).where(
             ResourcePermission.resource_type == "metadata",
             ResourcePermission.resource_id == str(dataset_id)
         )
-        if payload.target_type == "user":
+        if payload.target_type == "embed_app":
+            app_id = str(raw_tid).strip()
+            if not app_id:
+                continue
+            from app.models.embed_app import SysEmbedApp
+
+            app = await conn.get(SysEmbedApp, app_id)
+            if app is None or not app.is_active:
+                raise HTTPException(status_code=400, detail=f"嵌入应用不存在或已停用: {app_id}")
+            stmt = stmt.where(ResourcePermission.embed_app_id == app_id)
+        elif payload.target_type == "user":
+            tid = int(raw_tid)
             stmt = stmt.where(ResourcePermission.user_id == tid)
             affected_user_ids.add(tid)
         else:
+            tid = int(raw_tid)
             stmt = stmt.where(ResourcePermission.role_id == tid)
             # 获取该角色下的所有关联用户
             r_users_stmt = select(UserRoleRelation.user_id).where(UserRoleRelation.role_id == tid)
@@ -448,10 +485,12 @@ async def add_metadata_dataset_permissions(
                 resource_id=str(dataset_id),
                 enabled=True
             )
-            if payload.target_type == "user":
-                new_perm.user_id = tid
+            if payload.target_type == "embed_app":
+                new_perm.embed_app_id = str(raw_tid).strip()
+            elif payload.target_type == "user":
+                new_perm.user_id = int(raw_tid)
             else:
-                new_perm.role_id = tid
+                new_perm.role_id = int(raw_tid)
             conn.add(new_perm)
 
     await conn.flush()
@@ -482,9 +521,9 @@ async def delete_metadata_dataset_permission(
 
     # 查出受影响的用户列表以作缓存清理
     if payload.target_type == "user":
-        affected_user_ids.add(payload.target_id)
-    else:
-        r_users_stmt = select(UserRoleRelation.user_id).where(UserRoleRelation.role_id == payload.target_id)
+        affected_user_ids.add(int(payload.target_id))
+    elif payload.target_type == "role":
+        r_users_stmt = select(UserRoleRelation.user_id).where(UserRoleRelation.role_id == int(payload.target_id))
         r_users_res = await conn.execute(r_users_stmt)
         for uid in r_users_res.scalars().all():
             affected_user_ids.add(uid)
@@ -494,10 +533,12 @@ async def delete_metadata_dataset_permission(
         ResourcePermission.resource_type == "metadata",
         ResourcePermission.resource_id == str(dataset_id)
     )
-    if payload.target_type == "user":
-        stmt = stmt.where(ResourcePermission.user_id == payload.target_id)
+    if payload.target_type == "embed_app":
+        stmt = stmt.where(ResourcePermission.embed_app_id == str(payload.target_id).strip())
+    elif payload.target_type == "user":
+        stmt = stmt.where(ResourcePermission.user_id == int(payload.target_id))
     else:
-        stmt = stmt.where(ResourcePermission.role_id == payload.target_id)
+        stmt = stmt.where(ResourcePermission.role_id == int(payload.target_id))
 
     await conn.execute(stmt)
     await conn.flush()

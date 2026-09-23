@@ -12,7 +12,7 @@ import {
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
 import { CheckIcon } from '@heroicons/vue/20/solid'
-import { embedAppApi, type EmbedRoleAgentOption, type EmbedRoleOption, type SysEmbedApp, type SysEmbedAppPayload } from '../api/embedApp'
+import { EMBED_MARKDOWN_THEMES, EMBED_THEME_COLORS, defaultEmbedChatSettings, embedAppApi, type EmbedChatSettings, type EmbedRoleAgentOption, type EmbedRoleOption, type SysEmbedApp, type SysEmbedAppPayload } from '../api/embedApp'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import Switch from '../components/Switch.vue'
 import { useToast } from '../composables/useToast'
@@ -68,7 +68,12 @@ const menuPos = ref({ top: 0, left: 0, width: 0, maxHeight: 240, openUp: false }
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const isMobile = computed(() => windowWidth.value < 1024)
 
-type AppForm = SysEmbedAppPayload & { id?: string; originsText: string; role_id: number | '' | null }
+type AppForm = SysEmbedAppPayload & {
+  id?: string
+  originsText: string
+  role_id: number | '' | null
+  chat_settings: EmbedChatSettings
+}
 
 const emptyForm = (): AppForm => ({
   name: '',
@@ -79,6 +84,7 @@ const emptyForm = (): AppForm => ({
   allowed_origins: [],
   require_identity: true,
   data_permission_mode: 'nanzi_sql_rewrite',
+  chat_settings: defaultEmbedChatSettings(),
   is_active: true,
   originsText: '',
 })
@@ -250,6 +256,7 @@ const openModal = (app?: SysEmbedApp) => {
       allowed_origins: [...(app.allowed_origins || [])],
       require_identity: app.require_identity !== false,
       data_permission_mode: app.data_permission_mode || 'nanzi_sql_rewrite',
+      chat_settings: { ...defaultEmbedChatSettings(), ...(app.chat_settings || {}) },
       is_active: app.is_active !== false,
       originsText: (app.allowed_origins || []).join('\n'),
     }
@@ -259,6 +266,11 @@ const openModal = (app?: SysEmbedApp) => {
   }
   showModal.value = true
   void fetchRoleAgentOptions(form.value.role_id)
+}
+
+const onPrimaryColorInput = (event: Event) => {
+  const value = (event.target as HTMLInputElement).value
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) form.value.chat_settings.primary_color = value
 }
 
 const copyAppKey = async (key?: string) => {
@@ -289,6 +301,7 @@ const saveApp = async () => {
     require_identity: form.value.require_identity !== false,
     claim_keys: [...ALL_CLAIM_KEYS],
     data_permission_mode: form.value.data_permission_mode || 'nanzi_sql_rewrite',
+    chat_settings: { ...defaultEmbedChatSettings(), ...(form.value.chat_settings || {}) },
     is_active: form.value.is_active !== false,
   }
   saving.value = true
@@ -796,6 +809,109 @@ onUnmounted(() => {
                   </span>
                   <div class="flex h-10 items-center">
                     <Switch v-model="form.require_identity" />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 :class="sectionTitleClass">
+                <span class="h-3.5 w-1 rounded-full bg-primary"></span>
+                对话设置
+              </h3>
+              <p class="mb-3 text-xs leading-5 text-gray-400">同一嵌入应用内所有用户共用，不按个人保存。智能委派仍在上方「对话入口」里配置。</p>
+              <div class="grid gap-x-4 gap-y-4 sm:grid-cols-2">
+                <div>
+                  <span :class="labelClass">主题模式</span>
+                  <div class="flex h-10 items-center rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg py-1.5 text-xs font-medium transition-all"
+                      :class="form.chat_settings.theme === 'light' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'"
+                      @click="form.chat_settings.theme = 'light'"
+                    >浅色</button>
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg py-1.5 text-xs font-medium transition-all"
+                      :class="form.chat_settings.theme === 'dark' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500'"
+                      @click="form.chat_settings.theme = 'dark'"
+                    >深色</button>
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">AI 消息排版</span>
+                  <select v-model="form.chat_settings.markdown_theme" :class="inputClass">
+                    <option v-for="item in EMBED_MARKDOWN_THEMES" :key="item.id" :value="item.id">{{ item.label }}</option>
+                  </select>
+                </div>
+                <div class="sm:col-span-2">
+                  <span :class="labelClass">主题颜色</span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button
+                      v-for="color in EMBED_THEME_COLORS"
+                      :key="color"
+                      type="button"
+                      class="flex h-7 w-7 items-center justify-center rounded-full transition-transform hover:scale-110"
+                      :class="form.chat_settings.primary_color === color ? 'ring-2 ring-offset-2 ring-primary' : ''"
+                      :style="{ backgroundColor: color }"
+                      @click="form.chat_settings.primary_color = color"
+                    >
+                      <span v-if="form.chat_settings.primary_color === color" class="text-xs font-bold text-white">✓</span>
+                    </button>
+                    <label class="relative flex h-7 w-7 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-red-500 via-green-500 to-blue-500">
+                      <input
+                        type="color"
+                        class="absolute inset-0 cursor-pointer opacity-0"
+                        :value="form.chat_settings.primary_color"
+                        @input="onPrimaryColorInput"
+                      />
+                      <span class="pointer-events-none text-xs font-bold text-white">+</span>
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">隐藏 AI 消息外框</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.hide_message_border" />
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">Bash 运行环境横幅</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.show_bash_banner" />
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">多智能体协同</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.enable_multi_agent" />
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">SQL PLAN 中间层</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.enable_sql_plan" />
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">思考过程默认展开</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.expand_thoughts" />
+                  </div>
+                </div>
+                <div>
+                  <span :class="labelClass">反幻觉校验</span>
+                  <div class="flex h-10 items-center">
+                    <Switch v-model="form.chat_settings.enable_grounding" />
+                  </div>
+                </div>
+                <div v-if="form.chat_settings.enable_grounding">
+                  <span :class="labelClass">校验失败后实时输出</span>
+                  <div class="flex h-10 items-center">
+                    <Switch
+                      :model-value="form.chat_settings.grounding_block_mode === 'stream_with_retraction'"
+                      @update:model-value="form.chat_settings.grounding_block_mode = $event ? 'stream_with_retraction' : 'strict_buffer'"
+                    />
                   </div>
                 </div>
               </div>

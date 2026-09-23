@@ -41,9 +41,12 @@
     >
       <!-- Dynamic Header Status (New) -->
       <div
-        class="h-12 border-b border-gray-100 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md px-4 flex items-center justify-between z-30 flex-shrink-0"
+        class="z-30 flex items-center"
+        :class="isEmbeddedInIframe()
+          ? 'absolute left-2 top-2'
+          : 'h-12 w-full flex-shrink-0 justify-between border-b border-gray-100 bg-white/80 px-4 backdrop-blur-md dark:border-gray-800 dark:bg-gray-900/80'"
       >
-        <div class="flex items-center space-x-2 min-w-0">
+        <div v-if="!isEmbeddedInIframe()" class="flex items-center space-x-2 min-w-0">
           <div class="relative group inline-flex items-center flex-shrink-0">
             <button
               type="button"
@@ -101,9 +104,44 @@
             </div>
         </div>
 
-        <div class="flex items-center space-x-2">
-            <!-- Fullscreen Button (desktop only) -->
-            <div v-if="!isMobile" class="relative group inline-flex items-center">
+        <div class="flex items-center" :class="isEmbeddedInIframe() ? '' : 'space-x-2'">
+            <div v-if="isEmbeddedInIframe()" class="flex items-center gap-0.5">
+              <div v-if="!showHistorySidebar" class="relative group inline-flex">
+                <button
+                  type="button"
+                  @click="showHistorySidebar = true"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-gray-900 transition-colors hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800"
+                  aria-label="展开历史会话"
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <rect x="3.5" y="4.5" width="17" height="15" rx="2" stroke-width="1.7" />
+                    <path stroke-linecap="round" stroke-width="1.7" d="M9 4.5v15" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M12.5 10.2 15 12l-2.5 1.8" />
+                  </svg>
+                </button>
+                <div class="pointer-events-none absolute top-full left-1/2 z-50 mt-1.5 flex -translate-x-1/2 flex-col items-center opacity-0 transition-all duration-150 group-hover:opacity-100">
+                  <div class="rounded-md bg-gray-900/95 px-2.5 py-1 text-xs font-medium text-white shadow-lg whitespace-nowrap">展开历史</div>
+                </div>
+              </div>
+              <div v-if="!showHistorySidebar" class="relative group inline-flex">
+                <button
+                  type="button"
+                  @click="showConfirmModal = true"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-gray-900 transition-colors hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800"
+                  aria-label="新对话"
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M7.2 17.6 4.2 19.2l.9-3.4A7.6 7.6 0 1 1 12 19.6a7.8 7.8 0 0 1-4.8-2Z" />
+                    <path stroke-linecap="round" stroke-width="1.7" d="M12 9.2v5.6M9.2 12h5.6" />
+                  </svg>
+                </button>
+                <div class="pointer-events-none absolute top-full left-1/2 z-50 mt-1.5 flex -translate-x-1/2 flex-col items-center opacity-0 transition-all duration-150 group-hover:opacity-100">
+                  <div class="rounded-md bg-gray-900/95 px-2.5 py-1 text-xs font-medium text-white shadow-lg whitespace-nowrap">新对话</div>
+                </div>
+              </div>
+            </div>
+            <!-- Fullscreen Button (desktop only; iframe 顶栏已收起，不再占一行) -->
+            <div v-if="!isMobile && !isEmbeddedInIframe()" class="relative group inline-flex items-center">
               <button
                 @click="toggleFullScreen"
                 class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
@@ -178,7 +216,7 @@
             </div>
 
             <!-- Help Button -->
-            <div class="relative group inline-flex items-center">
+            <div v-if="!isEmbeddedInIframe()" class="relative group inline-flex items-center">
               <button
                 @click="showHelpModal = true"
                 class="p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
@@ -197,7 +235,7 @@
             </div>
 
             <!-- Settings Button -->
-            <div class="relative group inline-flex items-center">
+            <div v-if="!isEmbeddedInIframe()" class="relative group inline-flex items-center">
               <button
                 @click="showSettings = true"
                 class="relative p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
@@ -216,7 +254,7 @@
             </div>
 
             <!-- Server Browser Button -->
-            <div class="relative group inline-flex items-center">
+            <div v-if="!isEmbeddedInIframe()" class="relative group inline-flex items-center">
               <button
                 @click="toggleBrowserPanel"
                 class="relative p-2 text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all"
@@ -342,29 +380,16 @@
           }}
         </div>
       </div>
-      <!-- Skeleton Loading State -->
-      <div v-if="isInitialLoading" class="space-y-6">
-        <div v-for="i in 3" :key="i" class="flex items-start space-x-3">
-          <div
-            class="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 animate-pulse"
-          ></div>
-          <div class="flex-1 space-y-2">
-            <div
-              class="h-4 bg-gray-100 dark:bg-gray-800 rounded w-3/4 animate-pulse"
-            ></div>
-            <div
-              class="h-4 bg-gray-50 dark:bg-gray-800/50 rounded w-1/2 animate-pulse"
-            ></div>
-          </div>
-        </div>
-        <div class="flex flex-col items-center justify-center pt-8 animate-pulse">
-            <span class="text-[10px] font-bold text-gray-300 uppercase tracking-widest mb-2">正在安全同步环境上下文</span>
-            <div class="flex space-x-1">
-                <div class="w-1 h-1 bg-gray-200 rounded-full animate-bounce"></div>
-                <div class="w-1 h-1 bg-gray-200 rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                <div class="w-1 h-1 bg-gray-200 rounded-full animate-bounce [animation-delay:0.4s]"></div>
-            </div>
-        </div>
+      <div
+        v-if="isInitialLoading"
+        class="flex min-h-[50vh] w-full flex-col items-center justify-center gap-3"
+        role="status"
+      >
+        <span
+          class="h-7 w-7 animate-spin rounded-full border-2 border-gray-200 border-t-primary dark:border-gray-700"
+          aria-hidden="true"
+        />
+        <p class="text-sm font-medium text-gray-700 dark:text-gray-200">正在安全同步上下文环境</p>
       </div>
       <!-- Welcome / Empty State (Smart Dashboard) -->
       <WelcomeDashboard
@@ -392,7 +417,7 @@
         <div class="w-12 h-[1px] bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-700 to-transparent mt-2"></div>
       </div>
       <!-- History Loading Indicator -->
-      <div v-if="isLoadingHistory" class="w-full flex justify-center py-4 animate-fade-in-up">
+      <div v-if="isLoadingHistory && !isInitialLoading" class="w-full flex justify-center py-4 animate-fade-in-up">
         <div class="flex items-center gap-2 bg-gray-50/90 dark:bg-gray-800/90 px-4 py-1.5 rounded-full border border-gray-100 dark:border-gray-700 shadow-sm backdrop-blur-sm">
             <svg class="w-4 h-4 text-primary animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -446,11 +471,11 @@
                   :key="'user-parts'"
                 >
                   <div
-                    v-if="parts.userPart"
+                    v-if="parts.userPart || messageSkillFiles(msg.files).length"
                     class="max-w-full text-white px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed transition-colors duration-300 relative"
                     :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }"
                   >
-                    <div class="whitespace-pre-wrap">{{ parts.userPart }}</div>
+                    <div class="whitespace-pre-wrap"><span v-for="(file, skillIndex) in messageSkillFiles(msg.files)" :key="`${file.url || file.filename}-${skillIndex}`" class="mr-1.5 inline-flex h-5 max-w-full items-center rounded-full bg-white/20 px-2 align-middle text-[13px] leading-none text-white ring-1 ring-inset ring-white/35"><BoltIcon class="mr-1 h-3.5 w-3.5 shrink-0 text-white/90" aria-hidden="true" /><span class="truncate">{{ messageSkillLabel(file) }}</span></span><span v-if="parts.userPart">{{ parts.userPart }}</span></div>
                   </div>
                   <details
                     v-if="parts.hasContext"
@@ -468,9 +493,9 @@
                   </details>
                 </template>
                 <UserMessageAttachments
-                  v-if="msg.files && msg.files.length > 0"
+                  v-if="messageAttachmentFiles(msg.files).length > 0"
                   class="mt-2"
-                  :files="msg.files"
+                  :files="messageAttachmentFiles(msg.files)"
                   :columns="5"
                   align="end"
                   plain
@@ -1137,6 +1162,7 @@
         :is-submitting="sendLocked"
         :show-shortcuts="!isMobile"
         :pin-shortcut-bar="true"
+        :omit-pinned-system-commands="isEmbeddedInIframe()"
         :slash-commands="effectiveSlashCommands"
         :allowed-agents="allowedAgents"
         :delegation-host-id="defaultEntryAgentId"
@@ -1179,9 +1205,9 @@
         @open-docker-terminal="openDockerTerminal"
         @update:approval-mode="(mode) => { config.approvalMode = mode; saveRoutingSettings(); }"
         @update:selected-model="handleEmbedModelSelection"
-        @update:thinking-enable-override="thinkingEnableOverride = $event"
+        @update:thinking-enable-override="thinkingEnableOverride = $event ?? false"
         @update:reasoning-effort-override="reasoningEffortOverride = $event"
-        @update:temperature-override="temperatureOverride = $event"
+        @update:temperature-override="temperatureOverride = $event ?? SESSION_DEFAULT_TEMPERATURE"
         @send="sendMessage"
         @refresh-context-compactions="refreshEmbedContextCompactions(true)"
         @manual-context-compaction="manualCompactEmbedContext"
@@ -1977,7 +2003,7 @@
       class="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm p-4"
       @click.self="showAddModal = false"
     >
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in-up border border-gray-200 dark:border-gray-700">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm overflow-visible animate-fade-in-up border border-gray-200 dark:border-gray-700">
         <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50">
           <h3 class="text-sm font-bold text-gray-800 dark:text-gray-200">新建快捷指令</h3>
           <button @click="showAddModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
@@ -1993,39 +2019,75 @@
           </div>
           <div>
             <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">指令内容</label>
-            <textarea v-model="newCommand.command" rows="2" placeholder="输入要发送给 AI 的文字..." class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100 resize-none"></textarea>
+            <div class="relative">
+              <div
+                v-if="shortcutSkillQuery !== null && !shortcutSkillMenuDismissed"
+                class="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800"
+              >
+                <div class="flex items-center gap-1 border-b border-gray-200 px-2.5 dark:border-gray-700">
+                  <span class="mb-2 h-3.5 w-1 shrink-0 rounded-full bg-primary" />
+                  <span class="relative px-2 pb-2 pt-2 text-xs font-semibold text-gray-900 dark:text-gray-100">
+                    技能
+                    <span class="ml-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">{{ filteredShortcutSkills.length }}</span>
+                    <span class="absolute inset-x-2 bottom-0 h-0.5 rounded-t-full bg-primary" />
+                  </span>
+                </div>
+                <div ref="shortcutSkillListRef" class="max-h-48 overflow-y-auto px-1.5 py-1.5">
+                  <div v-if="shortcutSkillsLoading" class="flex h-16 items-center justify-center text-[11px] text-gray-400">正在加载技能…</div>
+                  <div v-else-if="!filteredShortcutSkills.length" class="flex h-16 items-center justify-center text-[11px] text-gray-400">暂无匹配技能</div>
+                  <button
+                    v-for="(skill, index) in filteredShortcutSkills"
+                    :key="skill.id"
+                    type="button"
+                    class="flex h-12 w-full items-center gap-2 rounded-lg px-2 text-left"
+                    :class="index === shortcutSkillActiveIndex
+                      ? 'bg-amber-50 ring-1 ring-amber-200/70 dark:bg-amber-950/40 dark:ring-amber-800/60'
+                      : 'hover:bg-amber-50 dark:hover:bg-amber-950/40'"
+                    :data-active="index === shortcutSkillActiveIndex ? 'true' : undefined"
+                    @mouseenter="shortcutSkillActiveIndex = index"
+                    @mousedown.prevent
+                    @click="pickShortcutSkill(skill)"
+                  >
+                    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-100 bg-amber-50 text-amber-600 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300">
+                      <PuzzlePieceIcon class="h-3.5 w-3.5" aria-hidden="true" />
+                    </span>
+                    <span class="min-w-0 flex-1">
+                      <span class="flex items-center gap-1.5">
+                        <span class="truncate text-[12px] font-medium leading-5 text-gray-800 dark:text-gray-100">{{ skill.name || skill.id }}</span>
+                        <span class="shrink-0 rounded border border-amber-100 bg-amber-50 px-1 py-0.5 text-[8px] font-bold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">平台技能</span>
+                      </span>
+                      <span class="block truncate font-mono text-[10px] leading-4 text-gray-400 opacity-70">{{ skill.description || skill.id }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <div class="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 focus-within:ring-1 focus-within:ring-primary dark:border-gray-700 dark:bg-gray-900">
+                <div v-if="shortcutSkill" ref="shortcutSkillRowRef" class="absolute left-3 top-3 z-20 flex h-5 items-center" :style="{ transform: `translateY(-${shortcutSkillScrollTop}px)` }">
+                <span
+                  class="group/skill inline-flex h-5 max-w-full items-center rounded-full bg-gray-100 px-2 text-sm leading-none text-gray-700 dark:bg-gray-700 dark:text-gray-100"
+                >
+                  <span class="relative mr-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-gray-500">
+                    <BoltIcon class="h-3.5 w-3.5 group-hover/skill:opacity-0" aria-hidden="true" />
+                    <button
+                      type="button"
+                      class="absolute inset-0 hidden items-center justify-center rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-800 group-hover/skill:flex dark:hover:bg-gray-600"
+                      aria-label="移除技能"
+                      @mousedown.prevent
+                      @click.stop="shortcutSkill = null"
+                    >
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                  <span class="truncate">{{ shortcutSkill.name }}</span>
+                </span>
+                </div>
+                <textarea ref="shortcutCommandRef" v-model="newCommand.command" rows="2" placeholder="输入要发送给 AI 的文字，输入 / 选择技能" class="w-full resize-none bg-transparent py-1 text-sm leading-5 text-gray-900 outline-none dark:text-gray-100" :style="shortcutSkillIndent ? { textIndent: `${shortcutSkillIndent}px` } : undefined" @scroll="syncShortcutSkillScroll" @keydown="handleShortcutCommandKeydown"></textarea>
+              </div>
+            </div>
           </div>
-          <button @click="addCommand" :disabled="!newCommand.label || !newCommand.command" class="w-full py-2.5 bg-primary text-white text-sm font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-primary/20" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
-            添加指令
-          </button>
-        </div>
-      </div>
-    </div>
-    <!-- Modal: Add Command -->
-    <div
-      v-if="showAddModal"
-      class="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm p-4"
-      @click.self="showAddModal = false"
-    >
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in-up border border-gray-200 dark:border-gray-700">
-        <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50">
-          <h3 class="text-sm font-bold text-gray-800 dark:text-gray-200">新建快捷指令</h3>
-          <button @click="showAddModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div class="p-4 space-y-4">
-          <div>
-            <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">显示名称</label>
-            <input v-model="newCommand.label" type="text" placeholder="如：🏢 查机房" class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100" />
-          </div>
-          <div>
-            <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">指令内容</label>
-            <textarea v-model="newCommand.command" rows="2" placeholder="输入要发送给 AI 的文字..." class="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-primary transition-all dark:text-gray-100 resize-none"></textarea>
-          </div>
-          <button @click="addCommand" :disabled="!newCommand.label || !newCommand.command" class="w-full py-2.5 bg-primary text-white text-sm font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-primary/20" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
+          <button @click="addCommand" :disabled="!newCommand.label || (!newCommand.command.trim() && !shortcutSkill)" class="w-full py-2.5 bg-primary text-white text-sm font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-primary/20" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
             添加指令
           </button>
         </div>
@@ -2107,12 +2169,13 @@
 </template>
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, nextTick, watch, computed, triggerRef } from "vue";
-import { CommandLineIcon } from "@heroicons/vue/24/outline";
+import { BoltIcon, CommandLineIcon, PuzzlePieceIcon } from "@heroicons/vue/24/outline";
 import { useRouter } from "vue-router";
 import axios from "@/utils/axios";
 import { finalizeConversation } from "@/utils/conversationFinalize";
 import { cancelConversationRun } from "@/utils/cancelConversationRun";
 import { createConversationId } from "@/utils/conversationId";
+import { packShortcutSkill, type ShortcutSkillRef } from "@/utils/shortcutSkill";
 import { useToast } from "../composables/useToast";
 import { useTokenQuota } from "../composables/useTokenQuota";
 import { useContextUsage } from "@/composables/useContextUsage";
@@ -2531,6 +2594,19 @@ function visibleStreamBody(msg: Message): string {
   return msg.role === "agent"
     ? stripInternalContextBlocks(msg.content || "")
     : (msg.content || "");
+}
+
+function messageSkillFiles(files?: ChatFile[]) {
+  return (files || []).filter((file) => file.type === "skill");
+}
+
+function messageAttachmentFiles(files?: ChatFile[]) {
+  return (files || []).filter((file) => file.type !== "skill");
+}
+
+function messageSkillLabel(file: ChatFile) {
+  const raw = String(file.skillMeta?.name || file.filename || "").replace(/\s*\(技能\)\s*$/, "").trim();
+  return raw || "技能";
 }
 
 const skillFlowBadgesByMessageId = computed(() => {
@@ -2998,7 +3074,7 @@ const config = reactive({
   enableGrounding: false, // Embed 默认关闭反幻觉校验，由用户在右上角设置中主动开启
   groundingBlockMode: "strict_buffer" as "strict_buffer" | "stream_with_retraction",
   expandThoughts: true, // 思考过程默认展示开关
-  markdownTheme: "default" as "default" | "minimal" | "academic" | "apple" | "warm" | "compact",
+  markdownTheme: "default" as "default" | "minimal" | "academic" | "apple" | "warm" | "compact" | "bauhaus" | "editorial" | "zen",
   hideMessageBorder: true,
   /** Bash 运行环境横幅提示开关（可在设置面板中切换，localStorage 持久化） */
   showBashBanner: localStorage.getItem("bash_env_banner_ignored") !== "1",
@@ -3175,9 +3251,10 @@ const updateBrowserApprovalMode = async (mode: BrowserApprovalMode) => {
     showToast(error?.response?.data?.detail || "切换浏览器动作模式失败", "error");
   }
 };
-const thinkingEnableOverride = ref<boolean | null>(null);
+const SESSION_DEFAULT_TEMPERATURE = 0.2;
+const thinkingEnableOverride = ref<boolean | null>(false);
 const reasoningEffortOverride = ref<ReasoningEffort | null>(null);
-const temperatureOverride = ref<number | null>(null);
+const temperatureOverride = ref<number | null>(SESSION_DEFAULT_TEMPERATURE);
 const chatRuntimePrefsPersistable = ref(false);
 let chatRuntimePrefsHydrated = false;
 let persistChatRuntimePrefsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3411,7 +3488,8 @@ const handleEmbedModelSelection = (model: string) => {
     }
     config.overrideModel = model;
     reasoningEffortOverride.value = null;
-    temperatureOverride.value = null;
+    thinkingEnableOverride.value = false;
+    temperatureOverride.value = SESSION_DEFAULT_TEMPERATURE;
     saveRoutingSettings();
     if (model) {
         const found = availableModels.value.find((m) => m.model_id === model);
@@ -3464,9 +3542,9 @@ const loadChatRuntimePrefs = async () => {
         } else if (localModel) {
             config.overrideModel = localModel;
         }
-        thinkingEnableOverride.value = typeof prefs.thinking_enable === "boolean" ? prefs.thinking_enable : null;
+        thinkingEnableOverride.value = typeof prefs.thinking_enable === "boolean" ? prefs.thinking_enable : false;
         reasoningEffortOverride.value = (prefs.reasoning_effort as ReasoningEffort | null | undefined) ?? null;
-        temperatureOverride.value = typeof prefs.temperature === "number" ? prefs.temperature : null;
+        temperatureOverride.value = typeof prefs.temperature === "number" ? prefs.temperature : SESSION_DEFAULT_TEMPERATURE;
         chatRuntimePrefsHydrated = true;
         if (chatRuntimePrefsPersistable.value && !storedModel && localModel) {
             await persistChatRuntimePrefsNow();
@@ -4939,6 +5017,41 @@ const applyEmbedShortcutPrompts = (raw: unknown) => {
   mergeVisibleSlashCommands();
 };
 
+const sharedEmbedChatSettings = ref<Record<string, unknown> | null>(null);
+const applyEmbedChatSettings = (raw: unknown) => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const settings = raw as Record<string, unknown>;
+  sharedEmbedChatSettings.value = settings;
+  if (typeof settings.enable_multi_agent === "boolean") config.enableMultiAgent = settings.enable_multi_agent;
+  if (typeof settings.enable_sql_plan === "boolean") config.enableSqlPlan = settings.enable_sql_plan;
+  if (typeof settings.expand_thoughts === "boolean") config.expandThoughts = settings.expand_thoughts;
+  if (typeof settings.enable_grounding === "boolean") config.enableGrounding = settings.enable_grounding;
+  const mode = settings.grounding_block_mode;
+  if (mode === "strict_buffer" || mode === "stream_with_retraction") {
+    config.groundingBlockMode = mode;
+  }
+  if (settings.theme === "light" || settings.theme === "dark") {
+    config.theme = settings.theme;
+    applyTheme(settings.theme);
+  }
+  if (typeof settings.primary_color === "string" && /^#[0-9a-fA-F]{6}$/.test(settings.primary_color)) {
+    activeColor.value = settings.primary_color;
+    applyTheme(config.theme, { "--primary-color": settings.primary_color });
+  }
+  const markdownThemes = ["default", "minimal", "academic", "apple", "warm", "compact", "bauhaus", "editorial", "zen"] as const;
+  if (typeof settings.markdown_theme === "string" && (markdownThemes as readonly string[]).includes(settings.markdown_theme)) {
+    config.markdownTheme = settings.markdown_theme as typeof config.markdownTheme;
+  }
+  if (typeof settings.hide_message_border === "boolean") config.hideMessageBorder = settings.hide_message_border;
+  if (typeof settings.show_bash_banner === "boolean") {
+    config.showBashBanner = settings.show_bash_banner;
+    localStorage.setItem("bash_env_banner_ignored", settings.show_bash_banner ? "0" : "1");
+  }
+};
+const reapplySharedEmbedChatSettings = () => {
+  if (sharedEmbedChatSettings.value) applyEmbedChatSettings(sharedEmbedChatSettings.value);
+};
+
 const systemSlashCommandsWithKnowledge = () =>
   SYSTEM_SLASH_COMMANDS.map((cmd) => {
     if (cmd.id === KNOWLEDGE_PORTAL_SYSTEM_COMMAND_ID) {
@@ -6164,18 +6277,132 @@ const newCommand = reactive({
   command: "",
   sort_order: 10,
 });
+const shortcutSkill = ref<ShortcutSkillRef | null>(null);
+const shortcutSkillRowRef = ref<HTMLElement | null>(null);
+const shortcutSkillListRef = ref<HTMLElement | null>(null);
+const shortcutSkillActiveIndex = ref(0);
+const shortcutSkillMenuDismissed = ref(false);
+const shortcutSkillIndent = ref(0);
+const shortcutCommandRef = ref<HTMLTextAreaElement | null>(null);
+const shortcutSkillScrollTop = ref(0);
+const syncShortcutSkillIndent = () => {
+  const width = shortcutSkillRowRef.value?.offsetWidth || 0;
+  shortcutSkillIndent.value = width ? width + 6 : 0;
+};
+const syncShortcutSkillScroll = () => {
+  shortcutSkillScrollTop.value = shortcutCommandRef.value?.scrollTop || 0;
+};
+watch(shortcutSkill, () => nextTick(syncShortcutSkillIndent));
+watch(() => newCommand.command, () => nextTick(syncShortcutSkillScroll));
+const shortcutSkills = ref<Array<{ id: string; name?: string; description?: string; enabled?: string }>>([]);
+const shortcutSkillsLoading = ref(false);
+const shortcutSkillQuery = computed(() => {
+  const match = newCommand.command.match(/(?:^|\s)\/([^\s/]*)$/);
+  return match ? String(match[1] || "").toLowerCase() : null;
+});
+watch(shortcutSkillQuery, () => {
+  shortcutSkillMenuDismissed.value = false;
+  shortcutSkillActiveIndex.value = 0;
+});
+watch(shortcutSkillActiveIndex, () => {
+  nextTick(() => {
+    shortcutSkillListRef.value
+      ?.querySelector("[data-active='true']")
+      ?.scrollIntoView({ block: "nearest" });
+  });
+});
+const filteredShortcutSkills = computed(() => {
+  const query = shortcutSkillQuery.value;
+  if (query === null) return [];
+  return shortcutSkills.value
+    .filter((skill) => {
+      if (!query) return true;
+      return [skill.name, skill.id, skill.description].some((value) => String(value || "").toLowerCase().includes(query));
+    })
+    .slice(0, 8);
+});
+const loadShortcutSkills = async () => {
+  if (shortcutSkills.value.length || shortcutSkillsLoading.value) return;
+  shortcutSkillsLoading.value = true;
+  try {
+    const agentId = String(config.agentId || config.expertAgentId || "").trim();
+    const response = await axios.get("/api/portal/skills", agentId ? { params: { agent_id: agentId } } : undefined);
+    shortcutSkills.value = response.data?.status === "success"
+      ? (response.data.data || []).filter((skill: { enabled?: string }) => skill.enabled !== "false")
+      : [];
+  } catch (error) {
+    console.warn("Failed to load shortcut skills", error);
+  } finally {
+    shortcutSkillsLoading.value = false;
+  }
+};
+const pickShortcutSkill = (skill: { id: string; name?: string }) => {
+  const id = String(skill.id || "").trim();
+  if (!id) return;
+  shortcutSkill.value = { id, name: String(skill.name || id) };
+  newCommand.command = newCommand.command.replace(/(?:^|\s)\/[^\s/]*$/, "").trim();
+};
+const handleShortcutCommandKeydown = (event: KeyboardEvent) => {
+  if (event.isComposing) return;
+  const menuOpen = shortcutSkillQuery.value !== null && !shortcutSkillMenuDismissed.value;
+  const skills = filteredShortcutSkills.value;
+  if (menuOpen && skills.length) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      shortcutSkillActiveIndex.value = (shortcutSkillActiveIndex.value + step + skills.length) % skills.length;
+      return;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      pickShortcutSkill(skills[shortcutSkillActiveIndex.value] || skills[0]);
+      return;
+    }
+  }
+  if (menuOpen && event.key === "Escape") {
+    event.preventDefault();
+    shortcutSkillMenuDismissed.value = true;
+    return;
+  }
+  if (!shortcutSkill.value || event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+  const target = event.target as HTMLTextAreaElement | null;
+  const caretAtStart = !!target && target.selectionStart === 0 && target.selectionEnd === 0;
+  const empty = !newCommand.command;
+  const removeByBackspace = event.key === "Backspace" && (empty || caretAtStart);
+  const removeByDelete = event.key === "Delete" && empty;
+  if (removeByBackspace || removeByDelete) {
+    event.preventDefault();
+    shortcutSkill.value = null;
+  }
+};
+watch(showAddModal, (open) => {
+  if (!open) return;
+  newCommand.label = "";
+  newCommand.command = "";
+  newCommand.sort_order = 10;
+  shortcutSkill.value = null;
+  shortcutSkillMenuDismissed.value = false;
+  shortcutSkillActiveIndex.value = 0;
+  shortcutSkillScrollTop.value = 0;
+  shortcutSkillIndent.value = 0;
+  void loadShortcutSkills();
+});
 const addCommand = async () => {
-  if (!newCommand.label || !newCommand.command) return;
+  const commandText = newCommand.command.trim();
+  if (!newCommand.label || (!commandText && !shortcutSkill.value)) return;
   try {
     const username = currentUser.value?.user_name || "unknown";
     await axios.post("/api/portal/slash-commands/", {
-      ...newCommand,
+      label: newCommand.label,
+      command: packShortcutSkill(commandText, shortcutSkill.value),
+      sort_order: newCommand.sort_order,
       created_by: username
     });
     await fetchSlashCommands();
     showAddModal.value = false;
     newCommand.label = "";
     newCommand.command = "";
+    shortcutSkill.value = null;
   } catch (e) {
     console.error("Failed to add command", e);
   }
@@ -6291,6 +6518,11 @@ const exchangeTicketAndApply = async (ticket: string): Promise<boolean> => {
         ?? sessionData.user_info?.shortcut_prompts
         ?? currentUser.value?.shortcut_prompts,
       );
+      applyEmbedChatSettings(
+        sessionData.chat_settings
+        ?? sessionData.user_info?.chat_settings
+        ?? currentUser.value?.chat_settings,
+      );
       applyDefaultEntryAgentId(sessionData);
       const lockEntryAgent =
         sessionData.lock_entry_agent === true
@@ -6349,6 +6581,7 @@ const handleInitConfig = async (data: Record<string, any>) => {
     const ticketOk = await exchangeTicketAndApply(String(data.ticket));
     if (!ticketOk) {
       hasPermission.value = false;
+      isInitialLoading.value = false;
       postMessageToHost({ type: "INIT_FAILURE", reason: "invalid_ticket" });
       return;
     }
@@ -6365,6 +6598,7 @@ const handleInitConfig = async (data: Record<string, any>) => {
   const incomingToken = data.token || data.api_key || data.apikey;
   if (!incomingToken) {
     console.warn("INIT_CONFIG received but no token/api_key/ticket found in payload!");
+    isInitialLoading.value = false;
     if (strict) {
       hasPermission.value = false;
       postMessageToHost({ type: "INIT_FAILURE", reason: "missing_token" });
@@ -6379,6 +6613,7 @@ const handleInitConfig = async (data: Record<string, any>) => {
     const isValid = await validateToken({ strict: true });
     if (!isValid) {
       hasPermission.value = false;
+      isInitialLoading.value = false;
       postMessageToHost({ type: "INIT_FAILURE", reason: "invalid_token" });
       return;
     }
@@ -6465,7 +6700,8 @@ const resetSession = async (newToken?: string, ticket?: string, stashInflight = 
   if (stashInflight) stashCurrentInflightIfNeeded();
   else abortController = null;
   messages.value = [];
-  config.enableGrounding = false; // 新会话恢复默认关闭
+  config.enableGrounding = false;
+  reapplySharedEmbedChatSettings();
   if (ticket) {
     const ticketOk = await exchangeTicketAndApply(ticket);
     if (!ticketOk) {
@@ -6564,6 +6800,7 @@ const validateToken = async (options?: { strict?: boolean }): Promise<boolean> =
     accountInfo.value = data as typeof accountInfo.value;
     currentUser.value = data as typeof currentUser.value;
     applyEmbedShortcutPrompts(data.shortcut_prompts);
+    applyEmbedChatSettings(data.chat_settings);
     applyDefaultEntryAgentId(data);
   };
 
@@ -6668,8 +6905,8 @@ const initChat = async (options?: { skipAuth?: boolean }) => {
     }
     if (initGeneration !== conversationInitializationGeneration) return;
     hasPermission.value = true;
-    // 2. Clear skeleton as soon as auth is confirmed
-    isInitialLoading.value = false;
+    // 登录完成后先不收起骨架。欢迎页只在确认没有可恢复历史后再出现，
+    // 避免刷新时先闪出新会话页，再跳进最近一段会话。
     // 3. Set default welcome message if not provided
     if (!config.welcomeMessage) {
       const displayName = accountInfo.value?.real_name || accountInfo.value?.user_name || "";
@@ -6749,19 +6986,32 @@ const initChat = async (options?: { skipAuth?: boolean }) => {
       }
     }
 
-    // 7. Load history if exists
+    // 7. Load history if exists. 骨架保持到第一页历史回来，空会话才露出欢迎页。
+    const releaseInitialLoading = () => {
+      if (initGeneration === conversationInitializationGeneration) {
+        isInitialLoading.value = false;
+      }
+    };
     if (conversationId.value) {
       if (
         restoreInflightConversation(conversationId.value)
         || hasLiveGeneratingAgent(messages.value)
       ) {
         afterConversationActivated(conversationId.value);
+        releaseInitialLoading();
       } else {
-        fetchConversationHistory(false, initGeneration).then(() => {
+        try {
+          await fetchConversationHistory(false, initGeneration, true);
           if (initGeneration !== conversationInitializationGeneration) return;
           afterConversationActivated(conversationId.value);
-        }).catch(e => console.error("[Init] History load failed:", e));
+        } catch (e) {
+          console.error("[Init] History load failed:", e);
+        } finally {
+          releaseInitialLoading();
+        }
       }
+    } else {
+      releaseInitialLoading();
     }
   } catch (e) {
     console.error("Init chat failed", e);
@@ -6828,6 +7078,7 @@ const mapServerConversationMessages = (rawMessages: any[], idOffset = 0): Messag
 const fetchConversationHistory = async (
   isLoadMore = false,
   expectedInitializationGeneration = conversationInitializationGeneration,
+  bypassInFlight = false,
 ) => {
   if (!conversationId.value) return;
   if (
@@ -6838,7 +7089,7 @@ const fetchConversationHistory = async (
     )
   ) return;
   if (isLoadMore && !hasMoreHistory.value) return;
-  if (isLoadingHistory.value) return;
+  if (isLoadingHistory.value && !bypassInFlight) return;
   const requestSequence = ++historyRequestSequence;
   const historyConversationId = conversationId.value;
   isLoadingHistory.value = true;
@@ -7094,6 +7345,7 @@ const handleSystemCommand = async (cmd: string): Promise<boolean> => {
       generateNewConversation();
       messages.value = [];
       config.enableGrounding = false;
+      reapplySharedEmbedChatSettings();
       postMessageToHost({
         type: "CONVERSATION_CHANGED",
         conversation_id: conversationId.value,
@@ -8814,6 +9066,7 @@ const fetchUserInfo = async () => {
     if (res.data?.data) {
        currentUser.value = res.data.data;
        applyEmbedShortcutPrompts((res.data.data as any).shortcut_prompts);
+       applyEmbedChatSettings((res.data.data as any).chat_settings);
        applyDefaultEntryAgentId(res.data.data);
     }
     await refreshQuota();

@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.embed_app import SysEmbedApp
 from app.models.permission import Role, UserRoleRelation
-from app.schemas.embed_app import parse_json_list, parse_shortcut_prompts, dump_shortcut_prompts
+from app.schemas.embed_app import (
+    dump_chat_settings,
+    dump_shortcut_prompts,
+    parse_chat_settings,
+    parse_json_list,
+    parse_shortcut_prompts,
+)
 
 DATA_PERMISSION_SQL_REWRITE = "nanzi_sql_rewrite"
 DATA_PERMISSION_MCP_ONLY = "mcp_only"
@@ -48,6 +54,7 @@ def parse_embed_app_row(app: SysEmbedApp) -> dict[str, Any]:
         "data_permission_mode": str(app.data_permission_mode or DATA_PERMISSION_SQL_REWRITE).strip()
         or DATA_PERMISSION_SQL_REWRITE,
         "shortcut_prompts": parse_shortcut_prompts(app.shortcut_prompts),
+        "chat_settings": parse_chat_settings(getattr(app, "chat_settings", None)),
         "is_active": bool(app.is_active),
     }
 
@@ -249,6 +256,7 @@ async def resolve_ticket_app_policy(
             "create_shadow_user": True,
             "data_permission_mode": DATA_PERMISSION_SQL_REWRITE,
             "shortcut_prompts": [],
+            "chat_settings": parse_chat_settings(None),
             "role_id": None,
             "lock_entry_agent": False,
             "default_entry_agent_id": None,
@@ -290,6 +298,7 @@ async def resolve_ticket_app_policy(
         "create_shadow_user": False,
         "data_permission_mode": policy["data_permission_mode"],
         "shortcut_prompts": list(policy.get("shortcut_prompts") or []),
+        "chat_settings": parse_chat_settings(policy.get("chat_settings")),
         "role_id": role_id,
         "lock_entry_agent": bool(policy["lock_entry_agent"]),
         "default_entry_agent_id": default_entry or None,
@@ -304,6 +313,7 @@ def dump_policy_session_fields(policy: Mapping[str, Any]) -> dict[str, str]:
         "create_shadow_user": "1" if policy.get("create_shadow_user") else "0",
         "data_permission_mode": str(policy.get("data_permission_mode") or DATA_PERMISSION_SQL_REWRITE),
         "shortcut_prompts": dump_shortcut_prompts(app.get("shortcut_prompts") or policy.get("shortcut_prompts") or []),
+        "chat_settings": dump_chat_settings(app.get("chat_settings") or policy.get("chat_settings")),
     }
     if app:
         role_id = policy.get("role_id") if policy.get("role_id") is not None else app.get("role_id")
